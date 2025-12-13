@@ -145,6 +145,21 @@ const NMFParser = {
                     freq: servingFreq,
                     cellId: currentCellID,
                     lac: currentLAC,
+                    active_set: (() => {
+                        let aset = [];
+                        if (servingSc !== null) aset.push(servingSc);
+                        // Soft Handover Window (e.g., 6dB)
+                        // Note: servingLevel is RSCP for 3G
+                        const windowSize = 6;
+                        neighbors.forEach(n => {
+                            if (Math.abs(n.freq - servingFreq) < 1) { // Only intra-freq
+                                if (n.rscp >= servingLevel - windowSize) {
+                                    if (!aset.includes(n.pci)) aset.push(n.pci);
+                                }
+                            }
+                        });
+                        return aset.join(', ');
+                    })(),
                     n1_sc, n1_rscp, n1_ecno,
                     n2_sc, n2_rscp, n2_ecno,
                     n3_sc, n3_rscp, n3_ecno,

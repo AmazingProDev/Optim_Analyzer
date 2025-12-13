@@ -80,6 +80,10 @@ main {
     flex: 1;
     position: relative;
     display: flex;
+    overflow: hidden;
+    /* Prevent body scroll */
+    min-height: 0;
+    /* Important for flex children scrolling */
 }
 
 #logs-sidebar {
@@ -102,9 +106,8 @@ main {
     padding: 10px;
     border-radius: 6px;
     margin-bottom: 8px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    display: block;
+    /* Fixed: Was flex, causing side-by-side layout */
     border-left: 3px solid var(--accent-color);
 }
 
@@ -311,4 +314,166 @@ main {
     border-radius: 4px;
     font-size: 10px;
     font-weight: 600;
+}
+
+/* Context Menu */
+.context-menu {
+    position: absolute;
+    z-index: 10000;
+    background: #2d2d2d;
+    border: 1px solid #444;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    padding: 5px 0;
+    min-width: 150px;
+}
+
+.menu-item {
+    padding: 8px 15px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #e0e0e0;
+    transition: background 0.2s;
+}
+
+.menu-item:hover {
+    background: #3b82f6;
+    color: white;
+}
+
+/* =========================================
+   Site Settings Panel
+   ========================================= */
+.settings-panel {
+    position: absolute;
+    top: 60px;
+    right: 20px;
+    width: 280px;
+    background-color: rgba(30, 30, 30, 0.95);
+    backdrop-filter: blur(5px);
+    border: 1px solid #444;
+    border-radius: 8px;
+    padding: 0;
+    /* Header/Body split */
+    z-index: 2000;
+    color: #eee;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+    display: none;
+    /* Hidden by default */
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background-color: #252525;
+    border-bottom: 1px solid #333;
+    border-radius: 8px 8px 0 0;
+}
+
+.settings-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.setting-item {
+    padding: 10px 15px;
+    border-bottom: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.setting-item:last-child {
+    border-bottom: none;
+}
+
+.setting-label {
+    font-size: 12px;
+    color: #aaa;
+    display: flex;
+    justify-content: space-between;
+}
+
+.setting-input {
+    width: 100%;
+}
+
+/* =========================================
+   Docked Views (Shared)
+   ========================================= */
+.docked-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #1e1e1e;
+    overflow: hidden;
+    position: relative;
+    border-right: 1px solid #333;
+}
+
+.docked-item-header {
+    height: 30px;
+    background: #252525;
+    border-bottom: 1px solid #333;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 10px;
+    flex-shrink: 0;
+}
+
+.docked-item-title {
+    font-size: 12px;
+    font-weight: bold;
+    color: #ccc;
+}
+
+.docked-item-action {
+    color: #888;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.docked-item-action:hover {
+    color: #fff;
+}
+
+.docked-item-body {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+}
+
+/* Grid Modal Specifics Override if needed */
+.grid-modal-header {
+    cursor: move;
+}
+
+.grid-body {
+    background-color: #1e1e1e;
+}
+
+/* =========================================
+   Global Scrollbar Styling (Hidden)
+   ========================================= */
+/* Hide scrollbar for Chrome, Safari and Opera */
+::-webkit-scrollbar {
+    display: none;
+}
+
+/* Hide scrollbar for IE, Edge and Firefox */
+body,
+#sidebar,
+.grid-body,
+.log-body,
+.docked-view-body,
+.menu-item {
+    -ms-overflow-style: none;
+    /* IE and Edge */
+    scrollbar-width: none;
+    /* Firefox */
 }

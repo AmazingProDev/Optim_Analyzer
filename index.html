@@ -13,7 +13,9 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=28">
+    <link rel="stylesheet" href="grid_styles.css?v=1">
+    <link rel="stylesheet" href="additional_styles.css?v=1">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 
@@ -34,43 +36,41 @@
             </div>
 
             <!-- Site Settings Panel -->
-            <div id="siteSettingsPanel"
-                style="display:none; position:absolute; top:60px; right:20px; background:#1e1e1e; border:1px solid #444; padding:15px; border-radius:6px; z-index:2000; box-shadow:0 4px 12px rgba(0,0,0,0.5); width:250px;">
-                <h4 style="margin-top:0; color:#fff; border-bottom:1px solid #333; padding-bottom:8px;">Site Settings
+            <div id="siteSettingsPanel" class="settings-panel">
+                <h4 class="settings-header">Site Settings
                 </h4>
 
-                <div style="margin-bottom:10px;">
-                    <label style="display:block; color:#aaa; font-size:12px; margin-bottom:4px;">Range (m): <span
-                            id="valRange">200</span></label>
+                <div class="setting-item">
+                    <label class="setting-label">Range (m): <span id="valRange">200</span></label>
                     <input type="range" id="rangeSiteDist" min="50" max="3000" step="50" value="200"
-                        style="width:100%;">
+                        class="setting-input" aria-label="Site Range">
                 </div>
 
-                <div style="margin-bottom:10px;">
-                    <label style="display:block; color:#aaa; font-size:12px; margin-bottom:4px;">Beamwidth (°): <span
-                            id="valBeam">60</span></label>
-                    <input type="range" id="rangeIconBeam" min="10" max="180" step="5" value="60" style="width:100%;">
+                <div class="setting-item">
+                    <label class="setting-label">Beamwidth (°): <span id="valBeam">60</span></label>
+                    <input type="range" id="rangeIconBeam" min="10" max="180" step="5" value="60" class="setting-input"
+                        aria-label="Icon Beamwidth">
                 </div>
 
-                <div style="margin-bottom:10px;">
-                    <label style="display:block; color:#aaa; font-size:12px; margin-bottom:4px;">Opacity: <span
-                            id="valOpacity">0.6</span></label>
+                <div class="setting-item">
+                    <label class="setting-label">Opacity: <span id="valOpacity">0.6</span></label>
                     <input type="range" id="rangeSiteOpacity" min="0.1" max="1" step="0.1" value="0.6"
-                        style="width:100%;">
+                        class="setting-input" aria-label="Site Opacity">
                 </div>
 
-                <div style="margin-bottom:10px;">
-                    <label style="display:block; color:#aaa; font-size:12px; margin-bottom:4px;">Color Override</label>
+                <div class="setting-item">
+                    <label class="setting-label">Color Override</label>
                     <div style="display:flex; gap:10px; align-items:center;">
                         <input type="color" id="pickerSiteColor" value="#3b82f6"
-                            style="border:none; width:30px; height:30px; cursor:pointer;">
+                            style="border:none; width:30px; height:30px; cursor:pointer;"
+                            aria-label="Site Color Picker">
                         <label style="font-size:11px; color:#888;"><input type="checkbox" id="checkSiteColorOverride">
                             Apply</label>
                     </div>
                 </div>
 
-                <div style="margin-bottom:10px;">
-                    <label style="display:block; color:#aaa; font-size:12px; margin-bottom:4px;">Labels</label>
+                <div class="setting-item">
+                    <label class="setting-label">Labels</label>
                     <div style="display:flex; flex-direction:column; gap:5px;">
                         <label style="font-size:11px; color:#888;"><input type="checkbox" id="checkShowSiteNames"> Show
                             Site Names</label>
@@ -90,18 +90,20 @@
         </header>
 
         <main>
-            <div id="logs-sidebar">
+            <div id="logs-sidebar" style="display:flex; flex-direction:column;">
                 <h3>Loaded Logs</h3>
-                <div id="logsList">
+                <div id="logsList" style="flex:1; overflow-y:auto; margin-bottom:10px;">
                     <div class="empty-state">No logs loaded</div>
                 </div>
+
+                <!-- Docked Views Container REMOVED -->
             </div>
 
             <div id="center-pane"
                 style="flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden;">
                 <div id="map" style="flex: 1;"></div>
 
-                <!-- Bottom Panel for Docked Views -->
+                <!-- Bottom Panel for Docked Views (Legacy/Bottom) -->
                 <div id="bottomPanel"
                     style="height: 0; display: none; flex-direction: column; background: #1e1e1e; border-top: 1px solid #444;">
                     <div id="bottomResizer"
@@ -111,8 +113,20 @@
                     <div id="bottomContent" style="flex: 1; display: flex; overflow: hidden;">
                         <!-- Docked Content Will Go Here -->
                         <div id="dockedChart"
-                            style="flex: 1; display: none; border-right: 1px solid #333; position: relative;"></div>
-                        <div id="dockedSignaling" style="flex: 1; display: none; position: relative;"></div>
+                            style="flex: 1; display: none; border-right: 1px solid #333; position: relative; flex-direction: column;">
+                        </div>
+                        <div id="dockedSignaling"
+                            style="flex: 1; display: none; border-right: 1px solid #333; position: relative; flex-direction: column;">
+                        </div>
+                        <div id="dockedGrid"
+                            style="flex: 1; display: none; position: relative; flex-direction: column;">
+                            <div class="docked-item-header"
+                                style="display:none; /* Dynamic Header usually handled by moving modal header */">
+                                <!-- Placeholders if needed -->
+                            </div>
+                            <!-- Helper Container for body -->
+                            <div id="dockedGridBody" style="flex:1; overflow:auto;"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -135,7 +149,8 @@
                 <div style="display:flex; align-items:center; gap:15px;">
                     <h3 id="signalingModalTitle" style="margin:0; color:#ddd;">Signaling Data</h3>
                     <select id="signalingFilter" onchange="filterSignaling()"
-                        style="background:#333; color:#eee; border:1px solid #555; padding:4px 8px; border-radius:4px; font-size:12px;">
+                        style="background:#333; color:#eee; border:1px solid #555; padding:4px 8px; border-radius:4px; font-size:12px;"
+                        aria-label="Signaling Type Filter">
                         <option value="ALL">All Types</option>
                         <option value="RRC">RRC Only</option>
                         <option value="L3">L3 Only</option>
@@ -148,15 +163,15 @@
                 <table class="data-table" style="width:100%; border-collapse:collapse; font-size:12px;">
                     <thead style="position:sticky; top:0; background:#252525; z-index:10;">
                         <tr>
-                            <th style="padding:10px; text-align:left; color:#aaa; border-bottom:1px solid #444;">Time
+                            <th style="text-align:left; padding:8px;">Time
                             </th>
-                            <th style="padding:10px; text-align:left; color:#aaa; border-bottom:1px solid #444;">Type
+                            <th style="text-align:left; padding:8px;">Type
                             </th>
-                            <th style="padding:10px; text-align:left; color:#aaa; border-bottom:1px solid #444;">
+                            <th style="text-align:left; padding:8px;">
                                 Direction</th>
-                            <th style="padding:10px; text-align:left; color:#aaa; border-bottom:1px solid #444;">Message
+                            <th style="text-align:left; padding:8px;">Message
                             </th>
-                            <th style="padding:10px; text-align:left; color:#aaa; border-bottom:1px solid #444;">Action
+                            <th style="text-align:left; padding:8px;">Details
                             </th>
                         </tr>
                     </thead>
@@ -168,9 +183,94 @@
         </div>
     </div>
 
+    <!-- Grid Modal -->
+    <div id="gridModal" class="modal"
+        style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.4);">
+        <div class="modal-content"
+            style="background-color: #1e1e1e; margin: 5% auto; padding: 0; border: 1px solid #444; width: 80%; height: 70%; display: flex; flex-direction: column; resize: both; overflow: hidden; position: relative;">
+
+            <!-- Header (Draggable) -->
+            <div class="modal-header grid-modal-header"
+                style="padding: 10px; background: #252525; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; cursor: move; flex-shrink: 0;">
+                <h3 class="grid-title" style="margin: 0; font-size: 14px; color: #eee; pointer-events: none;">Grid View
+                </h3>
+                <div class="grid-controls" style="display: flex; gap: 8px; pointer-events: auto;">
+                    <button class="btn btn-sm btn-secondary" onclick="sortGrid()">Sort</button>
+                    <button class="btn btn-sm btn-secondary" onclick="window.exportGridToCSV()">Export CSV</button>
+                    <!-- Dock Button -->
+                    <button class="dock-btn" onclick="toggleGridDock()" title="Dock"
+                        style="background:#3b82f6; color:white; border:none; padding:4px 10px; cursor:pointer; font-size:14px; border-radius:3px;">&#8595;</button>
+                    <span class="close" onclick="document.getElementById('gridModal').style.display='none'"
+                        style="color: #aaa; font-size: 24px; font-weight: bold; cursor: pointer; line-height: 16px;">&times;</span>
+                </div>
+            </div>
+
+            <!-- Body -->
+            <div id="gridBody" class="modal-body grid-body"
+                style="flex: 1; padding: 10px; overflow: auto; color: #ddd; position: relative;">
+                <!-- Grid Table Generated via JS -->
+                <div style="text-align:center; color:#666; padding:20px;">
+                    Drag metrics from the sidebar here to add columns.<br>
+                    (e.g. Serving RSCP, EcNo, SC, etc.)
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart Modal -->
+    <div id="chartModal" class="modal">
+        <div class="modal-content"
+            style="width:90%; height:90%; background:#1e1e1e; border:1px solid #444; display:flex; flex-direction:column; padding:0;">
+            <div class="modal-header"
+                style="padding:10px; background:#252525; border-bottom:1px solid #333; display:flex; justify-content:space-between; align-items:center;">
+                <h3 id="chartTitle" style="margin:0; font-size:16px; color:#ddd;">Chart</h3>
+                <span class="close" onclick="closeChartModal()"
+                    style="color:#aaa; cursor:pointer; font-size:24px;">&times;</span>
+            </div>
+            <div style="flex:1; position:relative; padding:10px; min-height:0;">
+                <canvas id="chartCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context Menu -->
+    <!-- Context Menu -->
+    <div id="metricContextMenu" class="context-menu"
+        style="display: none; position: absolute; z-index: 10000; background: #2d2d2d; border: 1px solid #444; border-radius: 4px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5); padding: 5px 0; min-width: 150px;">
+        <div class="menu-item" onclick="window.handleContextAction('map')"
+            style="padding: 8px 15px; cursor: pointer; color: #e0e0e0;">Open in Map</div>
+        <div class="menu-item" onclick="window.handleContextAction('chart')"
+            style="padding: 8px 15px; cursor: pointer; color: #e0e0e0;">Open in Chart</div>
+        <div class="menu-item" onclick="window.handleContextAction('grid')"
+            style="padding: 8px 15px; cursor: pointer; color: #e0e0e0;">Open in Grid</div>
+    </div>
+
+
+    <!-- Grid Modal -->
+    <div id="gridModal" class="modal"
+        style="display:none; position:fixed; top:120px; left:320px; width:600px; height:400px; background:#1e1e1e; border:1px solid #444; z-index:2001; flex-direction:column; box-shadow:0 0 20px rgba(0,0,0,0.8); resize:both; overflow:hidden; min-width:400px; min-height:300px;">
+        <div class="modal-content-grid">
+            <div class="grid-modal-header">
+                <h3 id="gridTitle" class="grid-title">Data Grid</h3>
+                <div class="grid-controls">
+                    <span onclick="toggleGridDock()" class="dock-btn" title="Dock to Sidebar">&#8601;</span>
+                    <span class="close" onclick="document.getElementById('gridModal').style.display='none'"
+                        style="cursor:pointer; font-size:18px;">&times;</span>
+                </div>
+            </div>
+            <div id="gridBody" class="grid-body">
+                <!-- Table will be injected here -->
+            </div>
+            <div
+                style="padding:5px; background:#252525; border-top:1px solid #333; font-size:10px; color:#666; text-align:center;">
+                Drag metrics here to add columns
+            </div>
+        </div>
+    </div>
+
     <script src="map_renderer.js?v=23"></script>
     <script src="parser.js?v=23"></script>
-    <script src="app.js?v=27"></script>
+    <script src="app.js?v=v75"></script>
 </body>
 
 </html>

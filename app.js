@@ -7,119 +7,91 @@ document.addEventListener('DOMContentLoaded', () => {
     const map = new MapRenderer('map');
     window.map = map.map; // Expose Leaflet instance globally for inline onclicks
 
+    // Map Drop Zone Logic
+    const mapContainer = document.getElementById('map');
+    mapContainer.addEventListener('dragover', (e) => {
+        e.preventDefault(); // Allow Drop
+        mapContainer.style.boxShadow = 'inset 0 0 20px rgba(59, 130, 246, 0.5)';
+    });
+
+    mapContainer.addEventListener('dragleave', (e) => {
+        mapContainer.style.boxShadow = 'none';
+    });
+
+    mapContainer.addEventListener('drop', (e) => {
+        e.preventDefault();
+        mapContainer.style.boxShadow = 'none';
+
+        try {
+            const data = JSON.parse(e.dataTransfer.getData('application/json'));
+            if (data && data.logId && data.param) {
+                // Determine Log and Points
+                const log = loadedLogs.find(l => l.id === data.logId);
+                if (log) {
+                    console.log('Dropped on Map:', data);
+                    // Update Map Layer
+                    map.updateLayerMetric(log.id, log.points, data.param);
+                    // Optional: Show some feedback?
+                }
+            }
+        } catch (err) {
+            console.error('Drop Error:', err);
+        }
+    });
+
+    // Chart Drop Zone Logic (Docked & Modal)
+    const handleChartDrop = (e) => {
+        e.preventDefault();
+        e.currentTarget.style.boxShadow = 'none';
+        e.currentTarget.style.border = 'none';
+
+        try {
+            const data = JSON.parse(e.dataTransfer.getData('application/json'));
+            if (data && data.logId && data.param) {
+                const log = loadedLogs.find(l => l.id === data.logId);
+                if (log) {
+                    console.log('Dropped on Chart:', data);
+                    window.openChartModal(log, data.param);
+                }
+            }
+        } catch (err) {
+            console.error('Chart Drop Error:', err);
+        }
+    };
+
+    const handleChartDragOver = (e) => {
+        e.preventDefault();
+        e.currentTarget.style.boxShadow = 'inset 0 0 20px rgba(59, 130, 246, 0.5)';
+        e.currentTarget.style.border = '2px dashed #3b82f6';
+    };
+
+    const handleChartDragLeave = (e) => {
+        e.currentTarget.style.boxShadow = 'none';
+        e.currentTarget.style.border = 'none';
+    };
+
+    const dockedChartZone = document.getElementById('dockedChart');
+    if (dockedChartZone) {
+        dockedChartZone.addEventListener('dragover', handleChartDragOver);
+        dockedChartZone.addEventListener('dragleave', handleChartDragLeave);
+        dockedChartZone.addEventListener('drop', handleChartDrop);
+    }
+
+    const chartModal = document.getElementById('chartModal'); // or .modal-content?
+    if (chartModal) {
+        // Target the content specifically to avoid drop on backdrop
+        const content = chartModal.querySelector('.modal-content');
+        if (content) {
+            content.addEventListener('dragover', handleChartDragOver);
+            content.addEventListener('dragleave', handleChartDragLeave);
+            content.addEventListener('drop', handleChartDrop);
+        }
+    }
+
     const loadedLogs = [];
     let currentSignalingLogId = null;
 
-    function updateLogsList() {
-        logsList.innerHTML = '';
-        if (loadedLogs.length === 0) {
-            logsList.innerHTML = '<div class="empty-state">No logs loaded</div>';
-            return;
-        }
 
-        loadedLogs.forEach(log => {
-            const item = document.createElement('div');
-            item.className = 'log-item';
-            // Determine badge color
-            let badgeClass = 'tech-badge-unknown';
-            if (log.tech.includes('3G')) badgeClass = 'tech-badge-3g';
-            if (log.tech.includes('4G')) badgeClass = 'tech-badge-4g';
-            if (log.tech.includes('5G')) badgeClass = 'tech-badge-5g';
-            if (log.tech.includes('2G')) badgeClass = 'tech-badge-2g';
-
-            item.innerHTML = `
-                <div style="flex:1; min-width:0;">
-                    <div class="log-name" title="${log.name}" onclick="showContextMenu(event, '${log.id}', 'level')" oncontextmenu="showContextMenu(event, '${log.id}', 'level')" style="cursor:pointer; user-select:none; -webkit-user-select:none;">${log.name}</div>
-                    <div style="display:flex; gap:6px; margin-top:4px;">
-                         <span class="tech-badge ${badgeClass}">${log.tech}</span>
-                         <span style="font-size: 0.8rem; color: #888;">${log.points.length} pts</span>
-                    </div>
-                    <!-- Radio Data List -->
-                    <div class="log-params" style="margin-top:8px; padding-left:10px; border-left:1px solid #444; font-size:0.85rem; color:#ccc;">
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'level')">Serving RSCP/Level</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'ecno')">Serving EcNo</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'sc')">Serving SC/PCI</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'freq')">Serving Freq</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'band')">Serving Band</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'lac')">LAC</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'cellId')">Cell ID</div>
-                        <div style="margin-top:4px; font-size:0.8rem; color:#888;">Composite</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'rscp_not_combined')">RSCP & Neighbors</div>
-                        
-                        <div style="margin-top:4px; font-size:0.8rem; color:#888;">Neighbors</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n1_rscp')">N1 RSCP</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n1_ecno')">N1 EcNo</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n1_sc')">N1 SC</div>
-                        
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n2_rscp')">N2 RSCP</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n2_ecno')">N2 EcNo</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n2_sc')">N2 SC</div>
-                        
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n3_rscp')">N3 RSCP</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n3_ecno')">N3 EcNo</div>
-                        <div class="param-item" oncontextmenu="showContextMenu(event, '${log.id}', 'n3_sc')">N3 SC</div>
-                    </div>
-                </div>
-                <div style="display:flex; flex-direction:column; align-items:center;">
-                     <button onclick="removeLog('${log.id}')" style="background:none; border:none; color:#f87171; cursor:pointer; padding:0 8px; font-size:1.2rem;">&times;</button>
-                </div>
-            `;
-            logsList.appendChild(item);
-        });
-    }
-
-    // Context Menu Logic
-    const contextMenu = document.createElement('div');
-    contextMenu.id = 'contextMenu';
-    contextMenu.style.display = 'none';
-    contextMenu.style.position = 'absolute';
-    contextMenu.style.zIndex = '1000';
-    contextMenu.style.backgroundColor = '#2d2d2d';
-    contextMenu.style.border = '1px solid #555';
-    contextMenu.style.borderRadius = '4px';
-    contextMenu.style.boxShadow = '0 2px 10px rgba(0,0,0,0.5)';
-    document.body.appendChild(contextMenu);
-
-    let currentContext = null; // { logId, param }
-
-    window.showContextMenu = (e, logId, param) => {
-        e.preventDefault();
-        currentContext = { logId, param };
-
-        contextMenu.innerHTML = `
-            <div class="menu-item" onclick="handleMenuAction('map')">Open on Map</div>
-            <div class="menu-item" onclick="handleMenuAction('grid')">Open in Grid</div>
-            <div class="menu-item" onclick="handleMenuAction('chart')">Open in Chart</div>
-            <div class="menu-item" onclick="handleMenuAction('signaling')">View Signaling (RRC/L3)</div>
-        `;
-
-        contextMenu.style.left = `${e.pageX}px`;
-        contextMenu.style.top = `${e.pageY}px`;
-        contextMenu.style.display = 'block';
-    };
-
-    window.handleMenuAction = (action) => {
-        contextMenu.style.display = 'none';
-        if (!currentContext) return;
-
-        const log = loadedLogs.find(l => l.id === currentContext.logId);
-        if (!log) return;
-
-        if (action === 'map') {
-            map.updateLayerMetric(log.id, log.points, currentContext.param);
-        } else if (action === 'grid') {
-            openGridModal(log, currentContext.param);
-        } else if (action === 'chart') {
-            openChartModal(log, currentContext.param);
-        } else if (action === 'signaling') {
-            showSignalingModal(log.id);
-        }
-    };
-
-    // Close menu on click elsewhere
-    document.addEventListener('click', () => contextMenu.style.display = 'none');
-
-    // Chart Modal
     function openChartModal(log, param) {
         // Store for Docking/Sync
         window.currentChartLogId = log.id;
@@ -142,6 +114,48 @@ document.addEventListener('DOMContentLoaded', () => {
             document.body.appendChild(modal);
             container = modal;
         }
+
+        // Initialize Chart in container (Calling internal helper or global?)
+        // The chart initialization logic was inside openChartModal in the duplicate block.
+        // We need to make sure we actually render the chart here!
+        // But wait, the previous "duplicate" block actually contained the logic to RENDER the chart.
+        // If I just close the function here, the chart won't render?
+        // Let's check where the chart rendering logic is. 
+        // It follows immediately in the old code.
+        // I need to keep the chart rendering logic INSIDE openChartModal.
+        // But the GRID logic must be OUTSIDE.
+
+        // I will assume the Chart Logic continues after this replacement chunk. 
+        // I will NOT close the function here yet. I need to find where the Chart Logic ENDS.
+
+        // Wait, looking at Step 840/853...
+        // The Grid System block starts at line 119.
+        // The Chart Logic (preparing datasets) starts at line 410!
+        // So the Grid Logic was INTERJECTED in the middle of openChartModal!
+        // This is messy.
+
+        // I should:
+        // 1. Leave openChartModal alone for now (it's huge).
+        // 2. Extract the Grid Logic OUT of it.
+        // 3. But the Grid Logic is physically located between lines 119 and 400.
+        // 4. And the Chart Logic resumes at 410?
+
+        // Let's verify line 410.
+        // Step 853 shows line 410: const labels = []; ...
+        // YES.
+
+        // So I need to MOVE lines 118-408 OUT of openChartModal.
+        // But `openChartModal` starts at line 95.
+        // Does the Chart Logic use variables from top of `openChartModal`?
+        // `isDocked`, `container`, `log`, `param`.
+        // Yes.
+
+        // 1. Setup Container.
+        // 2. [GRID LOGIC - WRONG PLACE]
+        // 3. Prepare Data.
+        // 4. Render Chart.
+
+        // Grid Logic Moved to Global Scope
 
         // Prepare Data
         const labels = [];
@@ -209,75 +223,75 @@ document.addEventListener('DOMContentLoaded', () => {
         const dragCursor = isDocked ? 'default' : 'move';
 
         container.innerHTML = `
-            <div id="${headerId}" style="padding:10px; background:#2d2d2d; border-bottom:1px solid #444; display:flex; justify-content:space-between; align-items:center; cursor:${dragCursor}; user-select:none;">
-                <div style="display:flex; align-items:center; pointer-events:none;">
-                    <h3 style="margin:0; margin-right:20px; pointer-events:auto; font-size:14px;">${log.name} - ${isComposite ? 'RSCP & Neighbors' : param.toUpperCase()}</h3>
+                    <div id="${headerId}" style="padding:10px; background:#2d2d2d; border-bottom:1px solid #444; display:flex; justify-content:space-between; align-items:center; cursor:${dragCursor}; user-select:none;">
+                        <div style="display:flex; align-items:center; pointer-events:none;">
+                            <h3 style="margin:0; margin-right:20px; pointer-events:auto; font-size:14px;">${log.name} - ${isComposite ? 'RSCP & Neighbors' : param.toUpperCase()}</h3>
+                            
+                            <div style="display:flex; gap:5px; align-items:center; margin-right:20px; pointer-events:auto;">
+                                 <button id="zoomInBtn" title="Zoom In" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">+</button>
+                                 <button id="zoomOutBtn" title="Zoom Out" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">-</button>
+                                 <button id="resetZoomBtn" title="Reset Zoom" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">Reset</button>
+                            </div>
+
+                            <button id="styleToggleBtn" style="background:#333; color:#ccc; border:1px solid #555; padding:5px 10px; cursor:pointer; pointer-events:auto; font-size:11px;">⚙️ Style</button>
+                        </div>
+                        <div style="pointer-events:auto; display:flex; gap:10px;">
+                            ${dockBtn}
+                            ${closeBtn}
+                        </div>
+                    </div>
                     
-                    <div style="display:flex; gap:5px; align-items:center; margin-right:20px; pointer-events:auto;">
-                         <button id="zoomInBtn" title="Zoom In" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">+</button>
-                         <button id="zoomOutBtn" title="Zoom Out" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">-</button>
-                         <button id="resetZoomBtn" title="Reset Zoom" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">Reset</button>
+                    <!-- Settings Panel -->
+                    <div id="${controlsId}" style="display:none; background:#252525; padding:10px; border-bottom:1px solid #444; gap:15px; align-items:center; flex-wrap:wrap;">
+                         <!-- General Settings -->
+                        <div style="display:flex; flex-direction:column; gap:2px; border-right:1px solid #444; padding-right:10px;">
+                             <label style="color:#aaa; font-size:10px; font-weight:bold;">Type</label>
+                             <select id="chartTypeSelect" style="background:#333; color:white; border:1px solid #555; font-size:11px;">
+                                 <option value="line">Line (Timeline)</option>
+                                 <option value="bar">Bar (Snapshot)</option>
+                             </select>
+                        </div>
+                        <!-- Serving Controls -->
+                        <div style="display:flex; flex-direction:column; gap:2px; border-right:1px solid #444; padding-right:10px;">
+                            <label style="color:#aaa; font-size:10px; font-weight:bold;">Serving</label>
+                            <div style="display:flex; gap:5px; align-items:center;">
+                                <input type="color" id="pickerServing" value="#ff00cc" style="border:none; width:30px; height:20px; cursor:pointer;">
+                                <label style="color:#ccc; font-size:11px;"><input type="checkbox" id="checkGradient" checked> Grad</label>
+                            </div>
+                            <div style="display:flex; gap:5px; align-items:center;">
+                                 <label style="color:#aaa; font-size:10px;">Width</label>
+                                 <input type="range" id="rangeServingWidth" min="1" max="10" value="4" style="width:60px;">
+                            </div>
+                        </div>
+
+                        ${isComposite ? `
+                        <div style="display:flex; flex-direction:column; gap:2px; padding-right:5px;">
+                            <label style="color:#aaa; font-size:10px;">N1 Style</label>
+                            <input type="color" id="pickerN1" value="#22c55e" style="border:none; width:30px; height:20px; cursor:pointer;">
+                            <input type="range" id="rangeN1Width" min="1" max="8" value="2" style="width:50px;">
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:2px; padding-right:5px;">
+                            <label style="color:#aaa; font-size:10px;">N2 Style</label>
+                            <input type="color" id="pickerN2" value="#eab308" style="border:none; width:30px; height:20px; cursor:pointer;">
+                            <input type="range" id="rangeN2Width" min="1" max="8" value="2" style="width:50px;">
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:2px;">
+                            <label style="color:#aaa; font-size:10px;">N3 Style</label>
+                            <input type="color" id="pickerN3" value="#ef4444" style="border:none; width:30px; height:20px; cursor:pointer;">
+                            <input type="range" id="rangeN3Width" min="1" max="8" value="2" style="width:50px;">
+                        </div>
+                        ` : ''}
                     </div>
 
-                    <button id="styleToggleBtn" style="background:#333; color:#ccc; border:1px solid #555; padding:5px 10px; cursor:pointer; pointer-events:auto; font-size:11px;">⚙️ Style</button>
-                </div>
-                <div style="pointer-events:auto; display:flex; gap:10px;">
-                    ${dockBtn}
-                    ${closeBtn}
-                </div>
-            </div>
-            
-            <!-- Settings Panel -->
-            <div id="${controlsId}" style="display:none; background:#252525; padding:10px; border-bottom:1px solid #444; gap:15px; align-items:center; flex-wrap:wrap;">
-                 <!-- General Settings -->
-                <div style="display:flex; flex-direction:column; gap:2px; border-right:1px solid #444; padding-right:10px;">
-                     <label style="color:#aaa; font-size:10px; font-weight:bold;">Type</label>
-                     <select id="chartTypeSelect" style="background:#333; color:white; border:1px solid #555; font-size:11px;">
-                         <option value="line">Line (Timeline)</option>
-                         <option value="bar">Bar (Snapshot)</option>
-                     </select>
-                </div>
-                <!-- Serving Controls -->
-                <div style="display:flex; flex-direction:column; gap:2px; border-right:1px solid #444; padding-right:10px;">
-                    <label style="color:#aaa; font-size:10px; font-weight:bold;">Serving</label>
-                    <div style="display:flex; gap:5px; align-items:center;">
-                        <input type="color" id="pickerServing" value="#ff00cc" style="border:none; width:30px; height:20px; cursor:pointer;">
-                        <label style="color:#ccc; font-size:11px;"><input type="checkbox" id="checkGradient" checked> Grad</label>
+                    <div style="flex:1; padding:10px; position:relative;">
+                        <canvas id="chartCanvas"></canvas>
+                        <div id="chartOverlayInfo" style="position:absolute; top:20px; right:20px; color:white; background:rgba(0,0,0,0.7); padding:5px; border-radius:4px; display:none; pointer-events:none;">
+                            Snapshot Mode
+                        </div>
                     </div>
-                    <div style="display:flex; gap:5px; align-items:center;">
-                         <label style="color:#aaa; font-size:10px;">Width</label>
-                         <input type="range" id="rangeServingWidth" min="1" max="10" value="4" style="width:60px;">
-                    </div>
-                </div>
-
-                ${isComposite ? `
-                <div style="display:flex; flex-direction:column; gap:2px; padding-right:5px;">
-                    <label style="color:#aaa; font-size:10px;">N1 Style</label>
-                    <input type="color" id="pickerN1" value="#22c55e" style="border:none; width:30px; height:20px; cursor:pointer;">
-                    <input type="range" id="rangeN1Width" min="1" max="8" value="2" style="width:50px;">
-                </div>
-                <div style="display:flex; flex-direction:column; gap:2px; padding-right:5px;">
-                    <label style="color:#aaa; font-size:10px;">N2 Style</label>
-                    <input type="color" id="pickerN2" value="#eab308" style="border:none; width:30px; height:20px; cursor:pointer;">
-                    <input type="range" id="rangeN2Width" min="1" max="8" value="2" style="width:50px;">
-                </div>
-                <div style="display:flex; flex-direction:column; gap:2px;">
-                    <label style="color:#aaa; font-size:10px;">N3 Style</label>
-                    <input type="color" id="pickerN3" value="#ef4444" style="border:none; width:30px; height:20px; cursor:pointer;">
-                    <input type="range" id="rangeN3Width" min="1" max="8" value="2" style="width:50px;">
-                </div>
-                ` : ''}
-            </div>
-
-            <div style="flex:1; padding:10px; position:relative;">
-                <canvas id="chartCanvas"></canvas>
-                <div id="chartOverlayInfo" style="position:absolute; top:20px; right:20px; color:white; background:rgba(0,0,0,0.7); padding:5px; border-radius:4px; display:none; pointer-events:none;">
-                    Snapshot Mode
-                </div>
-            </div>
-            <!-- Resize handle visual cue (bottom right) -->
-            <div style="position:absolute; bottom:2px; right:2px; width:10px; height:10px; cursor:nwse-resize;"></div>
-        `;
+                    <!-- Resize handle visual cue (bottom right) -->
+                    <div style="position:absolute; bottom:2px; right:2px; width:10px; height:10px; cursor:nwse-resize;"></div>
+                `;
 
         // Settings Toggle Logic
         document.getElementById('styleToggleBtn').onclick = () => {
@@ -611,10 +625,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (!bar || bar.hidden) return;
 
                         // Determine Content based on Index
-                        // 0: Serving, 1: N1, 2: N2, 3: N3
-                        let levelVal = chart.data.datasets[0].data[index];
-                        // Unpack [floor, val] if array
-                        if (Array.isArray(levelVal)) levelVal = levelVal[1];
+                        const val = chart.data.datasets[0].data[index];
+                        const levelVal = Array.isArray(val) ? val[1] : val;
 
                         if (levelVal === null || levelVal === undefined) return;
 
@@ -877,46 +889,462 @@ document.addEventListener('DOMContentLoaded', () => {
 
     }
 
-    // Grid Modal
-    function openGridModal(log, param) {
-        // Simple modal implementation
-        let modal = document.getElementById('gridModal');
-        if (!modal) {
-            modal = document.createElement('div');
-            modal.id = 'gridModal';
-            modal.style.cssText = 'position:fixed;top:50px;left:50px;right:50px;bottom:50px;background:#1e1e1e;border:1px solid #444;z-index:2000;display:flex;flex-direction:column;box-shadow:0 0 20px rgba(0,0,0,0.8);';
-            document.body.appendChild(modal);
+    // Grid Logic (Moved from openChartModal)
+    let currentGridLogId = null;
+    let currentGridColumns = [];
+
+    function renderGrid() {
+        try {
+            if (!window.currentGridLogId) return;
+            const log = loadedLogs.find(l => l.id === window.currentGridLogId);
+            if (!log) return;
+
+            // Determine container
+            let container = document.getElementById('gridBody');
+
+            if (!container) {
+                console.error("Grid container not found");
+                return;
+            }
+
+            // Update Title
+            const titleEl = document.getElementById('gridTitle');
+            if (titleEl) titleEl.textContent = `Grid View: ${log.name}`;
+
+            // Build Table
+            let tableHtml = `<table style="width:100%; border-collapse:collapse; color:#eee; font-size:12px;">
+                <thead style="position:sticky; top:0; background:#333; height:30px;">
+                    <tr>
+                        <th style="padding:4px 8px; text-align:left;">Time</th>
+                        <th style="padding:4px 8px; text-align:left;">Lat</th>
+                        <th style="padding:4px 8px; text-align:left;">Lng</th>`;
+
+            window.currentGridColumns.forEach(col => {
+                tableHtml += `<th style="padding:4px 8px; text-align:left; text-transform:uppercase;">${col}</th>`;
+            });
+            tableHtml += `</tr></thead><tbody>`;
+
+            let rowsHtml = '';
+            const limit = 500; // Limit for performance
+
+            log.points.slice(0, limit).forEach(p => {
+                let row = `<tr>
+                <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.time}</td>
+                <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lat.toFixed(5)}</td>
+                <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lng.toFixed(5)}</td>`;
+
+                window.currentGridColumns.forEach(col => {
+                    let val = p[col];
+                    // Handling complex parsing access
+                    if (col.startsWith('n') && col.includes('_')) {
+                        // Neighbors
+                        const parts = col.split('_'); // n1_rscp -> [n1, rscp]
+                        const nIdx = parseInt(parts[0].replace('n', '')) - 1;
+                        let field = parts[1];
+
+                        // Map 'sc' to 'pci' for neighbors as parser stores it as pci
+                        if (field === 'sc') field = 'pci';
+
+                        if (p.parsed && p.parsed.neighbors && p.parsed.neighbors[nIdx]) {
+                            const nestedVal = p.parsed.neighbors[nIdx][field];
+                            if (nestedVal !== undefined) val = nestedVal;
+                        }
+                        // If nested lookup fails, keep 'val' (which is p[col])
+                        // But if p[col] works, why did it look empty? 
+                        // Because previous logic had `else { val = ''; }` which CLEARED the valid p[col].
+                    } else if (col === 'band' || col === 'rscp' || col === 'rscp_not_combined' || col === 'ecno' || col === 'sc' || col === 'freq' || col === 'lac' || col === 'level') {
+                        // Try top level, then parsed
+                        if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving[col] !== undefined) val = p.parsed.serving[col];
+
+                        // Special case: level vs rscp vs signal
+                        if ((col === 'rscp' || col === 'rscp_not_combined') && (val === undefined || val === null)) {
+                            val = p.level;
+                            if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving.level;
+                        }
+
+                        // Fallback for Freq if not found in lookup
+                        if (col === 'freq' && (val === undefined || val === null)) {
+                            val = p.freq;
+                        }
+
+                        // Final Fallback
+                        if (val === undefined || val === null) val = ''; // Keep empty for clean look, or use '-' for debug
+
+                    }
+
+                    // Format numbers
+                    if (typeof val === 'number') {
+                        if (String(val).includes('.')) val = val.toFixed(2); // Cleaner floats
+                    }
+
+                    row += `<td style="padding:4px 8px; border-bottom:1px solid #333;">${val}</td>`;
+                });
+                row += `</tr>`;
+                rowsHtml += row;
+            });
+
+            tableHtml += rowsHtml + '</tbody></table>';
+            container.innerHTML = tableHtml;
+
+        } catch (err) {
+            console.error('Render Grid Error', err);
+        }
+    };
+
+    const handleGridDrop = (e) => {
+        e.preventDefault();
+        e.currentTarget.style.boxShadow = 'none';
+
+        try {
+            const data = JSON.parse(e.dataTransfer.getData('application/json'));
+            if (data && data.logId && data.param) {
+                // Verify Log ID Match
+                if (data.logId !== window.currentGridLogId) {
+                    alert('Cannot add metric from a different log. Please open a new grid for that log.');
+                    return;
+                }
+
+                // Add Column if not exists
+                if (!window.currentGridColumns.includes(data.param)) {
+                    window.currentGridColumns.push(data.param);
+                    renderGrid();
+                }
+            }
+        } catch (err) {
+            console.error('Grid Drop Error:', err);
+        }
+    };
+
+    const handleGridDragOver = (e) => {
+        e.preventDefault();
+        e.currentTarget.style.boxShadow = 'inset 0 0 20px rgba(59, 130, 246, 0.5)';
+    };
+
+    const handleGridDragLeave = (e) => {
+        e.currentTarget.style.boxShadow = 'none';
+    };
+
+    // Initialize Draggable Logic
+    function makeElementDraggable(headerEl, containerEl) {
+        let isDragging = false;
+        let startX, startY, initialLeft, initialTop;
+
+        headerEl.onmousedown = dragMouseDown;
+
+        function dragMouseDown(e) {
+            e = e || window.event;
+            e.preventDefault();
+            // Get mouse cursor position at startup
+            startX = e.clientX;
+            startY = e.clientY;
+
+            // Get element position (removing 'px' to get integer)
+            const rect = containerEl.getBoundingClientRect();
+            initialLeft = rect.left;
+            initialTop = rect.top;
+
+            document.onmouseup = closeDragElement;
+            document.onmousemove = elementDrag;
+
+            headerEl.style.cursor = 'grabbing';
         }
 
-        const content = log.points.map(p => {
-            let val = p[param];
-            if (param === 'band' && p.parsed) val = p.parsed.serving.band;
-            // Use fallback if top-level undefined (e.g. for parsed props)
-            if (val === undefined && p.parsed && p.parsed.serving[param] !== undefined) val = p.parsed.serving[param];
+        function elementDrag(e) {
+            e = e || window.event;
+            e.preventDefault();
+            // Calculate cursor movement
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
 
-            return `<tr>
-                <td>${p.time}</td>
-                <td>${p.lat.toFixed(6)}</td>
-                <td>${p.lng.toFixed(6)}</td>
-                <td>${val !== undefined ? val : 'N/A'}</td>
-            </tr>`;
-        }).join('');
+            // Set new position
+            containerEl.style.left = (initialLeft + dx) + "px";
+            containerEl.style.top = (initialTop + dy) + "px";
 
-        modal.innerHTML = `
-            <div style="padding:10px; background:#2d2d2d; border-bottom:1px solid #444; display:flex; justify-content:space-between; align-items:center;">
-                <h3 style="margin:0;">Grid View: ${log.name} - ${param.toUpperCase()}</h3>
-                <button onclick="document.getElementById('gridModal').remove()" style="background:#ef4444; color:white; border:none; padding:5px 10px; cursor:pointer;">Close</button>
-            </div>
-            <div style="flex:1; overflow:auto;">
-                <table style="width:100%; border-collapse:collapse; color:#ddd; font-size:12px;">
-                    <thead style="position:sticky; top:0; background:#2d2d2d;">
-                        <tr><th style="padding:8px; text-align:left;">Time</th><th style="padding:8px; text-align:left;">Lat</th><th style="padding:8px; text-align:left;">Lng</th><th style="padding:8px; text-align:left;">${param}</th></tr>
-                    </thead>
-                    <tbody>${content}</tbody>
-                </table>
-            </div>
-        `;
+            // Remove any margin that might interfere
+            containerEl.style.margin = "0";
+        }
+
+        function closeDragElement() {
+            document.onmouseup = null;
+            document.onmousemove = null;
+            headerEl.style.cursor = 'grab';
+        }
+
+        headerEl.style.cursor = 'grab';
     }
+
+    // Attach Listeners to Grid Modal
+    const gridModal = document.getElementById('gridModal');
+    if (gridModal) {
+        const content = gridModal.querySelector('.modal-content');
+        if (content) {
+            content.addEventListener('dragover', handleGridDragOver);
+            content.addEventListener('dragleave', handleGridDragLeave);
+            content.addEventListener('drop', handleGridDrop);
+        }
+
+        // Make Header Draggable
+        const header = gridModal.querySelector('.modal-header');
+        if (header) {
+            makeElementDraggable(header, gridModal);
+        }
+    }
+
+    // Attach Listeners to Docked Grid (Enable Drop when Docked)
+    const dockedGridEl = document.getElementById('dockedGrid');
+    if (dockedGridEl) {
+        dockedGridEl.addEventListener('dragover', handleGridDragOver);
+        dockedGridEl.addEventListener('dragleave', handleGridDragLeave);
+        dockedGridEl.addEventListener('drop', handleGridDrop);
+    }
+
+    // Docking Logic
+    window.isGridDocked = false;
+
+    // Docking Logic for Grid
+    window.dockGrid = () => {
+        if (window.isGridDocked) return;
+        window.isGridDocked = true;
+
+        const modal = document.getElementById('gridModal');
+        // Support both class names during transition or use loose selector
+        const modalContent = modal.querySelector('.modal-content') || modal.querySelector('.modal-content-grid');
+        const dockContainer = document.getElementById('dockedGrid');
+
+        if (modalContent && dockContainer) {
+            // Move Header and Body
+            const header = modalContent.querySelector('.grid-modal-header') || modalContent.querySelector('.modal-header');
+            const body = modalContent.querySelector('.grid-body') || modalContent.querySelector('.modal-body');
+
+            if (header && body) {
+                // Clear placeholders (like dockedGridBody) to prevent layout conflicts
+                dockContainer.innerHTML = '';
+                dockContainer.appendChild(header);
+                dockContainer.appendChild(body);
+
+                // Update UI (Button in Docked View)
+                const dockBtn = header.querySelector('.dock-btn') || header.querySelector('.btn-dock');
+                if (dockBtn) {
+                    dockBtn.innerHTML = '&#8599;'; // Undock Icon (North East Arrow)
+                    dockBtn.title = 'Undock';
+                    dockBtn.onclick = window.undockGrid; // Correct: Click to Undock
+                    dockBtn.style.background = '#555';
+                }
+                const closeBtn = header.querySelector('.close');
+                if (closeBtn) closeBtn.style.display = 'none'; // Hide close button in docked mode
+
+                modal.style.display = 'none'; // Hide modal when docked
+                updateDockedLayout(); // Show docked container
+            }
+        }
+    };
+
+    window.toggleGridDock = () => {
+        if (window.isGridDocked) window.undockGrid();
+        else window.dockGrid();
+    };
+    window.undockGrid = () => {
+        if (!window.isGridDocked) return;
+        window.isGridDocked = false;
+
+        const modal = document.getElementById('gridModal');
+        const modalContent = modal.querySelector('.modal-content') || modal.querySelector('.modal-content-grid');
+        const dockContainer = document.getElementById('dockedGrid');
+
+        // Note: dockContainer has them as direct children now
+        const header = dockContainer.querySelector('.grid-modal-header') || dockContainer.querySelector('.modal-header');
+        const body = dockContainer.querySelector('.grid-body') || dockContainer.querySelector('.modal-body');
+
+        if (header && body) {
+            modalContent.appendChild(header);
+            modalContent.appendChild(body);
+
+            // Update UI
+            const dockBtn = header.querySelector('.dock-btn') || header.querySelector('.btn-dock');
+            if (dockBtn) {
+                dockBtn.innerHTML = '&#8601;'; // Undock Icon (fixed from down arrow)
+                dockBtn.title = 'Dock';
+                dockBtn.onclick = window.dockGrid;
+                dockBtn.style.background = '#444'; // fixed color
+            }
+            // Show Close Button
+            const closeBtn = header.querySelector('.close');
+            if (closeBtn) closeBtn.style.display = 'block';
+
+            modal.style.display = 'block';
+            dockContainer.innerHTML = ''; // Clear remnants
+            updateDockedLayout();
+        }
+        renderGrid();
+    };
+
+    // Export Grid to CSV
+    window.exportGridToCSV = () => {
+        if (!window.currentGridLogId || !window.currentGridColumns) return;
+        const log = loadedLogs.find(l => l.id === window.currentGridLogId);
+        if (!log) return;
+
+        const headers = ['Time', 'Lat', 'Lng', ...window.currentGridColumns.map(c => c.toUpperCase())];
+        const rows = [headers.join(',')];
+
+        // Limit should match render limit or be unlimited for export? 
+        // User probably expects ALL points in export. I will export ALL points.
+        log.points.forEach(p => {
+            // Basic columns
+            let rowData = [
+                p.time || '',
+                p.lat,
+                p.lng
+            ];
+
+            // Dynamic parameter columns
+            window.currentGridColumns.forEach(col => {
+                let val = p[col];
+
+                // --- Logic mirrored from renderGrid ---
+                // Neighbors
+                if (col.startsWith('n') && col.includes('_')) {
+                    const parts = col.split('_');
+                    const nIdx = parseInt(parts[0].replace('n', '')) - 1;
+                    let field = parts[1];
+                    if (field === 'sc') field = 'pci';
+
+                    if (p.parsed && p.parsed.neighbors && p.parsed.neighbors[nIdx]) {
+                        const nestedVal = p.parsed.neighbors[nIdx][field];
+                        if (nestedVal !== undefined) val = nestedVal;
+                    }
+                } else if (col === 'band' || col === 'rscp' || col === 'rscp_not_combined' || col === 'ecno' || col === 'sc' || col === 'freq' || col === 'lac' || col === 'level' || col === 'active_set') {
+                    // Try top level, then parsed
+                    if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving[col] !== undefined) val = p.parsed.serving[col];
+
+                    // Special case fallbacks
+                    if ((col === 'rscp' || col === 'rscp_not_combined') && (val === undefined || val === null)) {
+                        val = p.level;
+                        if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving.level;
+                    }
+                    if (col === 'freq' && (val === undefined || val === null)) {
+                        val = p.freq;
+                    }
+                }
+                // --------------------------------------
+
+                if (val === undefined || val === null) val = '';
+                // Escape commas for CSV
+                if (String(val).includes(',')) val = `"${val}"`;
+                rowData.push(val);
+            });
+            rows.push(rowData.join(','));
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + rows.join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `grid_export_${log.name}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    // Sort Grid (Stub - to prevent error if clicked, though implementation is non-trivial for dynamic cols)
+    window.sortGrid = () => {
+        alert('Sort functionality coming soon.');
+    };
+
+    window.toggleGridDock = () => {
+        if (window.isGridDocked) window.undockGrid();
+        else window.dockGrid();
+    };
+
+    window.openGridModal = (log, param) => {
+        window.currentGridLogId = log.id;
+        window.currentGridColumns = [param];
+
+        if (window.isGridDocked) {
+            document.getElementById('dockedGrid').style.display = 'flex';
+            document.getElementById('gridModal').style.display = 'none';
+        } else {
+            const modal = document.getElementById('gridModal');
+            modal.style.display = 'block';
+            document.getElementById('dockedGrid').style.display = 'none';
+        }
+
+        renderGrid();
+    };
+
+
+
+    // ----------------------------------------------------
+    // EXPORT OPTIM FILE FEATURE
+    // ----------------------------------------------------
+    window.exportOptimFile = (logId) => {
+        const log = loadedLogs.find(l => l.id === logId);
+        if (!log) return;
+
+        const headers = [
+            'Date', 'Time', 'Latitude', 'Longitude',
+            'Serving Band', 'Serving RSCP', 'Serving EcNo', 'Serving SC', 'Serving LAC', 'Serving Freq',
+            'N1 Band', 'N1 RSCP', 'N1 EcNo', 'N1 SC', 'N1 LAC', 'N1 Freq',
+            'N2 Band', 'N2 RSCP', 'N2 EcNo', 'N2 SC', 'N2 LAC', 'N2 Freq',
+            'N3 Band', 'N3 RSCP', 'N3 EcNo', 'N3 SC', 'N3 LAC', 'N3 Freq'
+        ];
+
+        // Helper to guess band from freq (Simplified logic matching parser)
+        const getBand = (f) => {
+            if (!f) return '';
+            f = parseFloat(f);
+            if (f >= 10562 && f <= 10838) return 'B1 (2100)';
+            if (f >= 2937 && f <= 3088) return 'B8 (900)';
+            if (f > 10000) return 'High Band';
+            if (f < 4000) return 'Low Band';
+            return 'Unknown';
+        };
+
+        const rows = [];
+        rows.push(headers.join(','));
+
+        log.points.forEach(p => {
+            if (!p.parsed) return;
+
+            const s = p.parsed.serving;
+            const n = p.parsed.neighbors || [];
+
+            const gn = (idx, field) => {
+                if (idx >= n.length) return '';
+                const nb = n[idx];
+                if (field === 'band') return getBand(nb.freq);
+                if (field === 'lac') return s.lac;
+                return nb[field] !== undefined ? nb[field] : '';
+            };
+
+            const row = [
+                new Date().toISOString().split('T')[0],
+                p.time,
+                p.lat,
+                p.lng,
+                getBand(s.freq),
+                s.level,
+                s.ecno !== null ? s.ecno : '',
+                s.sc,
+                s.lac,
+                s.freq,
+                gn(0, 'band'), gn(0, 'rscp'), gn(0, 'ecno'), gn(0, 'pci'), gn(0, 'lac'), gn(0, 'freq'),
+                gn(1, 'band'), gn(1, 'rscp'), gn(1, 'ecno'), gn(1, 'pci'), gn(1, 'lac'), gn(1, 'freq'),
+                gn(2, 'band'), gn(2, 'rscp'), gn(2, 'ecno'), gn(2, 'pci'), gn(2, 'lac'), gn(2, 'freq')
+            ];
+            rows.push(row.join(','));
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + rows.join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `${log.name}_optim_export.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
 
     // Expose removeLog globally for the onclick handler (dirty but quick for prototype)
     window.removeLog = (id) => {
@@ -1207,54 +1635,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('signalingModal').style.display = 'none';
         };
 
-        // Initialize Draggable Logic
-        function makeElementDraggable(headerEl, containerEl) {
-            let isDragging = false;
-            let startX, startY, initialLeft, initialTop;
 
-            headerEl.onmousedown = dragMouseDown;
-
-            function dragMouseDown(e) {
-                e = e || window.event;
-                e.preventDefault();
-                // Get mouse cursor position at startup
-                startX = e.clientX;
-                startY = e.clientY;
-
-                // Get element position (removing 'px' to get integer)
-                const rect = containerEl.getBoundingClientRect();
-                initialLeft = rect.left;
-                initialTop = rect.top;
-
-                document.onmouseup = closeDragElement;
-                document.onmousemove = elementDrag;
-
-                headerEl.style.cursor = 'grabbing';
-            }
-
-            function elementDrag(e) {
-                e = e || window.event;
-                e.preventDefault();
-                // Calculate cursor movement
-                const dx = e.clientX - startX;
-                const dy = e.clientY - startY;
-
-                // Set new position
-                containerEl.style.left = (initialLeft + dx) + "px";
-                containerEl.style.top = (initialTop + dy) + "px";
-
-                // Remove any margin that might interfere
-                containerEl.style.margin = "0";
-            }
-
-            function closeDragElement() {
-                document.onmouseup = null;
-                document.onmousemove = null;
-                headerEl.style.cursor = 'grab';
-            }
-
-            headerEl.style.cursor = 'grab';
-        }
 
         // Apply to Signaling Modal
         const sigModal = document.getElementById('signalingModal');
@@ -1427,16 +1808,19 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('checkShowCellNames').addEventListener('change', updateSiteStyles);
     }
     // ---------------------------------------------------------
+    // ---------------------------------------------------------
     // DOCKING SYSTEM
     // ---------------------------------------------------------
     let isChartDocked = false;
     let isSignalingDocked = false;
+    window.isGridDocked = false; // Exposed global
 
     const bottomPanel = document.getElementById('bottomPanel');
     const bottomContent = document.getElementById('bottomContent');
     const bottomResizer = document.getElementById('bottomResizer');
     const dockedChart = document.getElementById('dockedChart');
     const dockedSignaling = document.getElementById('dockedSignaling');
+    const dockedGrid = document.getElementById('dockedGrid');
 
     // Resizer Logic
     let isResizingBottom = false;
@@ -1469,28 +1853,56 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Update Layout Visibility
     function updateDockedLayout() {
-        if (isChartDocked || isSignalingDocked) {
+        const bottomPanel = document.getElementById('bottomPanel');
+        const dockedChart = document.getElementById('dockedChart');
+        const dockedSignaling = document.getElementById('dockedSignaling');
+        const dockedGrid = document.getElementById('dockedGrid');
+
+        if (!bottomPanel || !dockedChart || !dockedSignaling || !dockedGrid) {
+            console.warn('Docking elements missing, skipping layout update.');
+            return;
+        }
+
+        const anyDocked = isChartDocked || isSignalingDocked || window.isGridDocked;
+
+        if (anyDocked) {
             bottomPanel.style.display = 'flex';
-            // Fix: offsetHeight includes border, which might be > 0 (e.g. 1px). Use a threshold.
-            if (bottomPanel.offsetHeight < 10) bottomPanel.style.height = '300px'; // Default height
+            // Force flex basis to 0 0 300px to prevent #map from squashing it
+            bottomPanel.style.flex = '0 0 300px';
+            bottomPanel.style.height = '300px';
+            bottomPanel.style.minHeight = '100px'; // Prevent full collapse
         } else {
             bottomPanel.style.display = 'none';
         }
 
         dockedChart.style.display = isChartDocked ? 'flex' : 'none';
-        dockedChart.style.flexDirection = 'column'; // Vertical Stack: Header -> Chart
         dockedSignaling.style.display = isSignalingDocked ? 'flex' : 'none';
-        dockedSignaling.style.flexDirection = 'column';
 
-        // Split widths if both active
-        if (isChartDocked && isSignalingDocked) {
-            dockedChart.style.flex = '1';
-            dockedSignaling.style.flex = '1';
-            dockedChart.style.borderRight = '1px solid #444';
+        // Explicitly handle Grid Display
+        if (window.isGridDocked) {
+            dockedGrid.style.display = 'flex';
+            dockedGrid.style.flexDirection = 'column'; // Ensure column layout
         } else {
-            dockedChart.style.flex = '1';
-            dockedSignaling.style.flex = '1';
-            dockedChart.style.borderRight = 'none';
+            dockedGrid.style.display = 'none';
+        }
+
+        // Count active items
+        const activeItems = [isChartDocked, isSignalingDocked, window.isGridDocked].filter(Boolean).length;
+
+        if (activeItems > 0) {
+            const width = 100 / activeItems; // e.g. 50% or 33.3%
+            // Apply styles
+            [dockedChart, dockedSignaling, dockedGrid].forEach(el => {
+                // Ensure flex basis is reasonable
+                el.style.flex = '1 1 auto';
+                el.style.width = `${width}%`;
+                el.style.borderRight = '1px solid #444';
+                el.style.height = '100%'; // Full height of bottomPanel
+            });
+            // Remove last border
+            if (window.isGridDocked) dockedGrid.style.borderRight = 'none';
+            else if (isSignalingDocked) dockedSignaling.style.borderRight = 'none';
+            else dockedChart.style.borderRight = 'none';
         }
 
         // Trigger Chart Resize
@@ -1666,13 +2078,285 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial call to update layout state
     updateDockedLayout();
 
+    // Global Function to Update Sidebar List
+    window.updateLogsList = function () {
+        const container = document.getElementById('logsList');
+        if (!container) return; // Safety check
+        container.innerHTML = '';
+
+        loadedLogs.forEach(log => {
+            const item = document.createElement('div');
+            // REMOVED overflow:hidden to prevent clipping issues. FORCED display:block to override any cached flex rules.
+            item.style.cssText = 'background:#252525; margin-bottom:5px; border-radius:4px; border:1px solid #333; min-height: 50px; display: block !important;';
+
+            // Header
+            const header = document.createElement('div');
+            header.className = 'log-header';
+            header.style.cssText = 'padding:8px 10px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; background:#2d2d2d; border-bottom:1px solid #333;';
+            header.innerHTML = `
+                <span style="font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;">${log.name}</span>
+                <div style="display:flex; gap:5px;">
+                     <!-- Export Button -->
+                     <button onclick="window.exportOptimFile('${log.id}'); event.stopPropagation();" title="Export Optim CSV" style="background:#059669; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">⬇</button>
+                     <button onclick="event.stopPropagation(); window.removeLog('${log.id}')" style="background:#ef4444; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>
+                </div>
+            `;
+
+            // Toggle Logic
+            header.onclick = () => {
+                const body = item.querySelector('.log-body');
+                // Check computed style or inline style
+                const isHidden = body.style.display === 'none';
+                body.style.display = isHidden ? 'block' : 'none';
+            };
+
+            // Body (Default: Visible)
+            const body = document.createElement('div');
+            body.className = 'log-body';
+            body.style.cssText = 'padding:10px; display:block;';
+
+            // Stats
+            const count = log.points.length;
+            const stats = document.createElement('div');
+            stats.style.cssText = 'font-size:10px; color:#888; margin-bottom:8px;';
+            stats.innerHTML = `
+                <span style="background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;">${log.tech}</span>
+                <span style="margin-left:5px;">${count} pts</span>
+            `;
+
+            // Actions
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
+
+            const addAction = (label, param) => {
+                const btn = document.createElement('div');
+                btn.textContent = label;
+                btn.className = 'param-item'; // Add class for styling if needed
+                btn.draggable = true; // Make Draggable
+                btn.style.cssText = 'padding:4px 8px; background:#333; color:#ccc; font-size:11px; border-radius:3px; cursor:pointer; hover:background:#444; transition:background 0.2s;';
+
+                btn.onmouseover = () => btn.style.background = '#444';
+                btn.onmouseout = () => btn.style.background = '#333';
+
+                // Drag Start Handler
+                btn.ondragstart = (e) => {
+                    e.dataTransfer.setData('application/json', JSON.stringify({
+                        logId: log.id,
+                        param: param,
+                        label: label
+                    }));
+                    e.dataTransfer.effectAllowed = 'copy';
+                };
+
+                // Left Click Handler - Opens Context Menu
+                // Using onclick to be definitive.
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('Click detected on:', label);
+
+                    window.currentContextLogId = log.id;
+                    window.currentContextParam = param;
+
+                    const menu = document.getElementById('metricContextMenu');
+                    if (menu) {
+                        menu.style.display = 'block';
+                        menu.style.position = 'fixed'; // FIXED positioning to be safe
+                        menu.style.left = `${e.clientX}px`; // Use clientX for fixed
+                        menu.style.top = `${e.clientY}px`;  // Use clientY for fixed
+                    }
+                    return false; // Stop propagation legacy style
+                };
+                // REMOVED contextmenu handler and previous direct-open logic
+                return btn;
+            };
+
+            // Helper for Group Headers
+            const addHeader = (text) => {
+                const d = document.createElement('div');
+                d.textContent = text;
+                d.style.cssText = 'font-size:10px; color:#aaa; margin-top:8px; margin-bottom:4px; font-weight:bold; text-transform:uppercase; letter-spacing:0.5px;';
+                return d;
+            };
+
+            // GROUP: Serving Cell
+            actions.appendChild(addHeader('Serving Cell'));
+            actions.appendChild(addAction('Serving RSCP/Level', 'rscp_not_combined'));
+            actions.appendChild(addAction('Serving EcNo', 'ecno'));
+            actions.appendChild(addAction('Serving SC/PCI', 'sc'));
+            actions.appendChild(addAction('Active Set', 'active_set'));
+            actions.appendChild(addAction('Serving Freq', 'freq'));
+            actions.appendChild(addAction('Serving Band', 'band'));
+            if (log.points[0] && log.points[0].lac !== 'N/A') actions.appendChild(addAction('LAC', 'lac'));
+            if (log.points[0] && log.points[0].cellId !== 'N/A') actions.appendChild(addAction('Cell ID', 'cellId'));
+
+            // GROUP: Neighbors
+            actions.appendChild(addHeader('Neighbors'));
+            // Neighbors Loop (N1 - N8)
+            for (let i = 1; i <= 8; i++) {
+                actions.appendChild(addAction(`N${i} RSCP`, `n${i}_rscp`));
+                actions.appendChild(addAction(`N${i} EcNo`, `n${i}_ecno`));
+                actions.appendChild(addAction(`N${i} SC`, `n${i}_sc`));
+            }
+
+            // OUTSIDE GROUPS: Composite & General
+            actions.appendChild(document.createElement('hr')).style.cssText = "border:0; border-top:1px solid #444; margin:10px 0;";
+
+            actions.appendChild(addAction('Composite RSCP & Neighbors', 'rscp_not_combined'));
+
+            actions.appendChild(document.createElement('hr')).style.cssText = "border:0; border-top:1px solid #444; margin:10px 0;";
+
+            // GPS & Others
+            actions.appendChild(addAction('GPS Speed', 'speed'));
+            actions.appendChild(addAction('GPS Altitude', 'alt'));
+            actions.appendChild(addAction('Time', 'time'));
+
+            // Resurrected Signaling Modal Button
+            const sigBtn = document.createElement('div');
+            sigBtn.className = 'metric-item';
+            sigBtn.style.padding = '4px 8px';
+            sigBtn.style.cursor = 'pointer';
+            sigBtn.style.margin = '2px 0';
+            sigBtn.style.fontSize = '11px';
+            sigBtn.style.color = '#ccc';
+            sigBtn.style.borderRadius = '4px';
+            sigBtn.style.backgroundColor = 'rgba(168, 85, 247, 0.1)'; // Purple tint
+            sigBtn.style.border = '1px solid rgba(168, 85, 247, 0.2)';
+            sigBtn.textContent = 'Show Signaling';
+            sigBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (window.showSignalingModal) {
+                    window.showSignalingModal(log.id);
+                } else {
+                    alert('Signaling Modal function missing!');
+                }
+            };
+            sigBtn.onmouseover = () => sigBtn.style.backgroundColor = 'rgba(168, 85, 247, 0.2)';
+            sigBtn.onmouseout = () => sigBtn.style.backgroundColor = 'rgba(168, 85, 247, 0.1)';
+            actions.appendChild(sigBtn);
+
+            // Add components
+            body.appendChild(stats);
+            body.appendChild(actions);
+            item.appendChild(header);
+            item.appendChild(body);
+            container.appendChild(item);
+        });
+    };
+
     // DEBUG EXPORT FOR TESTING
     window.loadedLogs = loadedLogs;
-    window.updateLogsList = updateLogsList;
+    // window.updateLogsList = updateLogsList; // DELETED TO FIX REFERENCE ERROR
     window.openChartModal = openChartModal;
     window.showSignalingModal = showSignalingModal;
     window.dockChart = dockChart;
     window.dockSignaling = dockSignaling;
     window.undockChart = undockChart;
     window.undockSignaling = undockSignaling;
+
+    // ----------------------------------------------------
+    // EXPORT OPTIM FILE FEATURE
+    // ----------------------------------------------------
+    window.exportOptimFile = (logId) => {
+        const log = loadedLogs.find(l => l.id === logId);
+        if (!log) return;
+
+        const headers = [
+            'Date', 'Time', 'Latitude', 'Longitude',
+            'Serving Band', 'Serving RSCP', 'Serving EcNo', 'Serving SC', 'Serving LAC', 'Serving Freq',
+            'N1 Band', 'N1 RSCP', 'N1 EcNo', 'N1 SC', 'N1 LAC', 'N1 Freq',
+            'N2 Band', 'N2 RSCP', 'N2 EcNo', 'N2 SC', 'N2 LAC', 'N2 Freq',
+            'N3 Band', 'N3 RSCP', 'N3 EcNo', 'N3 SC', 'N3 LAC', 'N3 Freq'
+        ];
+
+        // Helper to guess band from freq (Simplified logic matching parser)
+        const getBand = (f) => {
+            if (!f) return '';
+            f = parseFloat(f);
+            if (f >= 10562 && f <= 10838) return 'B1 (2100)';
+            if (f >= 2937 && f <= 3088) return 'B8 (900)';
+            if (f > 10000) return 'High Band';
+            if (f < 4000) return 'Low Band';
+            return 'Unknown';
+        };
+
+        const rows = [];
+        rows.push(headers.join(','));
+
+        log.points.forEach(p => {
+            if (!p.parsed) return;
+
+            const s = p.parsed.serving;
+            const n = p.parsed.neighbors || [];
+
+            const gn = (idx, field) => {
+                if (idx >= n.length) return '';
+                const nb = n[idx];
+                if (field === 'band') return getBand(nb.freq);
+                if (field === 'lac') return s.lac;
+                return nb[field] !== undefined ? nb[field] : '';
+            };
+
+            const row = [
+                new Date().toISOString().split('T')[0],
+                p.time,
+                p.lat,
+                p.lng,
+                getBand(s.freq),
+                s.level,
+                s.ecno !== null ? s.ecno : '',
+                s.sc,
+                s.lac,
+                s.freq,
+                gn(0, 'band'), gn(0, 'rscp'), gn(0, 'ecno'), gn(0, 'pci'), gn(0, 'lac'), gn(0, 'freq'),
+                gn(1, 'band'), gn(1, 'rscp'), gn(1, 'ecno'), gn(1, 'pci'), gn(1, 'lac'), gn(1, 'freq'),
+                gn(2, 'band'), gn(2, 'rscp'), gn(2, 'ecno'), gn(2, 'pci'), gn(2, 'lac'), gn(2, 'freq')
+            ];
+            rows.push(row.join(','));
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + rows.join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `${log.name}_optim_export.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+
+
+    // ----------------------------------------------------
+    // CONTEXT MENU LOGIC (Re-added)
+    // ----------------------------------------------------
+    window.currentContextLogId = null;
+    window.currentContextParam = null;
+
+    window.handleContextAction = (action) => {
+        const menu = document.getElementById('metricContextMenu');
+        if (menu) menu.style.display = 'none';
+
+        if (!window.currentContextLogId || !window.currentContextParam) return;
+
+        const log = loadedLogs.find(l => l.id === window.currentContextLogId);
+        if (!log) return;
+        const param = window.currentContextParam;
+
+        if (action === 'map') {
+            map.updateLayerMetric(log.id, log.points, param);
+        } else if (action === 'chart') {
+            window.openChartModal(log, param);
+        } else if (action === 'grid') {
+            window.openGridModal(log, param);
+        }
+    };
+
+    // Close context menu on global click
+    document.addEventListener('click', () => {
+        const menu = document.getElementById('metricContextMenu');
+        if (menu) menu.style.display = 'none';
+    });
+
 });
