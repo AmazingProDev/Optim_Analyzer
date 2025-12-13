@@ -1,0 +1,314 @@
+:root {
+    --bg-color: #1e1e1e;
+    --header-bg: #2d2d2d;
+    --text-color: #e0e0e0;
+    --accent-color: #3b82f6;
+    --accent-hover: #2563eb;
+    --border-color: #404040;
+}
+
+body,
+html {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: 'Inter', sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+header {
+    height: 60px;
+    background-color: var(--header-bg);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 20px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.logo {
+    font-weight: 600;
+    font-size: 1.2rem;
+    color: var(--accent-color);
+}
+
+.controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+input[type="file"] {
+    display: none;
+}
+
+.btn {
+    background-color: var(--accent-color);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background-color 0.2s;
+}
+
+.btn:hover {
+    background-color: var(--accent-hover);
+}
+
+#fileStatus {
+    font-size: 0.85rem;
+    color: #888;
+}
+
+.stats {
+    margin-left: auto;
+    font-size: 0.9rem;
+    display: flex;
+    gap: 15px;
+}
+
+main {
+    flex: 1;
+    position: relative;
+    display: flex;
+}
+
+#logs-sidebar {
+    width: 250px;
+    background-color: var(--header-bg);
+    border-right: 1px solid var(--border-color);
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+#logsList {
+    flex: 1;
+    margin-top: 15px;
+}
+
+.log-item {
+    background: #3a3a3a;
+    padding: 10px;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-left: 3px solid var(--accent-color);
+}
+
+.log-name {
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+}
+
+.empty-state {
+    color: #666;
+    font-size: 0.9rem;
+    font-style: italic;
+    text-align: center;
+    margin-top: 20px;
+}
+
+.tech-badge {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.tech-badge-3g {
+    background: #3b82f6;
+    color: white;
+}
+
+.tech-badge-4g {
+    background: #10b981;
+    color: white;
+}
+
+.tech-badge-5g {
+    background: #8b5cf6;
+    color: white;
+}
+
+.tech-badge-2g {
+    background: #f59e0b;
+    color: white;
+}
+
+.tech-badge-unknown {
+    background: #6b7280;
+    color: white;
+}
+
+#map {
+    width: 100%;
+    background-color: #1a1a1a;
+}
+
+/* Docked View Styles */
+.docked-view-header {
+    height: 30px;
+    background: #252525;
+    border-bottom: 1px solid #444;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 10px;
+}
+
+.docked-view-body {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+#sidebar {
+    width: 300px;
+    background-color: var(--header-bg);
+    border-left: 1px solid var(--border-color);
+    padding: 20px;
+    overflow-y: auto;
+    transition: transform 0.3s ease;
+}
+
+#sidebar.hidden {
+    display: none;
+}
+
+.metric-item {
+    margin-bottom: 15px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.metric-label {
+    font-size: 0.8rem;
+    color: #888;
+    margin-bottom: 4px;
+}
+
+.metric-value {
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-color);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}
+
+/* Map Popups */
+.leaflet-popup-content-wrapper {
+    background: var(--header-bg);
+    color: var(--text-color);
+    border-radius: 6px;
+}
+
+.leaflet-popup-tip {
+    background: var(--header-bg);
+}
+
+/* Modal Styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 2000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    /* Prevent body scroll interaction issues */
+    background-color: transparent;
+    /* No dark overlay */
+    pointer-events: none;
+    /* CLICK THROUGH to map! */
+}
+
+.modal-content {
+    background-color: #1e1e1e;
+    margin: 0;
+    /* Remove auto-center margin for absolute positioning */
+    padding: 0;
+    /* Let inner content handle padding */
+    border: 1px solid #555;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+    pointer-events: auto;
+    /* Re-enable clicks on window */
+
+    /* Resizable & Draggable Properties */
+    position: absolute;
+    top: 100px;
+    left: 50px;
+    width: 600px;
+    height: 400px;
+    min-width: 300px;
+    min-height: 200px;
+    resize: both;
+    overflow: hidden;
+    /* Needed for resize handle to render properly in some browsers? Use auto for content. */
+    display: flex;
+    flex-direction: column;
+}
+
+/* Close Button */
+.close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+}
+
+.close:hover,
+.close:focus {
+    color: white;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+/* Signaling Badges */
+.badge-rrc {
+    background-color: #2563eb;
+    /* Blue */
+    color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.badge-l3 {
+    background-color: #9333ea;
+    /* Purple */
+    color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+}
