@@ -13,15 +13,42 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=29">
-    <link rel="stylesheet" href="grid_styles.css?v=1">
-    <link rel="stylesheet" href="additional_styles.css?v=1">
+    <link rel="stylesheet" href="style.css?v=31">
+    <link rel="stylesheet" href="grid_styles.css?v=2">
+    <link rel="stylesheet" href="additional_styles.css?v=2">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        /* Emergency Styles to force visibility */
+        #app {
+            display: flex !important;
+            flex-direction: column !important;
+            height: 100vh !important;
+        }
+
+        header {
+            display: flex !important;
+            min-height: 60px !important;
+            background: #2d2d2d !important;
+            z-index: 9999 !important;
+            border-bottom: 2px solid red !important;
+        }
+
+        #logs-sidebar {
+            display: flex !important;
+            width: 250px !important;
+            z-index: 9998 !important;
+        }
+
+        main {
+            display: flex !important;
+        }
+    </style>
 </head>
 
 <body>
     <div id="app">
-        <header>
+        <!-- Main Application Header -->
+        <header id="mainHeader" class="main-header">
             <div class="logo">Log Cracker Pro</div>
             <div class="controls">
                 <input type="file" id="fileInput" accept=".nmf">
@@ -37,8 +64,7 @@
 
             <!-- Site Settings Panel -->
             <div id="siteSettingsPanel" class="settings-panel">
-                <h4 class="settings-header">Site Settings
-                </h4>
+                <h4 class="settings-header">Site Settings</h4>
 
                 <div class="setting-item">
                     <label class="setting-label">Range (m): <span id="valRange">200</span></label>
@@ -84,6 +110,7 @@
                         style="background:#555; color:white; border:none; padding:4px 10px; cursor:pointer; font-size:11px; border-radius:3px;">Close</button>
                 </div>
             </div>
+
             <div class="stats" id="statsDisplay">
                 <!-- Stats will go here -->
             </div>
@@ -246,25 +273,21 @@
     </div>
 
 
-    <!-- Grid Modal -->
-    <div id="gridModal" class="modal"
-        style="display:none; position:fixed; top:120px; left:320px; width:600px; height:400px; background:#1e1e1e; border:1px solid #444; z-index:2001; flex-direction:column; box-shadow:0 0 20px rgba(0,0,0,0.8); resize:both; overflow:hidden; min-width:400px; min-height:300px;">
-        <div class="modal-content-grid">
-            <div class="grid-modal-header">
-                <h3 id="gridTitle" class="grid-title">Data Grid</h3>
-                <div class="grid-controls">
-                    <span onclick="toggleGridDock()" class="dock-btn" title="Dock to Sidebar">&#8601;</span>
-                    <span class="close" onclick="document.getElementById('gridModal').style.display='none'"
-                        style="cursor:pointer; font-size:18px;">&times;</span>
-                </div>
-            </div>
-            <div id="gridBody" class="grid-body">
-                <!-- Table will be injected here -->
-            </div>
-            <div
-                style="padding:5px; background:#252525; border-top:1px solid #333; font-size:10px; color:#666; text-align:center;">
-                Drag metrics here to add columns
-            </div>
+
+
+    <!-- Floating Info Panel (Draggable) -->
+    <div id="floatingInfoPanel"
+        style="display:none; position:fixed; top:80px; right:20px; width:280px; background:rgba(30, 30, 30, 0.95); backdrop-filter:blur(5px); border:1px solid #444; border-radius:8px; z-index:3000; box-shadow:0 8px 30px rgba(0,0,0,0.5); font-family: 'Inter', sans-serif;">
+        <!-- Header (Drag Handle) -->
+        <div id="infoPanelHeader"
+            style="padding:10px; background:#252525; border-bottom:1px solid #333; border-radius:8px 8px 0 0; cursor:move; display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:12px; font-weight:600; color:#ddd;">Point Details</span>
+            <span onclick="document.getElementById('floatingInfoPanel').style.display='none'"
+                style="cursor:pointer; color:#888; font-size:16px;">&times;</span>
+        </div>
+        <!-- Content -->
+        <div id="infoPanelContent" style="padding:10px; color:#eee; max-height:400px; overflow-y:auto;">
+            <div style="font-size:12px; color:#888; text-align:center;">Select a point to view details</div>
         </div>
     </div>
 

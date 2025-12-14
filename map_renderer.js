@@ -87,43 +87,8 @@ class MapRenderer {
                 window.dispatchEvent(new CustomEvent('map-point-clicked', {
                     detail: { logId: id, point: p }
                 }));
+                // We don't bind popup anymore, we updated the global info panel via the sync loop.
             });
-
-            // Build detailed popup
-            let neighborsHtml = '';
-            if (p.parsed && p.parsed.neighbors) {
-                neighborsHtml = '<table style="width:100%; font-size:11px; border-collapse: collapse;">';
-                neighborsHtml += '<tr style="border-bottom:1px solid #555;"><th>PCI</th><th>RSCP</th><th>EcNo</th></tr>';
-                p.parsed.neighbors.forEach(n => {
-                    neighborsHtml += `<tr>
-                        <td>${n.pci || '-'}</td>
-                        <td>${n.rscp || '-'}</td>
-                        <td>${n.ecno || '-'}</td>
-                    </tr>`;
-                });
-                neighborsHtml += '</table>';
-            }
-
-            const popupContent = `
-                <div style="font-family: 'Inter', sans-serif; font-size: 13px; min-width: 200px;">
-                    <div style="margin-bottom: 8px; font-weight: 600; color: #fff;">
-                       Time: ${p.time}
-                    </div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px;">
-                        <div><span style="color:#aaa;">Lat:</span> ${p.lat.toFixed(5)}</div>
-                        <div><span style="color:#aaa;">Lng:</span> ${p.lng.toFixed(5)}</div>
-                        <div><span style="color:#aaa;">Val (${metric}):</span> <strong>${val !== undefined ? val : 'N/A'}</strong></div>
-                    </div>
-                    ${p.parsed ? `<div style="background:#333;padding:4px;">Freq: ${p.parsed.serving.freq} | Band: ${p.parsed.serving.band || 'N/A'}</div>` : ''}
-                    ${p.cellId !== undefined ? `<div style="background:#222;padding:4px; margin-top:2px;">Cell ID: ${p.cellId} | LAC: ${p.lac || 'N/A'}</div>` : ''}
-                    <div style="background: #333; padding: 6px; border-radius: 4px; margin-top:5px;">
-                        <div style="font-size: 11px; margin-bottom: 4px; color: #aaa;">NEIGHBORS</div>
-                        ${neighborsHtml || '<div style="color:#666; font-style:italic;">No neighbors</div>'}
-                    </div>
-                </div>
-                `;
-
-            marker.bindPopup(popupContent);
         });
 
         this.logLayers[id] = layerGroup;

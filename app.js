@@ -97,6 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
         window.currentChartLogId = log.id;
         window.currentChartParam = param;
 
+        let activeIndex = 0; // Track selected point index
+
         let container;
         let isDocked = isChartDocked;
 
@@ -367,7 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return g;
         };
 
-        let activeIndex = 0; // Default to 0
+
 
         // Vertical Line Plugin with Badge Style (Pill)
         const verticalLinePlugin = {
@@ -505,17 +507,41 @@ document.addEventListener('DOMContentLoaded', () => {
                 const mkBar = (v) => (v !== undefined && v !== null && !isNaN(v)) ? [floor, parseFloat(v)] : null;
 
                 if (isComposite) {
+                    // Logic to find Unique Neighbors (Not in Active Set)
+                    // Active Set SCs
+                    const activeSCs = [p.sc, p.a2_sc, p.a3_sc].filter(sc => sc !== null && sc !== undefined);
+
+                    let uniqueNeighbors = [];
+                    if (p.parsed && p.parsed.neighbors) {
+                        uniqueNeighbors = p.parsed.neighbors.filter(n => !activeSCs.includes(n.pci));
+                    }
+
+                    // Fallback to top 3 if logic fails or array empty, but ideally we use these
+                    const n1 = uniqueNeighbors.length > 0 ? uniqueNeighbors[0] : null;
+                    const n2 = uniqueNeighbors.length > 1 ? uniqueNeighbors[1] : null;
+                    const n3 = uniqueNeighbors.length > 2 ? uniqueNeighbors[2] : null;
+
+                    // Helper for SC Label
+                    const lbl = (prefix, sc) => sc !== undefined && sc !== null ? `${prefix} (${sc})` : prefix;
+
                     return {
-                        labels: ['Serving (A1)', 'A2', 'A3', 'N1', 'N2', 'N3'],
+                        labels: [
+                            lbl('A1', p.sc),
+                            lbl('A2', p.a2_sc),
+                            lbl('A3', p.a3_sc),
+                            lbl('N1', n1 ? n1.pci : null),
+                            lbl('N2', n2 ? n2.pci : null),
+                            lbl('N3', n3 ? n3.pci : null)
+                        ],
                         datasets: [{
                             label: 'Signal Strength',
                             data: [
                                 mkBar(valServing),
                                 mkBar(p.a2_rscp),
                                 mkBar(p.a3_rscp),
-                                mkBar(p.n1_rscp),
-                                mkBar(p.n2_rscp),
-                                mkBar(p.n3_rscp)
+                                mkBar(n1 ? n1.rscp : null),
+                                mkBar(n2 ? n2.rscp : null),
+                                mkBar(n3 ? n3.rscp : null)
                             ],
                             backgroundColor: [
                                 chartSettings.servingColor,
@@ -773,21 +799,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             const sc = p.sc ?? (p.parsed && p.parsed.serving ? p.parsed.serving.sc : '-');
                             const band = p.parsed && p.parsed.serving ? p.parsed.serving.band : '-';
                             if (sc !== undefined) textLines.push(`SC: ${sc}`);
-                            if (band) textLines.push(band); // Band Name
+                            if (band) textLines.push(band);
                         } else {
-                            // Neighbors
-                            const nIndex = index - 1;
-                            if (p.parsed && p.parsed.neighbors && p.parsed.neighbors[nIndex]) {
-                                const n = p.parsed.neighbors[nIndex];
-                                textLines.push(`SC: ${n.pci}`);
-                                // Try to deduce band or show freq
-                                // Simple logic: if freq matches serving range, maybe same band? 
-                                // For now just show Freq if available to save space
-                                if (n.freq) textLines.push(`F: ${n.freq}`);
+                            // For others (A2, A3, N1...), use the SC included in the Axis Label
+                            // Label format: "Name (SC)" e.g. "N1 (120)"
+                            const axisLabel = chart.data.labels[index];
+                            const match = /\((\d+)\)/.exec(axisLabel);
+                            if (match) {
+                                textLines.push(`SC: ${match[1]}`);
                             } else {
-                                // Legacy flat props fallback
-                                const scKey = `n${index}_sc`;
-                                if (p[scKey]) textLines.push(`SC: ${p[scKey]}`);
+                                // Fallback if no SC in label (e.g. empty or legacy)
                             }
                         }
 
@@ -839,11 +860,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         const points = lineChartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: false }, true);
                         if (points.length) {
                             activeIndex = points[0].index;
-                            lineChartInstance.draw();
-                            // Update Bar Chart
-                            barChartInstance.data = getChartConfigData('bar');
-                            barChartInstance.update();
-                            updateBarOverlay();
+                            // Use Central Update to trigger Global Sync
+                            if (window.updateDualCharts) {
+                                window.updateDualCharts(activeIndex);
+                            }
                         }
                     }
                 },
@@ -901,6 +921,8 @@ document.addEventListener('DOMContentLoaded', () => {
         let isScrubbing = false;
         const lineCanvas = document.getElementById('lineChartCanvas');
 
+
+
         // Helper to check if mouse is over badge
         const isOverBadge = (e) => {
             if (!lineChartInstance.lastBadgeRect) return false;
@@ -918,6 +940,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (idx !== activeIndex) {
                     window.updateDualCharts(idx);
                 }
+            }
+        };
+
+        // Explicit Click Listener for robust syncing (MOVED HERE TO AVOID REFERENCE ERROR)
+        lineCanvas.onclick = (e) => {
+            // If we were just scrubbing/dragging, ignore click to prevent jitters?
+            // Actually, scrubbing updates continuously. A final click update is harmless.
+            // Crucially, this catches clicks on the line that Chart.js 'onClick' sometimes misses.
+            handleScrub(e);
+
+            // NEW: Auto-Zoom to Window of 10 on Click
+            // Only auto-zoom if we have a valid selection
+            if (activeIndex !== null && lineChartInstance) {
+                zoomToActiveWindow();
             }
         };
 
@@ -970,17 +1006,116 @@ document.addEventListener('DOMContentLoaded', () => {
         window.currentChartLogId = log.id;
         window.currentChartInstance = lineChartInstance; // Primary for some checks? Or maybe expose both?
         // Let's expose specific update function
-        window.updateDualCharts = (idx) => {
+        window.updateDualCharts = (idx, skipGlobalSync = false) => {
             activeIndex = idx;
             lineChartInstance.draw();
             barChartInstance.data = getChartConfigData('bar');
             barChartInstance.update();
             updateBarOverlay();
+
+            // Trigger Global Sync if this update came from the Chart itself (Scrub/Click)
+            // If skipGlobalSync is true, it means globalSync called us, so don't loop back.
+            if (!skipGlobalSync && log.points[idx]) {
+                // Differentiate between Scrub and Click? 
+                // We'll treat this as 'chart' source. 
+                // If dragging, maybe use 'chart_scrub' to avoid pan?
+                // For now, let's use 'chart_scrub' if isScrubbing is true.
+                // We need to access isScrubbing variable. It's in this closure.
+                const source = isScrubbing ? 'chart_scrub' : 'chart';
+                window.globalSync(window.currentChartLogId, idx, source);
+            } else if (log.points[idx]) {
+                // Even if triggered by sync, we still update floating panel? 
+                // globalSync handles floating panel too.
+            }
         };
 
         // Function to update Active Index from Map
         window.currentChartActiveIndexSet = (idx) => {
             window.updateDualCharts(idx);
+        };
+
+        // Global function to update the Floating Info Panel
+        window.updateFloatingInfoPanel = (p) => {
+            const panel = document.getElementById('floatingInfoPanel');
+            const content = document.getElementById('infoPanelContent');
+            if (!panel || !content) return;
+
+            // Show panel if hidden
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+            }
+
+            // Extract Values (reuse logic similar to chart or map)
+            // We need 'metric' but it can be dynamic. Let's try to infer or pass it.
+            // For now, let's use the 'param' from scope if available, or just generic.
+            // Actually 'param' is available in this closure (showChartModal).
+            // But if called from map, we might want consistent metric.
+            // Let's try to best-effort display value.
+
+            let val = p[param];
+            if (param === 'rscp_not_combined') val = p.level !== undefined ? p.level : (p.rscp !== undefined ? p.rscp : 'N/A');
+            else if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving[param] !== undefined) val = p.parsed.serving[param];
+            if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving.rscp !== undefined) val = p.parsed.serving.rscp; // Fallback common
+            if (typeof val === 'number') val = val.toFixed(1);
+
+            let neighborsHtml = '';
+            if (p.parsed && p.parsed.neighbors && p.parsed.neighbors.length > 0) {
+                neighborsHtml += `
+                <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd; margin-top:5px;">
+                    <tr style="border-bottom: 1px solid #555; text-align:left;">
+                        <th style="padding:4px 2px; color:#fff;">PCI</th>
+                        <th style="padding:4px 2px; color:#fff;">RSCP</th>
+                        <th style="padding:4px 2px; color:#fff;">EcNo</th>
+                    </tr>`;
+                p.parsed.neighbors.forEach(n => {
+                    neighborsHtml += `
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding:3px 2px;">${n.pci}</td>
+                        <td style="padding:3px 2px;">${n.rscp || '-'}</td>
+                        <td style="padding:3px 2px;">${n.ecno || '-'}</td>
+                    </tr>`;
+                });
+                neighborsHtml += '</table>';
+            }
+
+            content.innerHTML = `
+                 <!-- Header -->
+                    <div style="font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 4px;">
+                       Time: ${p.time}
+                    </div>
+
+                    <!-- Lat/Lng -->
+                    <div style="display:flex; gap: 15px; margin-bottom: 10px; color:#aaa; font-size:12px;">
+                        <div><span style="color:#888;">Lat:</span> ${p.lat.toFixed(6)}</div>
+                        <div><span style="color:#888;">Lng:</span> ${p.lng.toFixed(6)}</div>
+                    </div>
+
+                    <!-- Main Metric Value -->
+                    <div style="margin-bottom: 10px;">
+                         <div style="color:#aaa; font-size:11px;">Val (${param}):</div>
+                         <div style="font-size: 18px; font-weight: 800; color: #fff;">${val !== undefined ? val : 'N/A'}</div>
+                    </div>
+
+                    <!-- Serving Cell Info Box -->
+                    <div style="background: #2b2b2b; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+                         ${p.parsed ? `
+                         <div style="padding: 6px 8px; border-bottom: 1px solid #444; font-size:12px;">
+                            Freq: <span style="color:#fff;">${p.parsed.serving.freq}</span> <span style="color:#555;">|</span> Band: <span style="color:#fff;">${p.parsed.serving.band || 'N/A'}</span>
+                         </div>
+                         ` : ''}
+                         ${p.cellId !== undefined ? `
+                         <div style="padding: 6px 8px; font-size:12px;">
+                            Cell ID: <span style="color:#fff;">${p.cellId}</span> <span style="color:#555;">|</span> LAC: <span style="color:#fff;">${p.lac || 'N/A'}</span>
+                         </div>
+                         ` : ''}
+                    </div>
+
+                    <!-- Neighbors Section -->
+                    <div style="background: #2b2b2b; border-radius: 4px; padding: 8px;">
+                        <div style="font-size: 10px; font-weight: 700; color: #888; margin-bottom: 6px; text-transform: uppercase;">Neighbors</div>
+                        ${neighborsHtml || '<div style="color:#666; font-style:italic; font-size:11px;">No neighbors</div>'}
+                    </div>
+             `;
         };
 
         // Event Listeners for Controls
@@ -1023,7 +1158,23 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('rangeN3Width').addEventListener('input', updateChartStyle);
         }
 
-        document.getElementById('zoomInBtn').onclick = () => { lineChartInstance.zoom(1.1); };
+        // Helper for "Window of 10" Zoom
+        const zoomToActiveWindow = () => {
+            if (lineChartInstance && activeIndex !== null && activeIndex >= 0) {
+                const range = 5; // +/- 5 points = Window of ~10 (11 actually)
+                const min = Math.max(0, activeIndex - range);
+                const max = Math.min(lineChartInstance.data.labels.length - 1, activeIndex + range);
+
+                // Update Scales directly for "Window" zoom
+                lineChartInstance.options.scales.x.min = min;
+                lineChartInstance.options.scales.x.max = max;
+                lineChartInstance.update();
+            } else {
+                if (lineChartInstance) lineChartInstance.zoom(1.1);
+            }
+        };
+
+        document.getElementById('zoomInBtn').onclick = zoomToActiveWindow;
         document.getElementById('zoomOutBtn').onclick = () => { lineChartInstance.zoom(0.9); };
         document.getElementById('resetZoomBtn').onclick = () => { lineChartInstance.resetZoom(); };
 
@@ -1065,11 +1216,11 @@ document.addEventListener('DOMContentLoaded', () => {
             tableHtml += `</tr></thead><tbody>`;
 
             let rowsHtml = '';
-            const limit = 500; // Limit for performance
+            const limit = 5000; // Limit for performance
 
             log.points.slice(0, limit).forEach((p, i) => {
                 // Add ID and Click Handler
-                let row = `<tr id="grid-row-${i}" class="grid-row" onclick="window.highlightPoint('${log.id}', ${i})" style="cursor:pointer; transition: background 0.1s;">
+                let row = `<tr id="grid-row-${i}" class="grid-row" onclick="window.globalSync('${log.id}', ${i}, 'grid')" style="cursor:pointer; transition: background 0.1s;">
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.time}</td>
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lat.toFixed(5)}</td>
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lng.toFixed(5)}</td>`;
@@ -1329,6 +1480,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (header) {
             makeElementDraggable(header, gridModal);
         }
+    }
+
+    // Make Floating Info Panel Draggable
+    const floatPanel = document.getElementById('floatingInfoPanel');
+    const floatHeader = document.getElementById('infoPanelHeader');
+    if (floatPanel && floatHeader) {
+        // Reuse existing drag logic helper if simple enough, or roll strict one.
+        // makeElementDraggable expects (headerEl, containerEl) and handles absolute positioning.
+        // floatPanel is fixed, but logic usually sets top/left style which works for fixed too.
+        makeElementDraggable(floatHeader, floatPanel);
     }
 
     // Attach Listeners to Docked Grid (Enable Drop when Docked)
@@ -1598,24 +1759,108 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // Global Sync Listener with Robust Matching
-    window.addEventListener('map-point-clicked', (e) => {
-        const { logId, point } = e.detail;
-        const log = loadedLogs.find(l => l.id === logId);
+    // ----------------------------------------------------
+    // CENTRALIZED SYNCHRONIZATION
+    // ----------------------------------------------------
+    window.syncMarker = null; // Global marker for current sync point
 
-        if (log) {
-            // Find Index
-            let index = log.points.findIndex(p => p.time === point.time);
-            if (index === -1) {
-                index = log.points.findIndex(p =>
-                    Math.abs(p.lat - point.lat) < 0.000001 &&
-                    Math.abs(p.lng - point.lng) < 0.000001
-                );
+    window.globalSync = (logId, index, source) => {
+        const log = loadedLogs.find(l => l.id === logId);
+        if (!log || !log.points[index]) return;
+
+        const point = log.points[index];
+
+        // 1. Update Map (Marker & View)
+        if (source !== 'map') {
+            if (!window.syncMarker) {
+                window.syncMarker = L.circleMarker([point.lat, point.lng], {
+                    radius: 8,
+                    color: '#ffff00',
+                    weight: 3,
+                    fillColor: 'transparent',
+                    fillOpacity: 0
+                }).addTo(window.map);
+            } else {
+                window.syncMarker.setLatLng([point.lat, point.lng]);
             }
 
+            // Optional: Pan to point if out of view (or always?)
+            // Let's only pan if we haven't panned recently or if it's a click-like event?
+            // For chart scrubbing, we might NOT want to pan crazily.
+            // Let's pan only if it's NOT a rapid scrub (check source).
+            if (source !== 'chart_scrub') {
+                window.map.panTo([point.lat, point.lng], { animate: true, duration: 0.5 });
+            }
+        }
+
+        // 2. Update Charts
+        if (source !== 'chart' && source !== 'chart_scrub') {
+            if (window.currentChartLogId === logId && window.updateDualCharts) {
+                // We need to update the chart's active index WITHOUT triggering a loop
+                // updateDualCharts draws the chart.
+                // We simply set the index and draw.
+                window.updateDualCharts(index, true); // true = skipSync to avoid loop
+            }
+        }
+
+        // 3. Update Floating Panel
+        if (window.updateFloatingInfoPanel) {
+            window.updateFloatingInfoPanel(point);
+        }
+
+        // 4. Update Grid
+        if (window.currentGridLogId === logId) {
+            const row = document.getElementById(`grid-row-${index}`);
+            if (row) {
+                document.querySelectorAll('.grid-row').forEach(r => r.classList.remove('selected-row'));
+                row.classList.add('selected-row');
+
+                if (source !== 'grid') {
+                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        }
+
+        // 5. Update Signaling
+        if (source !== 'signaling') {
+            // Find closest signaling row by time logic (reuised from highlightPoint)
+            const targetTime = point.time;
+            const parseTime = (t) => {
+                const [h, m, s] = t.split(':');
+                return (parseInt(h) * 3600 + parseInt(m) * 60 + parseFloat(s)) * 1000;
+            };
+            const tTarget = parseTime(targetTime);
+            let bestIdx = null;
+            let minDiff = Infinity;
+            const rows = document.querySelectorAll('#signalingTableBody tr');
+            rows.forEach((row) => {
+                if (!row.pointData) return;
+                row.classList.remove('selected-row');
+                const t = parseTime(row.pointData.time);
+                const diff = Math.abs(t - tTarget);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    bestIdx = row;
+                }
+            });
+            if (bestIdx && minDiff < 5000) {
+                bestIdx.classList.add('selected-row');
+                bestIdx.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+    };
+
+    // Global Sync Listener (Legacy Adapatation)
+    window.addEventListener('map-point-clicked', (e) => {
+        const { logId, point, source } = e.detail;
+        const log = loadedLogs.find(l => l.id === logId);
+        if (log) {
+            let index = log.points.findIndex(p => p.time === point.time);
+            if (index === -1) {
+                index = log.points.findIndex(p => Math.abs(p.lat - point.lat) < 1e-6 && Math.abs(p.lng - point.lng) < 1e-6);
+            }
             if (index !== -1) {
-                // CENTRAL SYNC CALL
-                window.highlightPoint(logId, index);
+                window.globalSync(logId, index, source || 'map');
             }
         }
     });
