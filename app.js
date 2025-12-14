@@ -161,6 +161,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const labels = [];
         // Datasets arrays
         const dsServing = [];
+        const dsA2 = [];
+        const dsA3 = [];
         const dsN1 = [];
         const dsN2 = [];
         const dsN3 = [];
@@ -175,7 +177,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // Base Value (Serving)
             let val = p[param];
             if (param === 'rscp_not_combined') val = p.level !== undefined ? p.level : (p.rscp !== undefined ? p.rscp : -999);
-            else {
+            else if (param.startsWith('active_set_')) {
+                const sub = param.replace('active_set_', '');
+                const lowerSub = sub.toLowerCase();
+                val = p[lowerSub];
+            } else {
                 if (param === 'band' && p.parsed) val = p.parsed.serving.band;
                 if (val === undefined && p.parsed && p.parsed.serving[param] !== undefined) val = p.parsed.serving[param];
             }
@@ -185,6 +191,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 dsServing.push(parseFloat(val));
 
                 if (isComposite) {
+                    dsA2.push(p.a2_rscp !== undefined ? parseFloat(p.a2_rscp) : null);
+                    dsA3.push(p.a3_rscp !== undefined ? parseFloat(p.a3_rscp) : null);
                     dsN1.push(p.n1_rscp !== undefined ? parseFloat(p.n1_rscp) : null);
                     dsN2.push(p.n2_rscp !== undefined ? parseFloat(p.n2_rscp) : null);
                     dsN3.push(p.n3_rscp !== undefined ? parseFloat(p.n3_rscp) : null);
@@ -197,11 +205,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // Default Settings
         const chartSettings = {
             type: 'line', // 'line' or 'bar'
-            servingColor: '#ff00cc',
-            useGradient: true,
-            n1Color: '#22c55e',
-            n2Color: '#eab308',
-            n3Color: '#ef4444',
+            servingColor: '#3b82f6', // BLUE for Serving (A1)
+            useGradient: false, // Turn off neon gradient
+            a2Color: '#3b82f6', // BLUE
+            a3Color: '#3b82f6', // BLUE
+            n1Color: '#22c55e', // GREEN
+            n2Color: '#22c55e', // GREEN
+            n3Color: '#22c55e', // GREEN
             servingWidth: 4,
             n1Width: 2,
             n2Width: 2,
@@ -255,8 +265,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div style="display:flex; flex-direction:column; gap:2px; border-right:1px solid #444; padding-right:10px;">
                             <label style="color:#aaa; font-size:10px; font-weight:bold;">Serving</label>
                             <div style="display:flex; gap:5px; align-items:center;">
-                                <input type="color" id="pickerServing" value="#ff00cc" style="border:none; width:30px; height:20px; cursor:pointer;">
-                                <label style="color:#ccc; font-size:11px;"><input type="checkbox" id="checkGradient" checked> Grad</label>
+                                <input type="color" id="pickerServing" value="#3b82f6" style="border:none; width:30px; height:20px; cursor:pointer;">
+                                <label style="color:#ccc; font-size:11px;"><input type="checkbox" id="checkGradient"> Grad</label>
                             </div>
                             <div style="display:flex; gap:5px; align-items:center;">
                                  <label style="color:#aaa; font-size:10px;">Width</label>
@@ -272,21 +282,29 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         <div style="display:flex; flex-direction:column; gap:2px; padding-right:5px;">
                             <label style="color:#aaa; font-size:10px;">N2 Style</label>
-                            <input type="color" id="pickerN2" value="#eab308" style="border:none; width:30px; height:20px; cursor:pointer;">
+                            <input type="color" id="pickerN2" value="#22c55e" style="border:none; width:30px; height:20px; cursor:pointer;">
                             <input type="range" id="rangeN2Width" min="1" max="8" value="2" style="width:50px;">
                         </div>
                         <div style="display:flex; flex-direction:column; gap:2px;">
                             <label style="color:#aaa; font-size:10px;">N3 Style</label>
-                            <input type="color" id="pickerN3" value="#ef4444" style="border:none; width:30px; height:20px; cursor:pointer;">
+                            <input type="color" id="pickerN3" value="#22c55e" style="border:none; width:30px; height:20px; cursor:pointer;">
                             <input type="range" id="rangeN3Width" min="1" max="8" value="2" style="width:50px;">
                         </div>
                         ` : ''}
                     </div>
 
-                    <div style="flex:1; padding:10px; position:relative;">
-                        <canvas id="chartCanvas"></canvas>
-                        <div id="chartOverlayInfo" style="position:absolute; top:20px; right:20px; color:white; background:rgba(0,0,0,0.7); padding:5px; border-radius:4px; display:none; pointer-events:none;">
-                            Snapshot Mode
+                    <div style="flex:1; padding:10px; display:flex; gap:10px; height: 100%; min-height: 0;">
+                        <!-- Line Chart Section (50%) -->
+                        <div id="lineChartContainer" style="flex:1; position:relative; min-width:0;">
+                            <canvas id="lineChartCanvas"></canvas>
+                        </div>
+                        
+                        <!-- Bar Chart Section (50%) -->
+                        <div id="barChartContainer" style="flex:1; position:relative; min-width:0; border-left:1px solid #444; padding-left:10px;">
+                            <canvas id="barChartCanvas"></canvas>
+                             <div id="barOverlayInfo" style="position:absolute; top:10px; right:10px; color:white; background:rgba(0,0,0,0.7); padding:2px 5px; border-radius:4px; font-size:10px; pointer-events:none;">
+                                Snapshot
+                            </div>
                         </div>
                     </div>
                     <!-- Resize handle visual cue (bottom right) -->
@@ -338,11 +356,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        const ctx = document.getElementById('chartCanvas').getContext('2d');
+        const lineCtx = document.getElementById('lineChartCanvas').getContext('2d');
+        const barCtx = document.getElementById('barChartCanvas').getContext('2d');
 
-        // Define Gradient Creator
+        // Define Gradient Creator (Use Line Context)
         const createGradient = (color1, color2) => {
-            const g = ctx.createLinearGradient(0, 0, 0, 400);
+            const g = lineCtx.createLinearGradient(0, 0, 0, 400);
             g.addColorStop(0, color1);
             g.addColorStop(1, color2);
             return g;
@@ -420,7 +439,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         ctx.fillText(text, x, badgeY + badgeHeight / 2);
 
                         ctx.restore();
+
+                        // Store Badge Rect for Hit Testing
+                        chart.lastBadgeRect = {
+                            x: badgeX,
+                            y: badgeY,
+                            w: badgeWidth,
+                            h: badgeHeight
+                        };
                     }
+                } else {
+                    chart.lastBadgeRect = null;
                 }
             }
         };
@@ -447,8 +476,9 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         // Construct Data Logic
-        const getChartConfigData = () => {
-            const isBar = chartSettings.type === 'bar';
+        const getChartConfigData = (overrideMode) => {
+            const currentType = overrideMode || chartSettings.type;
+            const isBar = currentType === 'bar';
             // Scale Floor for Bar Chart (dBm)
             const floor = -120;
 
@@ -476,17 +506,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (isComposite) {
                     return {
-                        labels: ['Serving', 'N1', 'N2', 'N3'],
+                        labels: ['Serving (A1)', 'A2', 'A3', 'N1', 'N2', 'N3'],
                         datasets: [{
                             label: 'Signal Strength',
                             data: [
                                 mkBar(valServing),
+                                mkBar(p.a2_rscp),
+                                mkBar(p.a3_rscp),
                                 mkBar(p.n1_rscp),
                                 mkBar(p.n2_rscp),
                                 mkBar(p.n3_rscp)
                             ],
                             backgroundColor: [
                                 chartSettings.servingColor,
+                                chartSettings.a2Color,
+                                chartSettings.a3Color,
                                 chartSettings.n1Color,
                                 chartSettings.n2Color,
                                 chartSettings.n3Color
@@ -523,8 +557,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Use a horizontal gradient (magento to blue)
                 let gradientStroke = chartSettings.servingColor;
                 if (chartSettings.useGradient) {
-                    const width = ctx.canvas.width;
-                    const gradient = ctx.createLinearGradient(0, 0, width, 0);
+                    const width = lineCtx.canvas.width;
+                    const gradient = lineCtx.createLinearGradient(0, 0, width, 0);
                     gradient.addColorStop(0, '#ff00cc'); // Magenta
                     gradient.addColorStop(0.5, '#a855f7'); // Purple
                     gradient.addColorStop(1, '#3b82f6'); // Blue
@@ -532,27 +566,53 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (isComposite) {
+                    // ... (keep existing composite logic)
                     datasets.push({
-                        label: 'Serving RSCP',
+                        label: 'Serving RSCP (A1)',
                         data: dsServing,
-                        borderColor: gradientStroke,
-                        backgroundColor: 'rgba(51, 51, 255, 0.02)', // Very subtle fill
+                        borderColor: chartSettings.servingColor, // BLUE
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
                         borderWidth: 3,
                         pointRadius: 0,
                         pointHoverRadius: 6,
-                        tension: 0.4,
+                        tension: 0.2,
                         fill: true
                     });
-                    // Neighbors (thinner, no glow usually)
+
+                    datasets.push({
+                        label: 'A2 RSCP',
+                        data: dsA2,
+                        borderColor: chartSettings.a2Color,
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0.2,
+                        fill: false
+                    });
+
+                    datasets.push({
+                        label: 'A3 RSCP',
+                        data: dsA3,
+                        borderColor: chartSettings.a3Color,
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0.2,
+                        fill: false
+                    });
+
+                    // Neighbors (All Green)
                     datasets.push({
                         label: 'N1 RSCP',
                         data: dsN1,
                         borderColor: chartSettings.n1Color,
                         backgroundColor: 'transparent',
-                        borderWidth: 2,
+                        borderWidth: 1,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0.4,
+                        tension: 0.2,
                         fill: false
                     });
                     datasets.push({
@@ -560,10 +620,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         data: dsN2,
                         borderColor: chartSettings.n2Color,
                         backgroundColor: 'transparent',
-                        borderWidth: 2,
+                        borderWidth: 1,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0.4,
+                        tension: 0.2,
                         fill: false
                     });
                     datasets.push({
@@ -571,12 +631,87 @@ document.addEventListener('DOMContentLoaded', () => {
                         data: dsN3,
                         borderColor: chartSettings.n3Color,
                         backgroundColor: 'transparent',
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0.2,
+                        fill: false
+                    });
+                } else if (param === 'active_set') {
+                    // Active Set Mode (6 Lines, Dual Axis)
+
+                    // A1 (Serving)
+                    datasets.push({
+                        label: 'A1 RSCP',
+                        data: dsServing,
+                        borderColor: chartSettings.servingColor, // Blue-ish default
+                        backgroundColor: 'transparent',
                         borderWidth: 2,
                         pointRadius: 0,
                         pointHoverRadius: 4,
-                        tension: 0.4,
-                        fill: false
+                        tension: 0.2,
+                        yAxisID: 'y'
                     });
+                    datasets.push({
+                        label: 'A1 SC',
+                        data: log.points.map(p => p.sc !== undefined ? p.sc : (p.parsed && p.parsed.serving ? p.parsed.serving.sc : null)),
+                        borderColor: chartSettings.servingColor,
+                        borderDash: [5, 5],
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0, // Stepped
+                        yAxisID: 'y1'
+                    });
+
+                    // A2 (Neighborhood 1)
+                    datasets.push({
+                        label: 'A2 RSCP',
+                        data: dsN1, // mapped from n1_rscp
+                        borderColor: chartSettings.n1Color,
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0.2,
+                        yAxisID: 'y'
+                    });
+                    datasets.push({
+                        label: 'A2 SC',
+                        data: log.points.map(p => p.n1_sc !== undefined ? p.n1_sc : (p.parsed && p.parsed.neighbors && p.parsed.neighbors[0] ? p.parsed.neighbors[0].pci : null)),
+                        borderColor: chartSettings.n1Color,
+                        borderDash: [5, 5],
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0,
+                        yAxisID: 'y1'
+                    });
+
+                    // A3 (Neighborhood 2)
+                    datasets.push({
+                        label: 'A3 RSCP',
+                        data: dsN2, // mapped from n2_rscp
+                        borderColor: chartSettings.n2Color,
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0.2,
+                        yAxisID: 'y'
+                    });
+                    datasets.push({
+                        label: 'A3 SC',
+                        data: log.points.map(p => p.n2_sc !== undefined ? p.n2_sc : (p.parsed && p.parsed.neighbors && p.parsed.neighbors[1] ? p.parsed.neighbors[1].pci : null)),
+                        borderColor: chartSettings.n2Color,
+                        borderDash: [5, 5],
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0,
+                        yAxisID: 'y1'
+                    });
+
                 } else {
                     datasets.push({
                         label: param.toUpperCase(),
@@ -658,30 +793,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         // Draw Text
                         const x = bar.x;
-                        const y = bar.y; // Top of the bar (since it grows up)
+                        const y = bar.base; // Bottom of the bar
 
                         ctx.save();
                         ctx.textAlign = 'center';
-                        ctx.textBaseline = 'bottom';
+                        ctx.textBaseline = 'bottom'; // Draw from bottom up
                         ctx.font = 'bold 11px sans-serif';
 
-                        // Draw each line moving up
+                        // Draw each line moving up from bottom
                         let curY = y - 5;
 
-                        // Reverse iterate to draw generic stacking up? 
-                        // Or just iterate up. y is top.
-                        // Let's draw Bottom-Up: Level closest to bar.
-
-                        textLines.reverse().forEach((line, i) => {
-                            if (i === textLines.length - 1) { // The Level Value (now last in reversed list)
+                        // Iterate normal order: Level first (at bottom)
+                        // If we want Level at the very bottom, we draw it first at curY.
+                        // Then move curY up for next lines.
+                        textLines.forEach((line, i) => {
+                            if (i === 0) { // The Level Value (first)
                                 ctx.fillStyle = '#fff';
                                 ctx.font = 'bold 12px sans-serif';
                             } else {
-                                ctx.fillStyle = '#ccc';
+                                ctx.fillStyle = 'rgba(255,255,255,0.8)'; // Lighter white
                                 ctx.font = '10px sans-serif';
                             }
                             ctx.fillText(line, x, curY);
-                            curY -= 12; // Line height
+                            curY -= 12; // Line height moving up
                         });
 
                         ctx.restore();
@@ -691,24 +825,25 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         // Use 'let' to allow reassignment later
-        let chartInstance = new Chart(ctx, {
-            type: chartSettings.type,
-            data: getChartConfigData(),
-            options: {
+        // Initialize Contexts (Already done above)
+
+        // Common Option Factory
+        const getCommonOptions = (isLine) => {
+            return {
                 responsive: true,
                 maintainAspectRatio: false,
-                layout: {
-                    padding: {
-                        top: 40 // Add padding for labels
-                    }
-                },
+                layout: { padding: { top: 40 } },
                 onClick: (e) => {
-                    // Only click to select if Line chart
-                    if (chartSettings.type === 'line') {
-                        const points = chartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: false }, true);
+                    // Only Line Chart drives selection
+                    if (isLine) {
+                        const points = lineChartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: false }, true);
                         if (points.length) {
                             activeIndex = points[0].index;
-                            chartInstance.draw();
+                            lineChartInstance.draw();
+                            // Update Bar Chart
+                            barChartInstance.data = getChartConfigData('bar');
+                            barChartInstance.update();
+                            updateBarOverlay();
                         }
                     }
                 },
@@ -725,59 +860,133 @@ document.addEventListener('DOMContentLoaded', () => {
                 plugins: {
                     legend: { display: isComposite, labels: { color: '#ccc' } },
                     tooltip: {
-                        enabled: false, // Disable default tooltip for line chart to use our custom badge
+                        enabled: false,
                         mode: 'index',
-                        intersect: false,
-                        external: (context) => {
-                            // Fallback for Bar mode or Multi-series
-                            if (chartSettings.type === 'bar' || isComposite) {
-                                // We could implement standard tooltip logic here if enabled=false
-                                // But let's just leave enabled=true in specific cases logic?
-                            }
-                        }
+                        intersect: false
                     },
-                    zoom: {
-                        // Only enable zoom for Line chart usually
+                    zoom: isLine ? {
                         zoom: {
-                            wheel: { enabled: true, modifierKey: 'ctrl' }, // Require Ctrl to avoid accidental
+                            wheel: { enabled: true, modifierKey: 'ctrl' },
                             pinch: { enabled: true },
                             mode: 'x'
                         },
                         pan: { enabled: true, mode: 'x' }
-                    }
+                    } : false
                 }
-            },
-            plugins: [verticalLinePlugin, glowPlugin, barLabelsPlugin]
+            };
+        };
+
+        // Instantiate Line Chart
+        let lineChartInstance = new Chart(lineCtx, {
+            type: 'line',
+            data: getChartConfigData('line'),
+            options: getCommonOptions(true),
+            plugins: [verticalLinePlugin, glowPlugin]
         });
+
+        // Instantiate Bar Chart
+        let barChartInstance = new Chart(barCtx, {
+            type: 'bar',
+            data: getChartConfigData('bar'),
+            options: getCommonOptions(false),
+            plugins: [barLabelsPlugin] // Only Bar gets labels
+        });
+
+        // ----------------------------------------------------
+        // Drag / Scrubbing Logic for Line Chart
+        // ----------------------------------------------------
+        // ----------------------------------------------------
+        // Drag / Scrubbing Logic for Line Chart
+        // ----------------------------------------------------
+        let isScrubbing = false;
+        const lineCanvas = document.getElementById('lineChartCanvas');
+
+        // Helper to check if mouse is over badge
+        const isOverBadge = (e) => {
+            if (!lineChartInstance.lastBadgeRect) return false;
+            const rect = lineCanvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const b = lineChartInstance.lastBadgeRect;
+            return (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+        };
+
+        const handleScrub = (e) => {
+            const points = lineChartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: false }, true);
+            if (points.length) {
+                const idx = points[0].index;
+                if (idx !== activeIndex) {
+                    window.updateDualCharts(idx);
+                }
+            }
+        };
+
+        lineCanvas.addEventListener('mousedown', (e) => {
+            // Check if clicking on the badge
+            // User requested "select the label... and drag"
+            // We differentiate: Drag Badge = Scrub. Drag Background = Pan (if zoomed).
+
+            if (isOverBadge(e)) {
+                isScrubbing = true;
+                lineCanvas.style.cursor = 'grabbing';
+                handleScrub(e);
+                // CRITICAL: Stop propagation to prevent Chart.js Pan plugin from handling this
+                e.stopPropagation();
+                // e.preventDefault(); // Optional, but stopPropagation is key here
+            } else {
+                // Allow default behavior (Pan)
+            }
+        }, true); // Use Capture phase to intercept before Chart.js plugin
+
+        lineCanvas.addEventListener('mousemove', (e) => {
+            if (isScrubbing) {
+                handleScrub(e);
+                lineCanvas.style.cursor = 'grabbing';
+            } else {
+                // Hover effect
+                if (isOverBadge(e)) {
+                    lineCanvas.style.cursor = 'grab';
+                } else {
+                    lineCanvas.style.cursor = 'default';
+                }
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isScrubbing) {
+                isScrubbing = false;
+                lineCanvas.style.cursor = 'default'; // Or check hover again?
+            }
+        });
+
+        const updateBarOverlay = () => {
+            const overlay = document.getElementById('barOverlayInfo');
+            if (overlay) {
+                overlay.textContent = (log.points[activeIndex] ? log.points[activeIndex].time : 'N/A');
+            }
+        };
 
         // Store globally for Sync
         window.currentChartLogId = log.id;
-        window.currentChartInstance = chartInstance;
+        window.currentChartInstance = lineChartInstance; // Primary for some checks? Or maybe expose both?
+        // Let's expose specific update function
+        window.updateDualCharts = (idx) => {
+            activeIndex = idx;
+            lineChartInstance.draw();
+            barChartInstance.data = getChartConfigData('bar');
+            barChartInstance.update();
+            updateBarOverlay();
+        };
+
         // Function to update Active Index from Map
         window.currentChartActiveIndexSet = (idx) => {
-            activeIndex = idx;
-
-            if (chartSettings.type === 'bar') {
-                // Refresh Data
-                chartInstance.data = getChartConfigData();
-                chartInstance.update();
-
-                // Update Overlay info
-                const overlay = document.getElementById('chartOverlayInfo');
-                if (overlay) {
-                    overlay.style.display = 'block';
-                    overlay.textContent = "Point: " + (log.points[idx] ? log.points[idx].time : 'N/A');
-                }
-            } else {
-                chartInstance.draw();
-                const overlay = document.getElementById('chartOverlayInfo');
-                if (overlay) overlay.style.display = 'none';
-            }
+            window.updateDualCharts(idx);
         };
 
         // Event Listeners for Controls
         const updateChartStyle = () => {
-            chartSettings.type = document.getElementById('chartTypeSelect').value;
+            // No Type Select anymore, or ignored
+
             chartSettings.servingColor = document.getElementById('pickerServing').value;
             chartSettings.useGradient = document.getElementById('checkGradient').checked;
             chartSettings.servingWidth = document.getElementById('rangeServingWidth').value;
@@ -791,81 +1000,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 chartSettings.n3Width = document.getElementById('rangeN3Width') ? document.getElementById('rangeN3Width').value : 2;
             }
 
-            // Handle Type Change
-            const wasLine = chartInstance.config.type === 'line';
-            const isLine = chartSettings.type === 'line';
+            // Update Both Charts (Data & Options if needed)
+            lineChartInstance.data = getChartConfigData('line');
+            lineChartInstance.update();
 
-            if (wasLine !== isLine) {
-                chartInstance.destroy();
-
-                // Create new Instance
-                chartInstance = new Chart(ctx, {
-                    type: chartSettings.type,
-                    data: getChartConfigData(),
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        onClick: (e) => {
-                            if (chartSettings.type === 'line') {
-                                const points = chartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: false }, true);
-                                if (points.length) {
-                                    activeIndex = points[0].index;
-                                    chartInstance.draw();
-                                }
-                            }
-                        },
-                        scales: {
-                            x: {
-                                ticks: { color: '#666', maxTicksLimit: 10 },
-                                grid: { color: 'rgba(255,255,255,0.05)', display: false }
-                            },
-                            y: {
-                                ticks: { color: '#666' },
-                                grid: { color: 'rgba(255,255,255,0.1)' }
-                            }
-                        },
-                        plugins: {
-                            legend: { display: isComposite, labels: { color: '#ccc' } },
-                            tooltip: {
-                                mode: 'index',
-                                intersect: false,
-                                backgroundColor: 'rgba(0,0,0,0.8)',
-                                titleColor: '#ff00cc',
-                                bodyColor: '#fff',
-                                callbacks: {
-                                    label: function (context) {
-                                        // Handle floating bar tooltip
-                                        let raw = context.raw;
-                                        let val = Array.isArray(raw) ? raw[1] : raw;
-
-                                        let label = context.dataset.label || '';
-                                        if (label) { label += ': '; }
-                                        if (val !== null && val !== undefined) { label += val.toFixed(1); }
-                                        return label;
-                                    }
-                                }
-                            },
-                            zoom: {
-                                zoom: {
-                                    wheel: { enabled: isLine, modifierKey: 'ctrl' },
-                                    pinch: { enabled: isLine },
-                                    mode: 'x'
-                                },
-                                pan: { enabled: isLine, mode: 'x' }
-                            }
-                        }
-                    },
-                    plugins: [verticalLinePlugin, glowPlugin, barLabelsPlugin]
-                });
-                window.currentChartInstance = chartInstance;
-
-                const overlay = document.getElementById('chartOverlayInfo');
-                if (overlay) overlay.style.display = isLine ? 'none' : 'block';
-
-            } else {
-                chartInstance.data = getChartConfigData();
-                chartInstance.update();
-            }
+            barChartInstance.data = getChartConfigData('bar');
+            barChartInstance.update();
         };
 
         // Bind events
@@ -883,9 +1023,9 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('rangeN3Width').addEventListener('input', updateChartStyle);
         }
 
-        document.getElementById('zoomInBtn').onclick = () => { if (chartSettings.type === 'line') chartInstance.zoom(1.1); };
-        document.getElementById('zoomOutBtn').onclick = () => { if (chartSettings.type === 'line') chartInstance.zoom(0.9); };
-        document.getElementById('resetZoomBtn').onclick = () => chartInstance.resetZoom();
+        document.getElementById('zoomInBtn').onclick = () => { lineChartInstance.zoom(1.1); };
+        document.getElementById('zoomOutBtn').onclick = () => { lineChartInstance.zoom(0.9); };
+        document.getElementById('resetZoomBtn').onclick = () => { lineChartInstance.resetZoom(); };
 
     }
 
@@ -927,14 +1067,16 @@ document.addEventListener('DOMContentLoaded', () => {
             let rowsHtml = '';
             const limit = 500; // Limit for performance
 
-            log.points.slice(0, limit).forEach(p => {
-                let row = `<tr>
+            log.points.slice(0, limit).forEach((p, i) => {
+                // Add ID and Click Handler
+                let row = `<tr id="grid-row-${i}" class="grid-row" onclick="window.highlightPoint('${log.id}', ${i})" style="cursor:pointer; transition: background 0.1s;">
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.time}</td>
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lat.toFixed(5)}</td>
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lng.toFixed(5)}</td>`;
 
                 window.currentGridColumns.forEach(col => {
                     let val = p[col];
+
                     // Handling complex parsing access
                     if (col.startsWith('n') && col.includes('_')) {
                         // Neighbors
@@ -949,10 +1091,20 @@ document.addEventListener('DOMContentLoaded', () => {
                             const nestedVal = p.parsed.neighbors[nIdx][field];
                             if (nestedVal !== undefined) val = nestedVal;
                         }
-                        // If nested lookup fails, keep 'val' (which is p[col])
-                        // But if p[col] works, why did it look empty? 
-                        // Because previous logic had `else { val = ''; }` which CLEARED the valid p[col].
-                    } else if (col === 'band' || col === 'rscp' || col === 'rscp_not_combined' || col === 'ecno' || col === 'sc' || col === 'freq' || col === 'lac' || col === 'level') {
+
+                    } else if (col.startsWith('active_set_')) {
+                        // Dynamic AS metrics (A1_RSCP, A2_SC, etc)
+                        const sub = col.replace('active_set_', ''); // A1_RSCP
+                        const lowerSub = sub.toLowerCase(); // a1_rscp
+                        val = p[lowerSub]; // Access getter directly
+                    } else if (col.startsWith('AS_')) {
+                        // Keep backward compatibility for "Active Set" drag drop if it generates AS_A1_RSCP
+                        // Format: AS_A1_RSCP
+                        const parts = col.split('_'); // [AS, A1, RSCP]
+                        const key = parts[1].toLowerCase() + '_' + parts[2].toLowerCase(); // a1_rscp
+                        val = p[key];
+                    } else {
+                        // Standard Column
                         // Try top level, then parsed
                         if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving[col] !== undefined) val = p.parsed.serving[col];
 
@@ -962,17 +1114,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving.level;
                         }
 
-                        // Fallback for Freq if not found in lookup
+                        // Fallback for Freq
                         if (col === 'freq' && (val === undefined || val === null)) {
                             val = p.freq;
                         }
-
-                        // Final Fallback
-                        if (val === undefined || val === null) val = ''; // Keep empty for clean look, or use '-' for debug
-
                     }
 
                     // Format numbers
+                    if (val === undefined || val === null) val = '';
                     if (typeof val === 'number') {
                         if (String(val).includes('.')) val = val.toFixed(2); // Cleaner floats
                     }
@@ -991,6 +1140,89 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // ----------------------------------------------------
+    // GLOBAL SYNC HIGHLIGHTER
+    // ----------------------------------------------------
+    window.highlightPoint = (logId, index) => {
+        // 1. Highlight Grid Row
+        if (window.currentGridLogId === logId) {
+            const rows = document.querySelectorAll('.grid-row');
+            rows.forEach(r => r.classList.remove('selected-row'));
+
+            const row = document.getElementById(`grid-row-${index}`);
+            if (row) {
+                row.classList.add('selected-row');
+                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        // 2. Highlight Map Marker (if map renderer supports it)
+        if (window.map && window.map.highlightMarker) {
+            window.map.highlightMarker(logId, index);
+        }
+
+        // 3. Highlight Chart
+        if (window.currentChartInstance && window.currentChartLogId === logId) {
+            if (window.currentChartActiveIndexSet) window.currentChartActiveIndexSet(index);
+
+            // Zoom to point on chart
+            const chart = window.currentChartInstance;
+            if (chart.config.type === 'line') {
+                const windowSize = 20; // View 20 points around selection
+                const newMin = Math.max(0, index - windowSize / 2);
+                const newMax = Math.min(chart.data.labels.length - 1, index + windowSize / 2);
+
+                // Update Zoom Limits
+                chart.options.scales.x.min = newMin;
+                chart.options.scales.x.max = newMax;
+                chart.update('none'); // Efficient update
+            }
+        }
+
+        // 4. Highlight Signaling (Time-based Sync)
+        const signalingModal = document.getElementById('signalingModal');
+        // Ensure visible
+        if (logId && (signalingModal.style.display !== 'none' || window.isSignalingDocked)) {
+            if (window.currentSignalingLogId !== logId && window.showSignalingModal) {
+                window.showSignalingModal(logId);
+            }
+
+            const log = loadedLogs.find(l => l.id === logId);
+            if (log && log.points && log.points[index]) {
+                const point = log.points[index];
+                const targetTime = point.time;
+                const parseTime = (t) => {
+                    const [h, m, s] = t.split(':');
+                    return (parseInt(h) * 3600 + parseInt(m) * 60 + parseFloat(s)) * 1000;
+                };
+                const tTarget = parseTime(targetTime);
+
+                let bestIdx = null;
+                let minDiff = Infinity;
+                const rows = document.querySelectorAll('#signalingTableBody tr');
+
+                rows.forEach((row) => {
+                    if (!row.pointData) return;
+                    // Reset style
+                    row.classList.remove('selected-row');
+                    row.style.background = ''; // Clear inline
+
+                    const t = parseTime(row.pointData.time);
+                    const diff = Math.abs(t - tTarget);
+                    if (diff < minDiff) { // Sync within 5s
+                        minDiff = diff;
+                        bestIdx = row;
+                    }
+                });
+
+                if (bestIdx && minDiff < 5000) {
+                    bestIdx.classList.add('selected-row');
+                    bestIdx.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        }
+    };
+
     const handleGridDrop = (e) => {
         e.preventDefault();
         e.currentTarget.style.boxShadow = 'none';
@@ -1005,13 +1237,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 // Add Column if not exists
-                if (!window.currentGridColumns.includes(data.param)) {
+                if (data.param === 'active_set') {
+                    // Explode into 6 columns
+                    const columns = ['AS_A1_RSCP', 'AS_A1_SC', 'AS_A2_RSCP', 'AS_A2_SC', 'AS_A3_RSCP', 'AS_A3_SC'];
+                    columns.forEach(col => {
+                        if (!window.currentGridColumns.includes(col)) {
+                            window.currentGridColumns.push(col);
+                        }
+                    });
+                    renderGrid();
+                } else if (!window.currentGridColumns.includes(data.param)) {
                     window.currentGridColumns.push(data.param);
                     renderGrid();
                 }
             }
         } catch (err) {
-            console.error('Grid Drop Error:', err);
+            console.error('Grid Drop Error', err);
         }
     };
 
@@ -1360,89 +1601,21 @@ document.addEventListener('DOMContentLoaded', () => {
     // Global Sync Listener with Robust Matching
     window.addEventListener('map-point-clicked', (e) => {
         const { logId, point } = e.detail;
+        const log = loadedLogs.find(l => l.id === logId);
 
-        if (window.currentChartInstance && window.currentChartLogId === logId) {
-            const chart = window.currentChartInstance;
-            const log = loadedLogs.find(l => l.id === logId);
-
-            if (log) {
-                // Try finding by Time first
-                let index = log.points.findIndex(p => p.time === point.time);
-
-                // Fallback: Find by Lat/Lng if Time fails (common with some parsers)
-                if (index === -1) {
-                    index = log.points.findIndex(p =>
-                        Math.abs(p.lat - point.lat) < 0.000001 &&
-                        Math.abs(p.lng - point.lng) < 0.000001
-                    );
-                }
-
-                if (index !== -1) {
-                    if (window.currentChartActiveIndexSet) window.currentChartActiveIndexSet(index);
-
-                    if (chart.config.type === 'line') {
-                        const windowSize = 50;
-                        const newMin = Math.max(0, index - windowSize / 2);
-                        const newMax = Math.min(chart.data.labels.length - 1, index + windowSize / 2);
-
-                        // Update Zoom Limits
-                        chart.options.scales.x.min = newMin;
-                        chart.options.scales.x.max = newMax;
-                        chart.update('none'); // Efficient update
-                    }
-                } else {
-                    console.warn('Sync failed: Point not found in log points', point);
-                }
-            }
-        }
-
-        // SYNC: Map/Chart -> Signaling Window
-        // Auto-open if closed or switch log if different
-        const signalingModal = document.getElementById('signalingModal');
-
-        if (logId) {
-            // Ensure modal is open and correct log is loaded
-            if (signalingModal.style.display === 'none' || currentSignalingLogId !== logId) {
-                window.showSignalingModal(logId);
+        if (log) {
+            // Find Index
+            let index = log.points.findIndex(p => p.time === point.time);
+            if (index === -1) {
+                index = log.points.findIndex(p =>
+                    Math.abs(p.lat - point.lat) < 0.000001 &&
+                    Math.abs(p.lng - point.lng) < 0.000001
+                );
             }
 
-            // Now proceed with sync logic
-            const log = loadedLogs.find(l => l.id === logId);
-            if (log && log.signaling) {
-                // Find closest signaling message by timestamp
-                const targetTime = point.time;
-
-                // Helper to parse time string to ms (today relative)
-                const parseTime = (t) => {
-                    const [h, m, s] = t.split(':');
-                    return (parseInt(h) * 3600 + parseInt(m) * 60 + parseFloat(s)) * 1000;
-                };
-
-                const tTarget = parseTime(targetTime);
-
-                let bestIdx = null;
-                let minDiff = Infinity;
-
-                const rows = document.querySelectorAll('#signalingTableBody tr');
-
-                rows.forEach((row) => {
-                    if (!row.pointData) return;
-                    const p = row.pointData;
-                    const t = parseTime(p.time);
-                    const diff = Math.abs(t - tTarget);
-
-                    if (diff < minDiff) {
-                        minDiff = diff;
-                        bestIdx = row;
-                    }
-                });
-
-                if (bestIdx && minDiff < 5000) { // Sync within 5 seconds
-                    // Highlight and Scroll
-                    rows.forEach(r => r.style.background = '');
-                    bestIdx.style.background = '#334155';
-                    bestIdx.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }
+            if (index !== -1) {
+                // CENTRAL SYNC CALL
+                window.highlightPoint(logId, index);
             }
         }
     });
@@ -1705,6 +1878,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 displayPoints.forEach((p, index) => {
                     const tr = document.createElement('tr');
                     tr.id = `sig-row-${p.time.replace(/[:.]/g, '')}-${index}`; // Unique ID for scrolling
+                    tr.className = 'signaling-row'; // Add class for selection
                     tr.style.cursor = 'pointer';
 
                     // Row Click = Sync (Map + Chart)
@@ -1730,9 +1904,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             window.dispatchEvent(event);
                         }
 
-                        // Visual Highlight
-                        document.querySelectorAll('#signalingTableBody tr').forEach(r => r.style.background = '');
-                        tr.style.background = '#334155';
+                        // Low-level Visual Highlight (Overridden by highlightPoint later)
+                        // But good for immediate feedback
+                        document.querySelectorAll('.signaling-row').forEach(r => r.classList.remove('selected-row'));
+                        tr.classList.add('selected-row');
                     };
 
                     const mapBtn = (p.lat && p.lng)
@@ -2079,7 +2254,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateDockedLayout();
 
     // Global Function to Update Sidebar List
-    window.updateLogsList = function () {
+    const updateLogsList = function () {
         const container = document.getElementById('logsList');
         if (!container) return; // Safety check
         container.innerHTML = '';
@@ -2190,6 +2365,15 @@ document.addEventListener('DOMContentLoaded', () => {
             if (log.points[0] && log.points[0].lac !== 'N/A') actions.appendChild(addAction('LAC', 'lac'));
             if (log.points[0] && log.points[0].cellId !== 'N/A') actions.appendChild(addAction('Cell ID', 'cellId'));
 
+            // GROUP: Active Set (Individual)
+            actions.appendChild(addHeader('Active Set Members'));
+            actions.appendChild(addAction('A1 RSCP', 'active_set_A1_RSCP'));
+            actions.appendChild(addAction('A1 SC', 'active_set_A1_SC'));
+            actions.appendChild(addAction('A2 RSCP', 'active_set_A2_RSCP'));
+            actions.appendChild(addAction('A2 SC', 'active_set_A2_SC'));
+            actions.appendChild(addAction('A3 RSCP', 'active_set_A3_RSCP'));
+            actions.appendChild(addAction('A3 SC', 'active_set_A3_SC'));
+
             // GROUP: Neighbors
             actions.appendChild(addHeader('Neighbors'));
             // Neighbors Loop (N1 - N8)
@@ -2247,7 +2431,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // DEBUG EXPORT FOR TESTING
     window.loadedLogs = loadedLogs;
-    // window.updateLogsList = updateLogsList; // DELETED TO FIX REFERENCE ERROR
+    window.updateLogsList = updateLogsList;
     window.openChartModal = openChartModal;
     window.showSignalingModal = showSignalingModal;
     window.dockChart = dockChart;

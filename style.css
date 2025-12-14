@@ -344,6 +344,34 @@ main {
 /* =========================================
    Site Settings Panel
    ========================================= */
+.selected-row {
+    background-color: rgba(59, 130, 246, 0.5) !important;
+    /* Blue tint */
+    border-left: 4px solid #60a5fa !important;
+}
+
+@keyframes pulse-ring {
+    0% {
+        transform-origin: center;
+        transform: scale(0.5);
+        opacity: 1;
+        stroke-width: 4px;
+    }
+
+    100% {
+        transform-origin: center;
+        transform: scale(3);
+        opacity: 0;
+        stroke-width: 0px;
+    }
+}
+
+.pulsing-highlight {
+    animation: pulse-ring 1.5s infinite;
+    transform-box: fill-box;
+    /* transform-origin relative to SVG element */
+}
+
 .settings-panel {
     position: absolute;
     top: 60px;

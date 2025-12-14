@@ -106,6 +106,17 @@ const NMFParser = {
                 neighbors.sort((a, b) => b.rscp - a.rscp);
 
                 if (neighbors.length > 0) {
+                    // Check if Serving SC was found
+                    if (servingSc !== null) {
+                        // Filter out the serving cell from neighbors to avoid A1 == A2
+                        neighbors = neighbors.filter(n => n.pci !== servingSc);
+                    }
+
+                    // Re-sort after filtering (just in case)
+                    neighbors.sort((a, b) => b.rscp - a.rscp);
+                }
+
+                if (neighbors.length > 0) {
                     n1_sc = neighbors[0].pci;
                     n1_rscp = neighbors[0].rscp;
                     n1_ecno = neighbors[0].ecno;
@@ -147,19 +158,69 @@ const NMFParser = {
                     lac: currentLAC,
                     active_set: (() => {
                         let aset = [];
-                        if (servingSc !== null) aset.push(servingSc);
-                        // Soft Handover Window (e.g., 6dB)
+                        // 1. Identify Candidates (Serving + Neighbors in Window)
                         // Note: servingLevel is RSCP for 3G
                         const windowSize = 6;
+                        let candidates = [];
+
+                        if (servingSc !== null && servingLevel !== -999 && !isNaN(servingLevel)) {
+                            candidates.push({ pci: servingSc, rscp: servingLevel, type: 'S' });
+                        }
+
                         neighbors.forEach(n => {
                             if (Math.abs(n.freq - servingFreq) < 1) { // Only intra-freq
                                 if (n.rscp >= servingLevel - windowSize) {
-                                    if (!aset.includes(n.pci)) aset.push(n.pci);
+                                    // Avoid duplicates (if neighbor is serving, though parser filters that usually)
+                                    if (!candidates.some(c => c.pci === n.pci)) {
+                                        candidates.push({ pci: n.pci, rscp: n.rscp, type: 'N' });
+                                    }
                                 }
                             }
                         });
+
+                        // 2. Sort by RSCP Descending
+                        candidates.sort((a, b) => b.rscp - a.rscp);
+
+                        // 3. Extract SCs for the string representation
+                        aset = candidates.map(c => c.pci);
+
                         return aset.join(', ');
                     })(),
+                    // A1..A3 Metrics (Sorted Active Set)
+                    get a1_sc() {
+                        const parts = this.active_set.split(', ');
+                        return parts.length > 0 && parts[0] !== '' ? parseInt(parts[0]) : null;
+                    },
+                    get a1_rscp() {
+                        const sc = this.a1_sc;
+                        if (sc === null) return null;
+                        if (this.sc === sc) return this.level; // Serving
+                        // Check neighbors
+                        const n = this.parsed.neighbors.find(x => x.pci === sc);
+                        return n ? n.rscp : null;
+                    },
+                    get a2_sc() {
+                        const parts = this.active_set.split(', ');
+                        return parts.length > 1 ? parseInt(parts[1]) : null;
+                    },
+                    get a2_rscp() {
+                        const sc = this.a2_sc;
+                        if (sc === null) return null;
+                        if (this.sc === sc) return this.level;
+                        const n = this.parsed.neighbors.find(x => x.pci === sc);
+                        return n ? n.rscp : null;
+                    },
+                    get a3_sc() {
+                        const parts = this.active_set.split(', ');
+                        return parts.length > 2 ? parseInt(parts[2]) : null;
+                    },
+                    get a3_rscp() {
+                        const sc = this.a3_sc;
+                        if (sc === null) return null;
+                        if (this.sc === sc) return this.level;
+                        const n = this.parsed.neighbors.find(x => x.pci === sc);
+                        return n ? n.rscp : null;
+                    },
                     n1_sc, n1_rscp, n1_ecno,
                     n2_sc, n2_rscp, n2_ecno,
                     n3_sc, n3_rscp, n3_ecno,

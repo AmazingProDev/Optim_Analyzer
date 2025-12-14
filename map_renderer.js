@@ -55,6 +55,20 @@ class MapRenderer {
             // Determine value based on metric
             // Checks top-level or parsed.serving
             let val = p[metric];
+
+            // Special handling for rscp / rscp_not_combined
+            if (metric === 'rscp_not_combined' || metric === 'rscp') {
+                if (val === undefined) val = p.level;
+                if (val === undefined) val = p.rscp;
+                if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving.level; // fallback
+            }
+
+            // Special handling for active_set_ metrics
+            if (metric.startsWith('active_set_')) {
+                const sub = metric.replace('active_set_', '').toLowerCase();
+                val = p[sub];
+            }
+
             if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving[metric];
 
             const color = this.getColor(val, metric);
@@ -118,6 +132,40 @@ class MapRenderer {
         if (points.length > 0) {
             const bounds = points.map(p => [p.lat, p.lng]);
             this.map.fitBounds(bounds);
+        }
+    }
+
+    highlightMarker(logId, index) {
+        const layerGroup = this.logLayers[logId];
+        if (!layerGroup) return;
+
+        const layers = layerGroup.getLayers();
+        if (layers[index]) {
+            const marker = layers[index];
+            const latLng = marker.getLatLng();
+
+            // 1. Remove previous highlight
+            if (this.currentHighlight) {
+                this.map.removeLayer(this.currentHighlight);
+            }
+
+            // 2. Create pulsing highlight ring
+            this.currentHighlight = L.circleMarker(latLng, {
+                radius: 10,
+                fill: false,
+                color: '#ef4444', // Red Pulse
+                weight: 3,
+                className: 'pulsing-highlight',
+                interactive: false // Don't block clicks
+            }).addTo(this.map);
+
+            // 3. Open Popup
+            marker.openPopup();
+
+            // 4. Ensure view contains it (optional padding)
+            if (!this.map.getBounds().contains(latLng)) {
+                this.map.panTo(latLng);
+            }
         }
     }
 
