@@ -174,7 +174,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Original dataPoints for non-composite case
         const dataPoints = [];
 
-        log.points.forEach(p => {
+        log.points.forEach((p, i) => {
             // ... parsing logic same as before ... 
             // Base Value (Serving)
             let val = p[param];
@@ -188,19 +188,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (val === undefined && p.parsed && p.parsed.serving[param] !== undefined) val = p.parsed.serving[param];
             }
 
-            if (p.time) {
-                labels.push(p.time);
-                dsServing.push(parseFloat(val));
+            // Always add point to prevent index mismatch (Chart Index must equal Log Index)
+            const label = p.time || `Pt ${i}`;
+            labels.push(label);
+            dsServing.push(parseFloat(val));
 
-                if (isComposite) {
-                    dsA2.push(p.a2_rscp !== undefined ? parseFloat(p.a2_rscp) : null);
-                    dsA3.push(p.a3_rscp !== undefined ? parseFloat(p.a3_rscp) : null);
-                    dsN1.push(p.n1_rscp !== undefined ? parseFloat(p.n1_rscp) : null);
-                    dsN2.push(p.n2_rscp !== undefined ? parseFloat(p.n2_rscp) : null);
-                    dsN3.push(p.n3_rscp !== undefined ? parseFloat(p.n3_rscp) : null);
-                } else {
-                    dataPoints.push(parseFloat(val));
-                }
+            if (isComposite) {
+                dsA2.push(p.a2_rscp !== undefined ? parseFloat(p.a2_rscp) : null);
+                dsA3.push(p.a3_rscp !== undefined ? parseFloat(p.a3_rscp) : null);
+                dsN1.push(p.n1_rscp !== undefined ? parseFloat(p.n1_rscp) : null);
+                dsN2.push(p.n2_rscp !== undefined ? parseFloat(p.n2_rscp) : null);
+                dsN3.push(p.n3_rscp !== undefined ? parseFloat(p.n3_rscp) : null);
+            } else {
+                dataPoints.push(parseFloat(val));
             }
         });
 
@@ -376,6 +376,7 @@ document.addEventListener('DOMContentLoaded', () => {
             id: 'verticalLine',
             afterDraw: (chart) => {
                 if (chart.config.type === 'line' && activeIndex !== null) {
+                    // console.log('Drawing Vertical Line for Index:', activeIndex);
                     const meta = chart.getDatasetMeta(0);
                     if (!meta.data[activeIndex]) return;
                     const point = meta.data[activeIndex];
@@ -1173,6 +1174,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (lineChartInstance) lineChartInstance.zoom(1.1);
             }
         };
+        // Expose globally for Sync
+        window.zoomChartToActive = zoomToActiveWindow;
 
         document.getElementById('zoomInBtn').onclick = zoomToActiveWindow;
         document.getElementById('zoomOutBtn').onclick = () => { lineChartInstance.zoom(0.9); };
@@ -1800,6 +1803,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 // updateDualCharts draws the chart.
                 // We simply set the index and draw.
                 window.updateDualCharts(index, true); // true = skipSync to avoid loop
+
+                // AUTO ZOOM if requested (User Request: Zoom on Click)
+                if (window.zoomChartToActive) {
+                    window.zoomChartToActive();
+                }
             }
         }
 
