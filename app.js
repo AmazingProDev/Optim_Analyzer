@@ -1041,6 +1041,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const panel = document.getElementById('floatingInfoPanel');
             const content = document.getElementById('infoPanelContent');
             if (!panel || !content) return;
+            // FORCE LOG: using error to bypass potential filters
+            // console.error("DEBUG: updateFloatingInfoPanel called for point:", p ? p.time : 'null');
 
             // Show panel if hidden
             if (panel.style.display === 'none') {
@@ -1048,171 +1050,178 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // --- Helper: Lookup Cell Name from SiteData ---
-            const resolveCellName = (pci, cellId, lac, freq, lat, lng) => {
-                // Debug Log
-                // if (window.map.siteData && window.map.siteData.length > 0) console.log('Resolving:', {pci, cellId, lac, freq});
+            const resolveCellName = (pci, cellId, lac, freq, lat, lng, rnc) => {
+                // 0. Helper & Dist
+                if (!window.mapRenderer || !window.mapRenderer.siteData) {
+                    // console.log("No Site Data found on window.mapRenderer");
+                    return null;
+                }
+                const siteData = window.mapRenderer.siteData;
 
-                if (window.map && window.map.siteData) {
-                    const getName = (s) => s.cellName || s.name || s.siteName;
+                const getName = (s) => s.cellName || s.name || s.siteName;
+                const getDist = (s) => {
+                    if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999;
+                    return Math.sqrt(Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2));
+                };
 
-                    // 0. Proximity Helper
-                    const getDist = (s) => {
-                        if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999;
-                        return Math.sqrt(Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2));
-                    };
+                // 1. Serving Cell Logic: STRICT CellID Match
+                if (cellId !== undefined && cellId !== null) {
+                    // A. Exact Match (Long ID)
+                    let match = siteData.find(s => s.cellId == cellId);
+                    // if (match) console.log(`[Resolution A] Exact Long ID Match: ${cellId} -> ${getName(match)}`);
 
-                    // 1. Strict Match: SC + Frequency + Proximity
-                    if (pci && freq) {
-                        // Filter candidates that match BOTH SC (PCI) and Frequency
-                        // allowing small tolerance for frequency float diffs
-                        let candidates = window.map.siteData.filter(x => {
-                            const scMatch = (x.pci == pci || x.sc == pci);
-                            const freqMatch = Math.abs(parseFloat(x.freq) - parseFloat(freq)) < 5;
-                            return scMatch && freqMatch;
+                    // B. Fallback: Short CID + LAC Match
+                    if (!match && lac) {
+                        const shortCid = cellId & 0xFFFF;
+                        match = siteData.find(s => s.cellId == shortCid && s.lac == lac);
+                        // if (match) console.log(`[Resolution B] Short+LAC Match: ${shortCid}/${lac} -> ${getName(match)}`);
+                    }
+
+                    // C. Fallback: RNC/CID Format Match (User Request)
+                    const shortCid = cellId & 0xFFFF;
+                    const rncCidStr = `${rnc}/${shortCid}`;
+
+                    if (!match && rnc !== undefined && rnc !== null) {
+                        const norm = (val) => String(val).replace(/\s/g, '');
+                        match = siteData.find(s => norm(s.cellId) == norm(rncCidStr));
+                        // console.log(`[Resolution C] RNC/CID Check: ${rncCidStr}. Found=${match ? getName(match) : 'No'}. (DB Size: ${siteData.length})`);
+                    }
+
+                    if (match) return getName(match);
+                }
+
+                // 2. Neighbor Logic: SC + Freq + Proximity
+                if (pci !== undefined && pci !== null) {
+                    let candidates = siteData.filter(s => s.pci == pci || s.sc == pci);
+                    if (freq) {
+                        const freqCandidates = candidates.filter(s => {
+                            const sFreq = s.freq || s.dl_freq;
+                            return Math.abs(parseFloat(sFreq) - parseFloat(freq)) < 5;
                         });
-
-                        // If LAC is available (e.g. serving), use it to filter further if possible
-                        if (lac && candidates.length > 1) {
-                            const strictCandidates = candidates.filter(x => x.lac == lac);
-                            if (strictCandidates.length > 0) candidates = strictCandidates;
-                        }
-
-                        // If we have candidates, pick the closest one
-                        if (candidates.length > 0) {
-                            candidates.sort((a, b) => getDist(a) - getDist(b));
-                            return getName(candidates[0]);
-                        }
+                        if (freqCandidates.length > 0) candidates = freqCandidates;
                     }
-
-                    // 2. Fallback: CellID + LAC (Direct Match) - Usually for Serving
-                    if (cellId && lac) {
-                        const s = window.map.siteData.find(x => x.cellId == cellId && x.lac == lac);
-                        if (s) return getName(s);
+                    if (candidates.length > 0) {
+                        candidates.sort((a, b) => getDist(a) - getDist(b));
+                        return getName(candidates[0]);
                     }
-                    // CellID only
-                    if (cellId) {
-                        const s = window.map.siteData.find(x => x.cellId == cellId);
-                        if (s) return getName(s);
-                    }
-
-                    // 3. Last Resort: SC + Proximity (If Freq missing in log)
-                    if (pci) {
-                        let candidates = window.map.siteData.filter(x => (x.pci == pci || x.sc == pci));
-                        if (candidates.length > 0) {
-                            candidates.sort((a, b) => getDist(a) - getDist(b));
-                            return getName(candidates[0]);
-                        }
-                    }
-
-                } else {
-                    // console.warn('Site Data is empty or missing on map.');
                 }
                 return null;
             };
-            // Serving Cell Name
-            let servingName = null;
+
+            // --- DATA PREPARATION ---
+
+            // 1. Serving Cell
             const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
             const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
+            let servingName = resolveCellName(p.sc, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
+            if (!servingName && p.cellId) servingName = resolveCellName(null, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
 
-            // Pass SC (p.sc) to resolveCellName to enable the Strict RF match
-            servingName = resolveCellName(p.sc, p.cellId, sLac, sFreq, p.lat, p.lng);
-            if (!servingName && p.cellId) servingName = resolveCellName(null, p.cellId, sLac, sFreq, p.lat, p.lng); // Fallback to just ID if SC missing
+            const servingData = {
+                type: 'Serving',
+                name: servingName || 'Unknown',
+                sc: p.sc,
+                rscp: p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : (p.parsed.serving.level || '-')),
+                ecno: p.ecno !== undefined ? p.ecno : (p.parsed.serving.ecno || '-'),
+                freq: sFreq || '-'
+            };
 
-            // Determine Active Parameter
-            // If called from Chart context, param might be in closure, but better to use global current state if available.
-            // Or default to 'rscp' or 'level'
-            const activeParam = window.currentChartParam || 'rscp';
+            // 2. Active Set (A2, A3)
+            let activeRows = [];
+            // Parse Active Set string "SC1, SC2, SC3" or check properties
+            // The parser already calculates a2_sc, a2_rscp, etc. if active_set string exists
+            if (p.a2_sc !== undefined && p.a2_sc !== null) {
+                // Resolve A2 Name (using sc + serving freq as guess, or neighbor lookup)
+                const a2Name = resolveCellName(p.a2_sc, null, sLac, sFreq, p.lat, p.lng) || 'Unknown';
+                // Find EcNo for A2 - typically in neighbors list
+                const nA2 = p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a2_sc) : null;
 
-            // Extract Values
-            let val = p[activeParam];
-            if (activeParam === 'rscp_not_combined') val = p.level !== undefined ? p.level : (p.rscp !== undefined ? p.rscp : 'N/A');
-            else if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving[activeParam] !== undefined) val = p.parsed.serving[activeParam];
-            if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving.rscp !== undefined) val = p.parsed.serving.rscp;
-            if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving.rscp !== undefined) val = p.parsed.serving.rscp;
-
-            // Format Val
-            if (typeof val === 'number') val = val.toFixed(1);
-
-            // Neighbors Table Content
-            let neighborsHtml = '';
-            if (p.parsed && p.parsed.neighbors && p.parsed.neighbors.length > 0) {
-                neighborsHtml += `
-                <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd; margin-top:5px;">
-                    <tr style="border-bottom: 1px solid #555; text-align:left;">
-                        <th style="padding:4px 2px; color:#fff;">Cell Name</th>
-                        <th style="padding:4px 2px; color:#fff;">SC</th>
-                        <th style="padding:4px 2px; color:#fff;">RSCP</th>
-                        <th style="padding:4px 2px; color:#fff;">EcNo</th>
-                        <th style="padding:4px 2px; color:#fff;">Band</th>
-                        <th style="padding:4px 2px; color:#fff;">Freq</th>
-                    </tr>`;
-
-                p.parsed.neighbors.forEach(n => {
-                    // Pass serving LAC as heuristic for neighbors
-                    const nName = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng) || '-';
-
-                    // We assume Band is available or inheritable?
-                    // Usually neighbor struct in parser has band if parsed.
-                    // If not, we might be able to find it in siteData match.
-                    let nBand = n.band || '-';
-                    if (nBand === '-' && window.map && window.map.siteData) {
-                        const match = window.map.siteData.find(s => s.pci == n.pci);
-                        if (match && match.band) nBand = match.band;
-                    }
-
-                    neighborsHtml += `
-                    <tr style="border-bottom: 1px solid #333;">
-                        <td style="padding:3px 2px; color:#fff; font-weight:bold;">${nName}</td>
-                        <td style="padding:3px 2px;">${n.pci}</td>
-                        <td style="padding:3px 2px;">${n.rscp || '-'}</td>
-                        <td style="padding:3px 2px;">${n.ecno || '-'}</td>
-                        <td style="padding:3px 2px;">${nBand}</td>
-                        <td style="padding:3px 2px;">${n.freq || '-'}</td>
-                    </tr>`;
+                activeRows.push({
+                    type: '2nd Active Set',
+                    name: a2Name,
+                    sc: p.a2_sc,
+                    rscp: p.a2_rscp || (nA2 ? nA2.rscp : '-'),
+                    ecno: nA2 ? nA2.ecno : '-',
+                    freq: sFreq || '-' // Intra-freq assumption for AS
                 });
-                neighborsHtml += '</table>';
+            }
+            if (p.a3_sc !== undefined && p.a3_sc !== null) {
+                const a3Name = resolveCellName(p.a3_sc, null, sLac, sFreq, p.lat, p.lng) || 'Unknown';
+                const nA3 = p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a3_sc) : null;
+
+                activeRows.push({
+                    type: '3rd Active Set',
+                    name: a3Name,
+                    sc: p.a3_sc,
+                    rscp: p.a3_rscp || (nA3 ? nA3.rscp : '-'),
+                    ecno: nA3 ? nA3.ecno : '-',
+                    freq: sFreq || '-'
+                });
             }
 
+            // 3. Neighbors (N1, N2, N3)
+            // We want Top 3 neighbors that are NOT in Active Set (usually N1 might be A2?)
+            // But user request just says "N1, N2..." which implies the sorted neighbor list.
+            // Let's just show top 3 neighbors from p.parsed.neighbors, or p.n1_sc etc.
+            let neighborRows = [];
+            if (p.parsed && p.parsed.neighbors) {
+                // Filter out Serving SC?
+                const neighbors = p.parsed.neighbors.filter(n => n.pci !== p.sc);
+                // Show ALL neighbors (removed slice(0, 3))
+                neighbors.forEach((n, idx) => {
+                    const nName = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng) || 'Unknown';
+                    neighborRows.push({
+                        type: `N${idx + 1}`,
+                        name: nName,
+                        sc: n.pci,
+                        rscp: n.rscp,
+                        ecno: n.ecno,
+                        freq: n.freq
+                    });
+                });
+            }
+
+            // --- RENDER HTML ---
+            const renderRow = (d, isBold = false) => `
+                <tr style="border-bottom: 1px solid #333;">
+                    <td style="padding:4px 4px; color:#aaa;">${d.type}</td>
+                    <td style="padding:4px 4px; color:#fff; font-weight:${isBold ? 'bold' : 'normal'}; max-width:150px; overflow:hidden; text-overflow:ellipsis;" title="${d.name}">${d.name}</td>
+                    <td style="padding:4px 4px; text-align:right;">${d.rscp !== undefined && d.rscp !== '-' ? Number(d.rscp).toFixed(1) : '-'}</td>
+                    <td style="padding:4px 4px; text-align:right;">${d.ecno !== undefined && d.ecno !== '-' ? Number(d.ecno).toFixed(1) : '-'}</td>
+                    <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
+                </tr>
+            `;
+
+            let tableRows = '';
+            tableRows += renderRow(servingData, true); // Serving in Bold Name? or Type? User said "first line is cell name" (header), but also table.
+            activeRows.forEach(r => tableRows += renderRow(r));
+            neighborRows.forEach(r => tableRows += renderRow(r));
+
+
             content.innerHTML = `
-                 <!-- Header -->
-                    <div style="font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 4px;">
-                       Time: ${p.time}
-                    </div>
+                <!-- Header: Serving Cell Name -->
+                <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">
+                    ${servingName || 'Unknown Site'}
+                </div>
 
-                    <!-- Lat/Lng -->
-                    <div style="display:flex; gap: 15px; margin-bottom: 10px; color:#aaa; font-size:12px;">
-                        <div><span style="color:#888;">Lat:</span> ${p.lat.toFixed(6)}</div>
-                        <div><span style="color:#888;">Lng:</span> ${p.lng.toFixed(6)}</div>
-                    </div>
+                <!-- Subheader: Lat/Lng -->
+                <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
+                    <span>Lat: ${p.lat.toFixed(6)}</span>
+                    <span>Lng: ${p.lng.toFixed(6)}</span>
+                    <span style="margin-left:auto; color:#666;">${p.time}</span>
+                </div>
 
-                    <!-- Serving Name & Value -->
-                     <div style="margin-bottom: 10px;">
-                         ${servingName ? `<div style="color:#22c55e; font-size:13px; font-weight:bold; margin-bottom:2px;">${servingName}</div>` : ''}
-                         <div style="color:#aaa; font-size:11px;">Val (${activeParam}):</div>
-                         <div style="font-size: 24px; font-weight: 800; color: #fff;">${val !== undefined ? val : 'N/A'}</div>
-                    </div>
-
-                    <!-- Serving Cell Info Box -->
-                    <div style="background: #2b2b2b; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
-                         ${p.parsed ? `
-                         <div style="padding: 6px 8px; border-bottom: 1px solid #444; font-size:12px;">
-                            Freq: <span style="color:#fff;">${p.parsed.serving.freq}</span> <span style="color:#555;">|</span> Band: <span style="color:#fff;">${p.parsed.serving.band || 'N/A'}</span>
-                         </div>
-                         ` : ''}
-                         ${p.cellId !== undefined ? `
-                         <div style="padding: 6px 8px; border-bottom: 1px solid #444; font-size:12px;">
-                            Cell ID: <span style="color:#fff;">${p.cellId}</span> <span style="color:#555;">|</span> LAC: <span style="color:#fff;">${p.lac || 'N/A'}</span>
-                            ${p.rnc ? `<span style="color:#555;">|</span> RNC: <span style="color:#fff;">${p.rnc}</span>` : ''}
-                         </div>
-                         ` : ''}
-                    </div>
-
-                    <!-- Neighbors Section -->
-                    <div style="background: #2b2b2b; border-radius: 4px; padding: 8px;">
-                        <div style="font-size: 10px; font-weight: 700; color: #888; margin-bottom: 6px; text-transform: uppercase;">Neighbors</div>
-                        ${neighborsHtml || '<div style="color:#666; font-style:italic; font-size:11px;">No neighbors</div>'}
-                    </div>
-             `;
+                <!-- Unified Table -->
+                 <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
+                    <tr style="border-bottom: 1px solid #555; text-align:left;">
+                        <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
+                    </tr>
+                    ${tableRows}
+                </table>
+            `;
         };
 
         // Event Listeners for Controls
@@ -1368,6 +1377,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (col === 'freq' && (val === undefined || val === null)) {
                             val = p.freq;
                         }
+                    }
+
+                    // Special formatting for Cell ID in Grid
+                    if (col.toLowerCase() === 'cellid' && p.rnc !== null && p.rnc !== undefined) {
+                        const cid = p.cid !== undefined && p.cid !== null ? p.cid : (p.cellId & 0xFFFF);
+                        val = `${p.rnc}/${cid}`;
                     }
 
                     // Format numbers
@@ -1726,8 +1741,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (col === 'freq' && (val === undefined || val === null)) {
                         val = p.freq;
                     }
+
                 }
                 // --------------------------------------
+
+                // RNC/CID Formatting for Export (Moved outside to ensure it runs)
+                if (col.toLowerCase() === 'cellid' && (p.rnc !== null && p.rnc !== undefined)) {
+                    const cid = p.cid !== undefined && p.cid !== null ? p.cid : (p.cellId & 0xFFFF);
+                    val = `${p.rnc}/${cid}`;
+                }
 
                 if (val === undefined || val === null) val = '';
                 // Escape commas for CSV

@@ -25,11 +25,31 @@ const NMFParser = {
                 // Tech 7 (4G/LTE):  CHI,Time,,7,PLMN,1,?,?,?,CellID,LAC...
 
                 if (tech === 5) {
-                    if (parts.length > 8) {
-                        const cid = parseInt(parts[7]);
-                        if (!isNaN(cid)) currentCellID = cid;
-                        const lac = parseInt(parts[8]);
-                        if (!isNaN(lac)) currentLAC = lac;
+                    // Robust search for Cell ID (Large Integer) in Tech 5 CHI line
+                    // Standard formats vary: Ind 7, 8, 9, or 10.
+                    // We look for a value > 20000 (Safety threshold) to identify a valid RNC-based CellID
+                    let foundCid = false;
+                    for (let k = 6; k < Math.min(parts.length, 14); k++) {
+                        const val = parseInt(parts[k]);
+                        if (!isNaN(val) && val > 20000) {
+                            currentCellID = val;
+                            foundCid = true;
+                            // Try to guess LAC as next valid small short
+                            if (k + 1 < parts.length) {
+                                const nextVal = parseInt(parts[k + 1]);
+                                if (!isNaN(nextVal) && nextVal > 0 && nextVal < 65535) currentLAC = nextVal;
+                            }
+                            break;
+                        }
+                    }
+                    if (!foundCid) {
+                        // Fallback to strict index if search failed (though search covers strict ind 7)
+                        if (parts.length >= 8) {
+                            const cid = parseInt(parts[7]);
+                            if (!isNaN(cid) && cid > 0) currentCellID = cid;
+                            const lac = parseInt(parts[8]);
+                            if (!isNaN(lac)) currentLAC = lac;
+                        }
                     }
                 } else if (tech === 7) {
                     if (parts.length > 10) {
@@ -85,6 +105,8 @@ const NMFParser = {
                     // Attempt to parse CellID from CELLMEAS if available (Index 12 is common for CellID in some NMF formats)
                     if (parts.length > 12) {
                         const cellIdCandidate = parseInt(parts[12]);
+                        // Reverted filter: User explicitly wants to see minor values like 0/1, 0/2.
+                        // We strictly check valid positive integer > 0.
                         if (!isNaN(cellIdCandidate) && cellIdCandidate > 0) {
                             currentCellID = cellIdCandidate;
                         }
@@ -138,7 +160,9 @@ const NMFParser = {
                     if (servingLevel > 0) servingLevel = NaN;
                 }
 
-                if (servingLevel === -999 || isNaN(servingLevel)) {
+                // RELAXED FILTER: If we have a valid Cell ID, keep the point even if level is bad.
+                // Only skip if BOTH level is bad AND Cell ID is missing.
+                if ((servingLevel === -999 || isNaN(servingLevel)) && (!currentCellID || currentCellID <= 0)) {
                     continue;
                 }
 
@@ -194,7 +218,8 @@ const NMFParser = {
                     sc: servingSc,
                     freq: servingFreq,
                     cellId: currentCellID,
-                    rnc: ((techId === 5 && !isNaN(currentCellID) && currentCellID > 0) ? (currentCellID >> 16) : null),
+                    rnc: ((!isNaN(currentCellID) && currentCellID >= 0) ? (currentCellID >> 16) : null),
+                    cid: ((!isNaN(currentCellID) && currentCellID >= 0) ? (currentCellID & 0xFFFF) : null),
                     lac: currentLAC,
                     active_set: (() => {
                         let aset = [];
