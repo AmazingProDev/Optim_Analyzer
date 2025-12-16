@@ -1202,6 +1202,7 @@ document.addEventListener('DOMContentLoaded', () => {
                          ${p.cellId !== undefined ? `
                          <div style="padding: 6px 8px; border-bottom: 1px solid #444; font-size:12px;">
                             Cell ID: <span style="color:#fff;">${p.cellId}</span> <span style="color:#555;">|</span> LAC: <span style="color:#fff;">${p.lac || 'N/A'}</span>
+                            ${p.rnc ? `<span style="color:#555;">|</span> RNC: <span style="color:#fff;">${p.rnc}</span>` : ''}
                          </div>
                          ` : ''}
                     </div>
@@ -1783,7 +1784,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const headers = [
             'Date', 'Time', 'Latitude', 'Longitude',
-            'Serving Band', 'Serving RSCP', 'Serving EcNo', 'Serving SC', 'Serving LAC', 'Serving Freq',
+            'Serving Band', 'Serving RSCP', 'Serving EcNo', 'Serving SC', 'Serving LAC', 'Serving Freq', 'Serving RNC',
             'N1 Band', 'N1 RSCP', 'N1 EcNo', 'N1 SC', 'N1 LAC', 'N1 Freq',
             'N2 Band', 'N2 RSCP', 'N2 EcNo', 'N2 SC', 'N2 LAC', 'N2 Freq',
             'N3 Band', 'N3 RSCP', 'N3 EcNo', 'N3 SC', 'N3 LAC', 'N3 Freq'
@@ -1828,6 +1829,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 s.sc,
                 s.lac,
                 s.freq,
+                p.rnc || '',
                 gn(0, 'band'), gn(0, 'rscp'), gn(0, 'ecno'), gn(0, 'pci'), gn(0, 'lac'), gn(0, 'freq'),
                 gn(1, 'band'), gn(1, 'rscp'), gn(1, 'ecno'), gn(1, 'pci'), gn(1, 'lac'), gn(1, 'freq'),
                 gn(2, 'band'), gn(2, 'rscp'), gn(2, 'ecno'), gn(2, 'pci'), gn(2, 'lac'), gn(2, 'freq')
@@ -2722,6 +2724,7 @@ document.addEventListener('DOMContentLoaded', () => {
             actions.appendChild(addAction('Serving RSCP/Level', 'rscp_not_combined'));
             actions.appendChild(addAction('Serving EcNo', 'ecno'));
             actions.appendChild(addAction('Serving SC/SC', 'sc'));
+            actions.appendChild(addAction('Serving RNC', 'rnc'));
             actions.appendChild(addAction('Active Set', 'active_set'));
             actions.appendChild(addAction('Serving Freq', 'freq'));
             actions.appendChild(addAction('Serving Band', 'band'));

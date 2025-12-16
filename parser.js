@@ -194,6 +194,7 @@ const NMFParser = {
                     sc: servingSc,
                     freq: servingFreq,
                     cellId: currentCellID,
+                    rnc: ((techId === 5 && !isNaN(currentCellID) && currentCellID > 0) ? (currentCellID >> 16) : null),
                     lac: currentLAC,
                     active_set: (() => {
                         let aset = [];
