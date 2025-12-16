@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize Map
     const map = new MapRenderer('map');
     window.map = map.map; // Expose Leaflet instance globally for inline onclicks
+    window.mapRenderer = map; // Expose Renderer helper for debugging/verification
 
     // Map Drop Zone Logic
     const mapContainer = document.getElementById('map');
@@ -1046,34 +1047,127 @@ document.addEventListener('DOMContentLoaded', () => {
                 panel.style.display = 'block';
             }
 
-            // Extract Values (reuse logic similar to chart or map)
-            // We need 'metric' but it can be dynamic. Let's try to infer or pass it.
-            // For now, let's use the 'param' from scope if available, or just generic.
-            // Actually 'param' is available in this closure (showChartModal).
-            // But if called from map, we might want consistent metric.
-            // Let's try to best-effort display value.
+            // --- Helper: Lookup Cell Name from SiteData ---
+            const resolveCellName = (pci, cellId, lac, freq, lat, lng) => {
+                // Debug Log
+                // if (window.map.siteData && window.map.siteData.length > 0) console.log('Resolving:', {pci, cellId, lac, freq});
 
-            let val = p[param];
-            if (param === 'rscp_not_combined') val = p.level !== undefined ? p.level : (p.rscp !== undefined ? p.rscp : 'N/A');
-            else if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving[param] !== undefined) val = p.parsed.serving[param];
-            if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving.rscp !== undefined) val = p.parsed.serving.rscp; // Fallback common
+                if (window.map && window.map.siteData) {
+                    const getName = (s) => s.cellName || s.name || s.siteName;
+
+                    // 0. Proximity Helper
+                    const getDist = (s) => {
+                        if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999;
+                        return Math.sqrt(Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2));
+                    };
+
+                    // 1. Strict Match: SC + Frequency + Proximity
+                    if (pci && freq) {
+                        // Filter candidates that match BOTH SC (PCI) and Frequency
+                        // allowing small tolerance for frequency float diffs
+                        let candidates = window.map.siteData.filter(x => {
+                            const scMatch = (x.pci == pci || x.sc == pci);
+                            const freqMatch = Math.abs(parseFloat(x.freq) - parseFloat(freq)) < 5;
+                            return scMatch && freqMatch;
+                        });
+
+                        // If LAC is available (e.g. serving), use it to filter further if possible
+                        if (lac && candidates.length > 1) {
+                            const strictCandidates = candidates.filter(x => x.lac == lac);
+                            if (strictCandidates.length > 0) candidates = strictCandidates;
+                        }
+
+                        // If we have candidates, pick the closest one
+                        if (candidates.length > 0) {
+                            candidates.sort((a, b) => getDist(a) - getDist(b));
+                            return getName(candidates[0]);
+                        }
+                    }
+
+                    // 2. Fallback: CellID + LAC (Direct Match) - Usually for Serving
+                    if (cellId && lac) {
+                        const s = window.map.siteData.find(x => x.cellId == cellId && x.lac == lac);
+                        if (s) return getName(s);
+                    }
+                    // CellID only
+                    if (cellId) {
+                        const s = window.map.siteData.find(x => x.cellId == cellId);
+                        if (s) return getName(s);
+                    }
+
+                    // 3. Last Resort: SC + Proximity (If Freq missing in log)
+                    if (pci) {
+                        let candidates = window.map.siteData.filter(x => (x.pci == pci || x.sc == pci));
+                        if (candidates.length > 0) {
+                            candidates.sort((a, b) => getDist(a) - getDist(b));
+                            return getName(candidates[0]);
+                        }
+                    }
+
+                } else {
+                    // console.warn('Site Data is empty or missing on map.');
+                }
+                return null;
+            };
+            // Serving Cell Name
+            let servingName = null;
+            const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
+            const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
+
+            // Pass SC (p.sc) to resolveCellName to enable the Strict RF match
+            servingName = resolveCellName(p.sc, p.cellId, sLac, sFreq, p.lat, p.lng);
+            if (!servingName && p.cellId) servingName = resolveCellName(null, p.cellId, sLac, sFreq, p.lat, p.lng); // Fallback to just ID if SC missing
+
+            // Determine Active Parameter
+            // If called from Chart context, param might be in closure, but better to use global current state if available.
+            // Or default to 'rscp' or 'level'
+            const activeParam = window.currentChartParam || 'rscp';
+
+            // Extract Values
+            let val = p[activeParam];
+            if (activeParam === 'rscp_not_combined') val = p.level !== undefined ? p.level : (p.rscp !== undefined ? p.rscp : 'N/A');
+            else if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving[activeParam] !== undefined) val = p.parsed.serving[activeParam];
+            if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving.rscp !== undefined) val = p.parsed.serving.rscp;
+            if (val === undefined && p.parsed && p.parsed.serving && p.parsed.serving.rscp !== undefined) val = p.parsed.serving.rscp;
+
+            // Format Val
             if (typeof val === 'number') val = val.toFixed(1);
 
+            // Neighbors Table Content
             let neighborsHtml = '';
             if (p.parsed && p.parsed.neighbors && p.parsed.neighbors.length > 0) {
                 neighborsHtml += `
                 <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd; margin-top:5px;">
                     <tr style="border-bottom: 1px solid #555; text-align:left;">
-                        <th style="padding:4px 2px; color:#fff;">PCI</th>
+                        <th style="padding:4px 2px; color:#fff;">Cell Name</th>
+                        <th style="padding:4px 2px; color:#fff;">SC</th>
                         <th style="padding:4px 2px; color:#fff;">RSCP</th>
                         <th style="padding:4px 2px; color:#fff;">EcNo</th>
+                        <th style="padding:4px 2px; color:#fff;">Band</th>
+                        <th style="padding:4px 2px; color:#fff;">Freq</th>
                     </tr>`;
+
                 p.parsed.neighbors.forEach(n => {
+                    // Pass serving LAC as heuristic for neighbors
+                    const nName = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng) || '-';
+
+                    // We assume Band is available or inheritable?
+                    // Usually neighbor struct in parser has band if parsed.
+                    // If not, we might be able to find it in siteData match.
+                    let nBand = n.band || '-';
+                    if (nBand === '-' && window.map && window.map.siteData) {
+                        const match = window.map.siteData.find(s => s.pci == n.pci);
+                        if (match && match.band) nBand = match.band;
+                    }
+
                     neighborsHtml += `
                     <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding:3px 2px; color:#fff; font-weight:bold;">${nName}</td>
                         <td style="padding:3px 2px;">${n.pci}</td>
                         <td style="padding:3px 2px;">${n.rscp || '-'}</td>
                         <td style="padding:3px 2px;">${n.ecno || '-'}</td>
+                        <td style="padding:3px 2px;">${nBand}</td>
+                        <td style="padding:3px 2px;">${n.freq || '-'}</td>
                     </tr>`;
                 });
                 neighborsHtml += '</table>';
@@ -1091,10 +1185,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div><span style="color:#888;">Lng:</span> ${p.lng.toFixed(6)}</div>
                     </div>
 
-                    <!-- Main Metric Value -->
-                    <div style="margin-bottom: 10px;">
-                         <div style="color:#aaa; font-size:11px;">Val (${param}):</div>
-                         <div style="font-size: 18px; font-weight: 800; color: #fff;">${val !== undefined ? val : 'N/A'}</div>
+                    <!-- Serving Name & Value -->
+                     <div style="margin-bottom: 10px;">
+                         ${servingName ? `<div style="color:#22c55e; font-size:13px; font-weight:bold; margin-bottom:2px;">${servingName}</div>` : ''}
+                         <div style="color:#aaa; font-size:11px;">Val (${activeParam}):</div>
+                         <div style="font-size: 24px; font-weight: 800; color: #fff;">${val !== undefined ? val : 'N/A'}</div>
                     </div>
 
                     <!-- Serving Cell Info Box -->
@@ -1105,7 +1200,7 @@ document.addEventListener('DOMContentLoaded', () => {
                          </div>
                          ` : ''}
                          ${p.cellId !== undefined ? `
-                         <div style="padding: 6px 8px; font-size:12px;">
+                         <div style="padding: 6px 8px; border-bottom: 1px solid #444; font-size:12px;">
                             Cell ID: <span style="color:#fff;">${p.cellId}</span> <span style="color:#555;">|</span> LAC: <span style="color:#fff;">${p.lac || 'N/A'}</span>
                          </div>
                          ` : ''}
@@ -1979,8 +2074,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         const lng = parseFloat(getVal(['long', 'lng', 'longitude', 'lon', 'long_decimal']));
                         // Extended Azimuth keywords (including 'azimut' for French)
                         const azimuth = parseFloat(getVal(['azimuth', 'azimut', 'dir', 'bearing', 'az']));
-                        const name = getVal(['site', 'sitename', 'site_name', 'name', 'site name']);
+                        const name = getVal(['nodeb name', 'nodeb_name', 'nodebname', 'site', 'sitename', 'site_name', 'name', 'site name']);
                         const cellId = getVal(['cell', 'cellid', 'ci', 'cell_name', 'cell id', 'cell_id']);
+
+                        // New Fields for Strict Matching
+                        const lac = getVal(['lac', 'location area code']);
+                        const pci = getVal(['psc', 'sc', 'pci', 'physcial cell id', 'scrambling code']);
+                        const freq = getVal(['downlink uarfcn', 'dl uarfcn', 'uarfcn', 'freq', 'frequency', 'dl freq']);
+                        const band = getVal(['band', 'band name', 'freq band']);
 
                         let tech = getVal(['tech', 'technology', 'system', 'rat']);
                         const cellName = getVal(['cell name', 'cellname']) || '';
@@ -2005,7 +2106,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
 
                         return {
-                            lat, lng, azimuth: isNaN(azimuth) ? 0 : azimuth, name, cellId, tech, color
+                            lat, lng, azimuth: isNaN(azimuth) ? 0 : azimuth,
+                            name, siteName: name, // Ensure siteName is present
+                            cellName,
+                            cellId,
+                            lac,
+                            pci, sc: pci,
+                            freq,
+                            band,
+                            tech,
+                            color
                         };
                     }).filter(s => !isNaN(s.lat) && !isNaN(s.lng));
 
@@ -2611,12 +2721,13 @@ document.addEventListener('DOMContentLoaded', () => {
             actions.appendChild(addHeader('Serving Cell'));
             actions.appendChild(addAction('Serving RSCP/Level', 'rscp_not_combined'));
             actions.appendChild(addAction('Serving EcNo', 'ecno'));
-            actions.appendChild(addAction('Serving SC/PCI', 'sc'));
+            actions.appendChild(addAction('Serving SC/SC', 'sc'));
             actions.appendChild(addAction('Active Set', 'active_set'));
             actions.appendChild(addAction('Serving Freq', 'freq'));
             actions.appendChild(addAction('Serving Band', 'band'));
-            if (log.points[0] && log.points[0].lac !== 'N/A') actions.appendChild(addAction('LAC', 'lac'));
-            if (log.points[0] && log.points[0].cellId !== 'N/A') actions.appendChild(addAction('Cell ID', 'cellId'));
+            actions.appendChild(addAction('LAC', 'lac'));
+            actions.appendChild(addAction('Cell ID', 'cellId'));
+            actions.appendChild(addAction('Serving Cell Name', 'serving_cell_name'));
 
             // GROUP: Active Set (Individual)
             actions.appendChild(addHeader('Active Set Members'));

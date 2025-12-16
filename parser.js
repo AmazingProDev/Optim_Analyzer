@@ -19,12 +19,34 @@ const NMFParser = {
             if (header.startsWith('#')) continue;
 
             if (header === 'CHI') {
-                // CHI,...,CellID,LAC,...
-                if (parts.length > 10) {
-                    const lac = parseInt(parts[10]);
-                    if (!isNaN(lac)) currentLAC = lac;
-                    const cid = parseInt(parts[8]);
-                    if (!isNaN(cid)) currentCellID = cid;
+                const tech = parseInt(parts[3]);
+                // CHI Parsing Rule based on Technology
+                // Tech 5 (3G/UMTS): CHI,Time,,5,PLMN,1,Freq,CellID,LAC,PSC...
+                // Tech 7 (4G/LTE):  CHI,Time,,7,PLMN,1,?,?,?,CellID,LAC...
+
+                if (tech === 5) {
+                    if (parts.length > 8) {
+                        const cid = parseInt(parts[7]);
+                        if (!isNaN(cid)) currentCellID = cid;
+                        const lac = parseInt(parts[8]);
+                        if (!isNaN(lac)) currentLAC = lac;
+                    }
+                } else if (tech === 7) {
+                    if (parts.length > 10) {
+                        const cid = parseInt(parts[9]);
+                        if (!isNaN(cid)) currentCellID = cid;
+                        const lac = parseInt(parts[10]);
+                        if (!isNaN(lac)) currentLAC = lac;
+                    }
+                } else {
+                    // Fallback / Default
+                    if (parts.length > 10) {
+                        // Heuristic from before, but likely one of the above matches better
+                        const lac = parseInt(parts[10]);
+                        if (!isNaN(lac)) currentLAC = lac;
+                        const cid = parseInt(parts[8]);
+                        if (!isNaN(cid)) currentCellID = cid;
+                    }
                 }
             } else if (header === 'GPS') {
                 if (parts.length > 4) {
@@ -60,6 +82,16 @@ const NMFParser = {
                     servingFreq = parseFloat(parts[7]);
                     servingLevel = parseFloat(parts[8]);
 
+                    // Attempt to parse CellID from CELLMEAS if available (Index 12 is common for CellID in some NMF formats)
+                    if (parts.length > 12) {
+                        const cellIdCandidate = parseInt(parts[12]);
+                        if (!isNaN(cellIdCandidate) && cellIdCandidate > 0) {
+                            currentCellID = cellIdCandidate;
+                        }
+                    }
+
+                    // Removed flaky LAC guessing from CELLMEAS (Indices 11/13 were unreliable)
+
                     if (servingFreq >= 10562 && servingFreq <= 10838) servingBand = 'B1 (2100)';
                     else if (servingFreq >= 2937 && servingFreq <= 3088) servingBand = 'B8 (900)';
                     else if (servingFreq > 10000) servingBand = 'High Band';
@@ -75,7 +107,14 @@ const NMFParser = {
                         const nRscp = parseFloat(parts[j + 4]);
 
                         if (!isNaN(nFreq) && !isNaN(nPci)) {
-                            neighbors.push({ freq: nFreq, pci: nPci, ecno: nEcNo, rscp: nRscp });
+                            let nBand = 'Unknown';
+                            // Same band logic as serving
+                            if (nFreq >= 10562 && nFreq <= 10838) nBand = 'B1 (2100)';
+                            else if (nFreq >= 2937 && nFreq <= 3088) nBand = 'B8 (900)';
+                            else if (nFreq > 10000) nBand = 'High Band';
+                            else if (nFreq < 4000) nBand = 'Low Band';
+
+                            neighbors.push({ freq: nFreq, pci: nPci, ecno: nEcNo, rscp: nRscp, band: nBand });
                             if (Math.abs(nFreq - servingFreq) < 1 && servingSc === null) {
                                 servingSc = nPci;
                                 servingEcNo = nEcNo;

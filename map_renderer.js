@@ -44,6 +44,28 @@ class MapRenderer {
         L.control.layers(baseMaps).addTo(this.map);
 
         this.logLayers = {}; // Store layers by ID/Name
+
+        // Site Labels Layer (separate for performance)
+        this.siteLabelsLayer = L.layerGroup();
+
+        // Optim: Only show labels on high zoom
+        this.map.on('zoomend', () => this.updateLabelVisibility());
+    }
+
+    updateLabelVisibility() {
+        const zoom = this.map.getZoom();
+        const show = (this.siteSettings && (this.siteSettings.showSiteNames || this.siteSettings.showCellNames));
+
+        // Threshold: Only show if zoom >= 14
+        if (show && zoom >= 14) {
+            if (!this.map.hasLayer(this.siteLabelsLayer)) {
+                this.siteLabelsLayer.addTo(this.map);
+            }
+        } else {
+            if (this.map.hasLayer(this.siteLabelsLayer)) {
+                this.map.removeLayer(this.siteLabelsLayer);
+            }
+        }
     }
 
     setView(lat, lng) {
@@ -76,7 +98,59 @@ class MapRenderer {
         }
 
         // Default / Frequency / Count
+        // Use discrete coloring for IDs
+        if (['cellId', 'pci', 'sc', 'lac', 'serving_cell_name'].includes(metric)) {
+            return this.getDiscreteColor(val);
+        }
+
         return '#3b82f6';
+    }
+
+    getDiscreteColor(val) {
+        if (!val) return '#888';
+        // Simple hash to color
+        let hash = 0;
+        const str = String(val);
+        for (let i = 0; i < str.length; i++) {
+            hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+        return '#' + '00000'.substring(0, 6 - c.length) + c;
+    }
+
+    resolveServingName(p) {
+        if (!this.siteData) return null;
+        const getName = (s) => s.cellName || s.name || s.siteName;
+
+        const pci = p.sc;
+        const lac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
+        const freq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
+        const cellId = p.cellId;
+
+        // 1. User Rule: Strict RF Params (SC + LAC + Freq)
+        if (pci && lac && freq) {
+            const s = this.siteData.find(x => {
+                const pciMatch = (x.pci == pci || x.sc == pci);
+                const lacMatch = (x.lac == lac);
+                const freqMatch = (x.freq == freq || Math.abs(x.freq - freq) < 1);
+                return pciMatch && lacMatch && freqMatch;
+            });
+            if (s) return getName(s);
+        }
+
+        // 2. CellID + LAC
+        if (cellId && lac) {
+            const s = this.siteData.find(x => x.cellId == cellId && x.lac == lac);
+            if (s) return getName(s);
+        }
+
+        // 3. CellID Only
+        if (cellId) {
+            const s = this.siteData.find(x => x.cellId == cellId);
+            if (s) return getName(s);
+        }
+
+        return null;
     }
 
     addLogLayer(id, points, metric = 'level') {
@@ -90,6 +164,11 @@ class MapRenderer {
             // Determine value based on metric
             // Checks top-level or parsed.serving
             let val = p[metric];
+
+            // Special handling for Serving Cell Name
+            if (metric === 'serving_cell_name') {
+                val = this.resolveServingName(p) || 'Unknown';
+            }
 
             // Special handling for rscp / rscp_not_combined
             if (metric === 'rscp_not_combined' || metric === 'rscp') {
@@ -199,11 +278,18 @@ class MapRenderer {
         }
         this.sitesLayer = L.layerGroup();
 
+        // Clear Labels
+        if (this.siteLabelsLayer) {
+            this.siteLabelsLayer.clearLayers();
+        }
+
         // Defaults
         const range = this.siteSettings && this.siteSettings.range ? parseInt(this.siteSettings.range) : 200;
         const beamwidth = this.siteSettings && this.siteSettings.beamwidth ? parseInt(this.siteSettings.beamwidth) : 60;
         const opacity = this.siteSettings && this.siteSettings.opacity ? parseFloat(this.siteSettings.opacity) : 0.6;
         const overrideColor = this.siteSettings && this.siteSettings.useOverride ? this.siteSettings.color : null;
+
+        const renderedSiteLabels = new Set(); // Track unique site names to avoid duplicates
 
         this.siteData.forEach(s => {
             if (s.lat === undefined || s.lng === undefined || isNaN(s.lat) || isNaN(s.lng)) return;
@@ -236,16 +322,23 @@ class MapRenderer {
                 fillOpacity: opacity
             }).addTo(this.sitesLayer);
 
-            // Labels
+            // Labels - Add to siteLabelsLayer
             if (this.siteSettings && this.siteSettings.showSiteNames) {
-                const siteLabel = L.marker(center, {
-                    icon: L.divIcon({
-                        className: 'site-label',
-                        html: `<div style="color:#fff; font-size:10px; text-shadow:0 0 2px #000; white-space:nowrap;">${s.name}</div>`,
-                        iconAnchor: [20, 10] // Centerish
-                    }),
-                    interactive: false
-                }).addTo(this.sitesLayer);
+                const siteName = s.siteName || s.name; // Prioritize siteName
+
+                // Deduplicate: Only render if we haven't seen this site name yet
+                if (siteName && !renderedSiteLabels.has(siteName)) {
+                    renderedSiteLabels.add(siteName);
+
+                    const siteLabel = L.marker(center, {
+                        icon: L.divIcon({
+                            className: 'site-label',
+                            html: `<div style="color:#fff; font-size:10px; text-shadow:0 0 2px #000; white-space:nowrap;">${siteName}</div>`,
+                            iconAnchor: [20, 10] // Centerish
+                        }),
+                        interactive: false
+                    }).addTo(this.siteLabelsLayer);
+                }
             }
 
             if (this.siteSettings && this.siteSettings.showCellNames) {
@@ -257,7 +350,7 @@ class MapRenderer {
                         iconAnchor: [10, 0]
                     }),
                     interactive: false
-                }).addTo(this.sitesLayer);
+                }).addTo(this.siteLabelsLayer);
             }
 
             // Bind Popup
@@ -273,6 +366,9 @@ class MapRenderer {
         });
 
         this.sitesLayer.addTo(this.map);
+
+        // Update visibility based on zoom
+        this.updateLabelVisibility();
 
         // Fit bounds only if requested
         if (fitBounds && this.siteData.length > 0) {
