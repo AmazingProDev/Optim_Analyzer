@@ -47,6 +47,7 @@ class MapRenderer {
 
         // Site Labels Layer (separate for performance)
         this.siteLabelsLayer = L.layerGroup();
+        this.connectionsLayer = L.layerGroup().addTo(this.map); // Layer for lines
 
         // Optim: Only show labels on high zoom
         this.map.on('zoomend', () => this.updateLabelVisibility());
@@ -290,6 +291,7 @@ class MapRenderer {
         const overrideColor = this.siteSettings && this.siteSettings.useOverride ? this.siteSettings.color : null;
 
         const renderedSiteLabels = new Set(); // Track unique site names to avoid duplicates
+        this.sitePolygons = {}; // Lookup for highlighting
 
         this.siteData.forEach(s => {
             if (s.lat === undefined || s.lng === undefined || isNaN(s.lat) || isNaN(s.lng)) return;
@@ -321,6 +323,10 @@ class MapRenderer {
                 fillColor: color,
                 fillOpacity: opacity
             }).addTo(this.sitesLayer);
+
+            if (s.cellId) {
+                this.sitePolygons[s.cellId] = polygon;
+            }
 
             // Labels - Add to siteLabelsLayer
             if (this.siteSettings && this.siteSettings.showSiteNames) {
@@ -376,4 +382,86 @@ class MapRenderer {
             this.map.fitBounds(bounds.pad(0.1));
         }
     }
+
+    highlightCell(cellId) {
+        if (!cellId || !this.sitePolygons) return;
+
+        // Reset previous highlight
+        if (this.currentHighlight) {
+            const { poly, originalStyle } = this.currentHighlight;
+            poly.setStyle(originalStyle);
+            this.currentHighlight = null;
+        }
+
+        const polygon = this.sitePolygons[cellId];
+        if (polygon) {
+            // Save original style (approximate or just hardcoded default if easier)
+            // But checking current options is safer
+            const originalStyle = {
+                color: polygon.options.color,
+                weight: polygon.options.weight,
+                fillColor: polygon.options.fillColor,
+                fillOpacity: polygon.options.fillOpacity
+            };
+
+            // Apply Highlight
+            polygon.setStyle({
+                color: '#ffff00', // Bright Yellow Border
+                weight: 4,
+                fillColor: '#ffff00', // Yellow Fill
+                fillOpacity: 0.6
+            });
+            polygon.bringToFront();
+
+            // Pan to it
+            if (polygon.getBounds) {
+                this.map.panTo(polygon.getBounds().getCenter());
+            }
+
+            this.currentHighlight = { poly: polygon, originalStyle: originalStyle };
+        } else {
+            console.warn(`Cell ID ${cellId} not found in site polygons.`);
+        }
+    }
+
+    drawConnections(startPt, targets) {
+        // Clear previous connections
+        this.connectionsLayer.clearLayers();
+        if (!startPt || !targets || targets.length === 0) return;
+
+        targets.forEach(t => {
+            if (t.lat === undefined || t.lng === undefined) return;
+
+            let destLat = t.lat;
+            let destLng = t.lng;
+
+            // Tip Calculation logic
+            if (t.cellId && this.sitePolygons[t.cellId]) {
+                const poly = this.sitePolygons[t.cellId];
+                // Polygon structure: [center, p1, p2]
+                // Leaflet polygons often return nested arrays: [[center, p1, p2]]
+                const latLngs = poly.getLatLngs();
+                const points = Array.isArray(latLngs[0]) ? latLngs[0] : latLngs;
+
+                if (points.length >= 3) {
+                    const p1 = points[1];
+                    const p2 = points[2];
+                    destLat = (p1.lat + p2.lat) / 2;
+                    destLng = (p1.lng + p2.lng) / 2;
+                }
+            }
+
+            L.polyline([[startPt.lat, startPt.lng], [destLat, destLng]], {
+                color: t.color,
+                weight: t.weight || 3, // Default thicker (was 2)
+                opacity: 1.0,          // Fully opaque (was 0.8)
+                dashArray: '10, 5'     // Longer dashes (was '5, 5')
+            }).addTo(this.connectionsLayer);
+        });
+    }
+
+    clearConnections() {
+        this.connectionsLayer.clearLayers();
+    }
+
 }

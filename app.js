@@ -1051,11 +1051,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // --- Helper: Lookup Cell Name from SiteData ---
             const resolveCellName = (pci, cellId, lac, freq, lat, lng, rnc) => {
+                const NO_MATCH = { name: null, id: null };
+
                 // 0. Helper & Dist
-                if (!window.mapRenderer || !window.mapRenderer.siteData) {
-                    // console.log("No Site Data found on window.mapRenderer");
-                    return null;
-                }
+                if (!window.mapRenderer || !window.mapRenderer.siteData) return NO_MATCH;
                 const siteData = window.mapRenderer.siteData;
 
                 const getName = (s) => s.cellName || s.name || s.siteName;
@@ -1087,7 +1086,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         // console.log(`[Resolution C] RNC/CID Check: ${rncCidStr}. Found=${match ? getName(match) : 'No'}. (DB Size: ${siteData.length})`);
                     }
 
-                    if (match) return getName(match);
+                    if (match) return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng };
                 }
 
                 // 2. Neighbor Logic: SC + Freq + Proximity
@@ -1102,23 +1101,37 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     if (candidates.length > 0) {
                         candidates.sort((a, b) => getDist(a) - getDist(b));
-                        return getName(candidates[0]);
+                        return { name: getName(candidates[0]), id: candidates[0].cellId, lat: candidates[0].lat, lng: candidates[0].lng };
                     }
                 }
-                return null;
+                return NO_MATCH;
             };
 
             // --- DATA PREPARATION ---
+            let connectionTargets = []; // Array to hold line targets {lat, lng, color}
 
             // 1. Serving Cell
             const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
             const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
-            let servingName = resolveCellName(p.sc, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
-            if (!servingName && p.cellId) servingName = resolveCellName(null, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
+
+            let servingRes = resolveCellName(p.sc, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
+            if (!servingRes.name && p.cellId) servingRes = resolveCellName(null, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
+            // Add Serving Line (BLUE)
+            if (servingRes.lat && servingRes.lng) {
+                // Weight 8 (Super Bold), connecting to Tip (via cellId lookup)
+                connectionTargets.push({
+                    lat: servingRes.lat,
+                    lng: servingRes.lng,
+                    color: '#3b82f6',
+                    weight: 8,
+                    cellId: servingRes.id
+                });
+            }
 
             const servingData = {
                 type: 'Serving',
-                name: servingName || 'Unknown',
+                name: servingRes.name || 'Unknown',
+                cellId: servingRes.id || p.cellId, // Fallback to log ID if no match
                 sc: p.sc,
                 rscp: p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : (p.parsed.serving.level || '-')),
                 ecno: p.ecno !== undefined ? p.ecno : (p.parsed.serving.ecno || '-'),
@@ -1131,13 +1144,25 @@ document.addEventListener('DOMContentLoaded', () => {
             // The parser already calculates a2_sc, a2_rscp, etc. if active_set string exists
             if (p.a2_sc !== undefined && p.a2_sc !== null) {
                 // Resolve A2 Name (using sc + serving freq as guess, or neighbor lookup)
-                const a2Name = resolveCellName(p.a2_sc, null, sLac, sFreq, p.lat, p.lng) || 'Unknown';
+                const a2Res = resolveCellName(p.a2_sc, null, sLac, sFreq, p.lat, p.lng);
                 // Find EcNo for A2 - typically in neighbors list
                 const nA2 = p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a2_sc) : null;
 
+                // Add A2 Line (RED)
+                if (a2Res.lat && a2Res.lng) {
+                    connectionTargets.push({
+                        lat: a2Res.lat,
+                        lng: a2Res.lng,
+                        color: '#ef4444',
+                        weight: 8,
+                        cellId: a2Res.id
+                    });
+                }
+
                 activeRows.push({
                     type: '2nd Active Set',
-                    name: a2Name,
+                    name: a2Res.name || 'Unknown',
+                    cellId: a2Res.id,
                     sc: p.a2_sc,
                     rscp: p.a2_rscp || (nA2 ? nA2.rscp : '-'),
                     ecno: nA2 ? nA2.ecno : '-',
@@ -1145,12 +1170,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
             if (p.a3_sc !== undefined && p.a3_sc !== null) {
-                const a3Name = resolveCellName(p.a3_sc, null, sLac, sFreq, p.lat, p.lng) || 'Unknown';
+                const a3Res = resolveCellName(p.a3_sc, null, sLac, sFreq, p.lat, p.lng);
                 const nA3 = p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a3_sc) : null;
+
+                // Add A3 Line (RED)
+                if (a3Res.lat && a3Res.lng) {
+                    connectionTargets.push({
+                        lat: a3Res.lat,
+                        lng: a3Res.lng,
+                        color: '#ef4444',
+                        weight: 8,
+                        cellId: a3Res.id
+                    });
+                }
 
                 activeRows.push({
                     type: '3rd Active Set',
-                    name: a3Name,
+                    name: a3Res.name || 'Unknown',
+                    cellId: a3Res.id,
                     sc: p.a3_sc,
                     rscp: p.a3_rscp || (nA3 ? nA3.rscp : '-'),
                     ecno: nA3 ? nA3.ecno : '-',
@@ -1161,17 +1198,36 @@ document.addEventListener('DOMContentLoaded', () => {
             // 3. Neighbors (N1, N2, N3)
             // We want Top 3 neighbors that are NOT in Active Set (usually N1 might be A2?)
             // But user request just says "N1, N2..." which implies the sorted neighbor list.
-            // Let's just show top 3 neighbors from p.parsed.neighbors, or p.n1_sc etc.
+            // Let's just show top 3 neighbors            // 3. Neighbors (N1...N)
             let neighborRows = [];
             if (p.parsed && p.parsed.neighbors) {
-                // Filter out Serving SC?
-                const neighbors = p.parsed.neighbors.filter(n => n.pci !== p.sc);
-                // Show ALL neighbors (removed slice(0, 3))
+                // Collect Active Set SCs to exclude them from Neighbor list
+                const activeSCs = [p.sc];
+                if (p.a2_sc !== undefined && p.a2_sc !== null) activeSCs.push(p.a2_sc);
+                if (p.a3_sc !== undefined && p.a3_sc !== null) activeSCs.push(p.a3_sc);
+
+                // Filter out ANY Active/Serving SC
+                const neighbors = p.parsed.neighbors.filter(n => !activeSCs.includes(n.pci));
+
+                // Show ALL remaining neighbors
                 neighbors.forEach((n, idx) => {
-                    const nName = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng) || 'Unknown';
+                    const nRes = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng);
+
+                    // Add Neighbor Line (GREEN)
+                    if (nRes.lat && nRes.lng) {
+                        connectionTargets.push({
+                            lat: nRes.lat,
+                            lng: nRes.lng,
+                            color: '#22c55e',
+                            weight: 3,
+                            cellId: nRes.id
+                        });
+                    }
+
                     neighborRows.push({
                         type: `N${idx + 1}`,
-                        name: nName,
+                        name: nRes.name || 'Unknown',
+                        cellId: nRes.id,
                         sc: n.pci,
                         rscp: n.rscp,
                         ecno: n.ecno,
@@ -1180,16 +1236,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
 
+            // Draw Connections
+            if (window.mapRenderer && window.mapRenderer.drawConnections) {
+                window.mapRenderer.drawConnections({ lat: p.lat, lng: p.lng }, connectionTargets);
+            }
+
+
             // --- RENDER HTML ---
-            const renderRow = (d, isBold = false) => `
+            const renderRow = (d, isBold = false) => {
+                const hasId = d.cellId !== undefined && d.cellId !== null;
+                // Removed text-decoration:underline per user request
+                const cursorStyle = hasId ? 'cursor:pointer;' : '';
+                // FIX: Add quotes around d.cellId to prevent "RNC/CID" from being treated as division (871/123 = 7.08)
+                const clickAttr = hasId ? `onclick="window.mapRenderer.highlightCell('${d.cellId}')"` : '';
+
+                return `
                 <tr style="border-bottom: 1px solid #333;">
                     <td style="padding:4px 4px; color:#aaa;">${d.type}</td>
-                    <td style="padding:4px 4px; color:#fff; font-weight:${isBold ? 'bold' : 'normal'}; max-width:150px; overflow:hidden; text-overflow:ellipsis;" title="${d.name}">${d.name}</td>
+                    <td style="padding:4px 4px; color:#fff; font-weight:${isBold ? 'bold' : 'normal'}; max-width:150px; overflow:hidden; text-overflow:ellipsis; ${cursorStyle}" 
+                        title="${d.name}" ${clickAttr}>
+                        ${d.name}
+                    </td>
+                    <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
                     <td style="padding:4px 4px; text-align:right;">${d.rscp !== undefined && d.rscp !== '-' ? Number(d.rscp).toFixed(1) : '-'}</td>
                     <td style="padding:4px 4px; text-align:right;">${d.ecno !== undefined && d.ecno !== '-' ? Number(d.ecno).toFixed(1) : '-'}</td>
                     <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
                 </tr>
-            `;
+            `};
 
             let tableRows = '';
             tableRows += renderRow(servingData, true); // Serving in Bold Name? or Type? User said "first line is cell name" (header), but also table.
@@ -1200,7 +1273,7 @@ document.addEventListener('DOMContentLoaded', () => {
             content.innerHTML = `
                 <!-- Header: Serving Cell Name -->
                 <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">
-                    ${servingName || 'Unknown Site'}
+                    ${servingRes.name || 'Unknown Site'}
                 </div>
 
                 <!-- Subheader: Lat/Lng -->
@@ -1215,6 +1288,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <tr style="border-bottom: 1px solid #555; text-align:left;">
                         <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
                         <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
                         <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
                         <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
                         <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
