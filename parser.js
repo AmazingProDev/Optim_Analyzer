@@ -350,13 +350,24 @@ const NMFParser = {
                     message = longestCandidate;
                 }
 
-                // Debug log for the first few lines to help us see the format
-                if (allPoints.filter(p => p.type === 'SIGNALING').length < 3) {
-                    console.log('DEBUG SIGNALING LINE:', line);
-                    console.log('Parsed Message:', message);
-                }
-
                 if (message) message = message.replace(/"/g, '');
+
+                // Event Detection Logic
+                let eventType = null;
+                const mUpper = message.toUpperCase();
+
+                if (mUpper.includes('HANDOVER_FAILURE') ||
+                    mUpper.includes('ACTIVE_SET_UPDATE_FAILURE') ||
+                    mUpper.includes('PHYSICAL_CHANNEL_RECONFIGURATION_FAILURE') ||
+                    (mUpper.includes('FAILURE') && (mUpper.includes('HO') || mUpper.includes('RECONF')))) {
+                    eventType = 'HO Fail';
+                } else if (mUpper.includes('RADIO_LINK_FAILURE') || mUpper.includes('RLF') || mUpper.includes('DROP')) {
+                    eventType = 'Call Drop';
+                } else if (mUpper.includes('DISCONNECT') || mUpper.includes('RELEASE_COMPLETE') || mUpper.includes('DEACTIVATE')) {
+                    eventType = 'Call Disconnect';
+                } else if (mUpper.includes('REJECT') || mUpper.includes('SETUP_FAILURE') || mUpper.includes('CALL_FAIL') || mUpper.includes('ABORT')) {
+                    eventType = 'Call Fail';
+                }
 
                 allPoints.push({
                     lat: currentGPS ? currentGPS.lat : null,
@@ -367,7 +378,8 @@ const NMFParser = {
                     direction: direction,
                     message: message,
                     payload: payload,
-                    details: line
+                    details: line,
+                    event: eventType // New property
                 });
             }
         }

@@ -259,6 +259,79 @@ class MapRenderer {
             this.map.removeLayer(this.logLayers[id]);
             delete this.logLayers[id];
         }
+        this.removeEventsLayer(id); // Components cleanup
+    }
+
+    addEventsLayer(id, points) {
+        if (!this.eventLayers) this.eventLayers = {};
+        if (this.eventLayers[id]) this.map.removeLayer(this.eventLayers[id]);
+
+        const layerGroup = L.layerGroup();
+
+        points.forEach(p => {
+            if (!p.event) return;
+
+            let color = '#000';
+            let fillColor = '#fff';
+            let radius = 6;
+            let label = p.event;
+
+            switch (p.event) {
+                case 'HO Fail':
+                    color = '#f97316'; // Orange
+                    fillColor = '#f97316';
+                    radius = 7;
+                    break;
+                case 'Call Drop':
+                    color = '#ef4444'; // Red
+                    fillColor = '#ef4444';
+                    radius = 8;
+                    break;
+                case 'Call Fail':
+                    color = '#991b1b'; // Dark Red
+                    fillColor = '#991b1b';
+                    radius = 8;
+                    break;
+                case 'Call Disconnect':
+                    color = '#6b7280'; // Grey
+                    fillColor = '#6b7280';
+                    radius = 5;
+                    break;
+            }
+
+            const marker = L.circleMarker([p.lat, p.lng], {
+                radius: radius,
+                color: '#fff', // White border for contrast
+                weight: 2,
+                fillColor: fillColor,
+                fillOpacity: 1,
+                className: 'event-marker'
+            }).bindTooltip(label, {
+                permanent: false,
+                direction: 'top',
+                offset: [0, -5]
+            });
+
+            // Add popup with details
+            marker.bindPopup(`
+                <b>${label}</b><br>
+                Time: ${p.time}<br>
+                Cause: ${p.message}<br>
+                lat: ${p.lat.toFixed(5)}, lng: ${p.lng.toFixed(5)}
+             `);
+
+            layerGroup.addLayer(marker);
+        });
+
+        layerGroup.addTo(this.map);
+        this.eventLayers[id] = layerGroup;
+    }
+
+    removeEventsLayer(id) {
+        if (this.eventLayers && this.eventLayers[id]) {
+            this.map.removeLayer(this.eventLayers[id]);
+            delete this.eventLayers[id];
+        }
     }
 
     addSiteLayer(sectors) {

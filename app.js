@@ -2106,6 +2106,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             map.setView(first.lat, first.lng);
                         }
 
+                        // Add Events Layer (HO Fail, Drop, etc.)
+                        if (signalingData && signalingData.length > 0) {
+                            map.addEventsLayer(id, signalingData);
+                        }
+
                         updateLogsList();
                         fileStatus.textContent = `Loaded ${parsedData.length} pts (${technology})`;
 
