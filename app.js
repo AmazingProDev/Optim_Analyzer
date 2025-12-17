@@ -1086,6 +1086,19 @@ document.addEventListener('DOMContentLoaded', () => {
                         // console.log(`[Resolution C] RNC/CID Check: ${rncCidStr}. Found=${match ? getName(match) : 'No'}. (DB Size: ${siteData.length})`);
                     }
 
+                    if (match) {
+                        // CROSS-CHECK: Does the resolved cell's SC match the point's SC?
+                        // If the parser holds a "stale" CellID (from previous lines) but the SC has changed (Handover),
+                        // we must NOT lock onto the old CellID.
+                        if (pci !== undefined && pci !== null) {
+                            const dbSc = match.pci || match.sc;
+                            if (dbSc !== undefined && parseInt(dbSc) !== parseInt(pci)) {
+                                // console.log(`[Resolution] Stale ID Detected! ID ${cellId} has SC ${dbSc}, but Point has SC ${pci}. Ignoring ID match.`);
+                                match = null; // Invalidate match to force SC lookup below
+                            }
+                        }
+                    }
+
                     if (match) return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng };
                 }
 
@@ -1240,29 +1253,26 @@ document.addEventListener('DOMContentLoaded', () => {
             if (window.mapRenderer && window.mapRenderer.drawConnections) {
                 window.mapRenderer.drawConnections({ lat: p.lat, lng: p.lng }, connectionTargets);
             }
-
-
             // --- RENDER HTML ---
             const renderRow = (d, isBold = false) => {
                 const hasId = d.cellId !== undefined && d.cellId !== null;
-                // Removed text-decoration:underline per user request
-                const cursorStyle = hasId ? 'cursor:pointer;' : '';
-                // FIX: Add quotes around d.cellId to prevent "RNC/CID" from being treated as division (871/123 = 7.08)
-                const clickAttr = hasId ? `onclick="window.mapRenderer.highlightCell('${d.cellId}')"` : '';
+                const nameContent = hasId
+                    ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${d.cellId})</span>`
+                    : d.name;
 
                 return `
-                <tr style="border-bottom: 1px solid #333;">
-                    <td style="padding:4px 4px; color:#aaa;">${d.type}</td>
-                    <td style="padding:4px 4px; color:#fff; font-weight:${isBold ? 'bold' : 'normal'}; max-width:150px; overflow:hidden; text-overflow:ellipsis; ${cursorStyle}" 
-                        title="${d.name}" ${clickAttr}>
-                        ${d.name}
-                    </td>
-                    <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
-                    <td style="padding:4px 4px; text-align:right;">${d.rscp !== undefined && d.rscp !== '-' ? Number(d.rscp).toFixed(1) : '-'}</td>
-                    <td style="padding:4px 4px; text-align:right;">${d.ecno !== undefined && d.ecno !== '-' ? Number(d.ecno).toFixed(1) : '-'}</td>
-                    <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
-                </tr>
-            `};
+                    <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
+                        <td style="padding:4px 4px;">${d.type}</td>
+                        <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.highlightCell('${d.cellId}')" title="Click to highlight sector">
+                            ${nameContent}
+                        </td>
+                        <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
+                        <td style="padding:4px 4px; text-align:right;">${d.rscp !== undefined && d.rscp !== '-' && !isNaN(d.rscp) ? Number(d.rscp).toFixed(1) : '-'}</td>
+                        <td style="padding:4px 4px; text-align:right;">${d.ecno !== undefined && d.ecno !== '-' && !isNaN(d.ecno) ? Number(d.ecno).toFixed(1) : '-'}</td>
+                        <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
+                    </tr>
+                `;
+            };
 
             let tableRows = '';
             tableRows += renderRow(servingData, true); // Serving in Bold Name? or Type? User said "first line is cell name" (header), but also table.
