@@ -417,3 +417,116 @@ const NMFParser = {
         };
     }
 };
+
+const ExcelParser = {
+    parse(arrayBuffer) {
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet, { defval: "" }); // defval to keep empty/nulls safely
+
+        if (json.length === 0) return { points: [], tech: 'Unknown', customMetrics: [] };
+
+        // 1. Identify Key Columns (Time, Lat, Lon)
+        // Normalize keys for matching
+        const sampleRow = json[0];
+        const keys = Object.keys(sampleRow);
+        const normalize = k => k.toLowerCase().replace(/[\s_]/g, '');
+
+        let timeKey = keys.find(k => /time/i.test(normalize(k)));
+        let latKey = keys.find(k => /lat/i.test(normalize(k)));
+        let lngKey = keys.find(k => /lon/i.test(normalize(k)) || /lng/i.test(normalize(k)));
+
+        // 2. Identify Metrics (Exclude key columns)
+        const customMetrics = keys.filter(k => k !== timeKey && k !== latKey && k !== lngKey);
+
+        const points = [];
+
+        const len = json.length;
+        for (let i = 0; i < len; i++) {
+            const row = json[i];
+            // Safe Parsing with minimal overhead
+            const lat = typeof row[latKey] === 'number' ? row[latKey] : parseFloat(row[latKey]);
+            const lng = typeof row[lngKey] === 'number' ? row[lngKey] : parseFloat(row[lngKey]);
+            const time = row[timeKey];
+
+            if (!isNaN(lat) && !isNaN(lng)) {
+
+                // Create Base Point
+                const point = {
+                    lat: lat,
+                    lng: lng,
+                    time: time || 'N/A', // ensure string
+                    type: 'MEASUREMENT',
+                    // Default legacy properties to avoid UI breakage
+                    level: -999, // dummy
+                    ecno: 0,
+                    sc: 0,
+                    // Parse custom metrics
+                };
+
+                // Add Metric Value Directly to Point
+                // Use for loop for custom metrics too
+                for (let j = 0; j < customMetrics.length; j++) {
+                    const m = customMetrics[j];
+                    let val = row[m];
+                    // Try to parse numbers if possible
+                    if (typeof val !== 'number' && !isNaN(parseFloat(val))) {
+                        point[m] = parseFloat(val);
+                    } else {
+                        point[m] = val;
+                    }
+
+                    // Intelligent Mapping for "Standard" Keys if they exist in Excel
+                    // This allows the existing renderer (Grid/Chart) to "just work" if the column is named "RSRP"
+                    const normM = normalize(m);
+
+                    // Specific 4G Mappings (User Requested)
+                    // "SC Physical Cell ID" -> SC
+                    // "Serving Cell RSRP" -> Level
+                    // "Serving Cell RSRQ" -> EcNo
+                    // "Serving Cell DL EARFCN" -> Freq
+
+                    // Level/RSCP
+                    if (normM.includes('servingcellrsrp') || normM === 'rsrp') point.level = point[m];
+                    else if (point.level === -999 && normM.includes('rsrp')) point.level = point[m]; // Fallback
+
+                    // EcNo/RSRQ
+                    if (normM.includes('servingcellrsrq') || normM === 'rsrq') point.ecno = point[m];
+                    else if (point.ecno === 0 && (normM.includes('ecno') || normM.includes('sinr'))) point.ecno = point[m]; // Fallback
+
+                    // SC/PCI
+                    if (normM.includes('scphysicalcellid') || normM === 'pci') point.sc = point[m];
+                    else if (point.sc === 0 && (normM.includes('physcialcellid') || normM.includes('pci'))) point.sc = point[m];
+
+                    // Freq/EARFCN
+                    if (normM.includes('servingcelldlearfcn') || normM === 'earfcn') point.freq = point[m];
+                    else if (point.freq === undefined && (normM.includes('freq') || normM.includes('uarfcn') || normM.includes('channel'))) point.freq = point[m];
+
+                    // Band
+                    if (normM.includes('band')) point.band = point[m];
+                }
+
+                // Add parsed object for safety if app expects it
+                point.parsed = {
+                    serving: {
+                        level: point.level,
+                        ecno: point.ecno,
+                        sc: point.sc,
+                        freq: point.freq,
+                        band: point.band
+                    }
+                };
+
+                points.push(point);
+            }
+        }
+
+        return {
+            points: points,
+            tech: '4G (Excel)', // Assume 4G or Generic
+            customMetrics: customMetrics,
+            signaling: [] // No signaling in simple excel for now
+        };
+    }
+};

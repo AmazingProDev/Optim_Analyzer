@@ -51,13 +51,25 @@
         <header id="mainHeader" class="main-header">
             <div class="logo">Log Cracker Pro</div>
             <div class="controls">
-                <input type="file" id="fileInput" accept=".nmf">
-                <label for="fileInput" class="btn">Load NMF</label>
+                <input type="file" id="fileInput" accept=".nmf, .nmfs, .csv, .txt, .xlsx, .xls">
+                <label for="fileInput" class="btn">Load Log (NMF/CSV)</label>
 
                 <input type="file" id="siteInput" accept=".xlsx, .xls, .csv" style="display:none;">
                 <label for="siteInput" class="btn" style="background:#2563eb;">Import Sites</label>
 
-                <button id="siteSettingsBtn" class="btn" style="background:#4b5563;">⚙️</button>
+                <button id="siteSettingsBtn" class="btn" style="background:#4b5563;">⚙️ Sites</button>
+                <button id="themeSettingsBtn" class="btn" style="background:#4b5563;">🎨 Theme</button>
+                <button id="aiAnalyzeBtn" class="btn"
+                    style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); color: white; border: none; display: flex; align-items: center; gap: 5px;">
+                    <span>✨</span> AI Analyze
+                </button>
+
+                <div
+                    style="display:flex; align-items:center; background:#333; padding:2px 5px; border-radius:4px; border:1px solid #555;">
+                    <input type="text" id="searchInput" placeholder="CGPS (Lat, Lng)"
+                        style="background:none; border:none; color:#ddd; width:120px; font-size:12px; outline:none;">
+                    <button id="searchBtn" style="background:none; border:none; cursor:pointer;">🔍</button>
+                </div>
 
                 <span id="fileStatus">No file loaded</span>
             </div>
@@ -108,6 +120,33 @@
                 <div style="text-align:right;">
                     <button id="closeSiteSettings"
                         style="background:#555; color:white; border:none; padding:4px 10px; cursor:pointer; font-size:11px; border-radius:3px;">Close</button>
+                </div>
+            </div>
+
+            <!-- Theme Settings Panel -->
+            <div id="themeSettingsPanel" class="settings-panel" style="display:none; right:150px;">
+                <h4 class="settings-header">Thematic Analysis</h4>
+
+                <div class="setting-item">
+                    <label class="setting-label">Active Theme</label>
+                    <select id="themeSelect" class="setting-input" style="color:#333;">
+                        <option value="level">Coverage (RSCP/RSRP)</option>
+                        <option value="quality">Quality (EcNo/RSRQ)</option>
+                    </select>
+                </div>
+
+                <div id="thresholdsContainer" style="margin-top:10px; max-height:300px; overflow-y:auto;">
+                    <!-- Thresholds injected here by JS -->
+                </div>
+
+                <div style="margin-top:10px; display:flex; justify-content:space-between;">
+                    <button id="resetThemeBtn" class="btn" style="background:#ef4444; font-size:11px;">Reset</button>
+                    <div style="gap:5px; display:flex;">
+                        <button id="applyThemeBtn" class="btn"
+                            style="background:#22c55e; font-size:11px;">Apply</button>
+                        <button id="closeThemeSettings" class="btn"
+                            style="background:#555; font-size:11px;">Close</button>
+                    </div>
                 </div>
             </div>
 
@@ -260,6 +299,103 @@
         </div>
     </div>
 
+    <!-- AI Analysis Modal -->
+    <div id="aiModal" class="modal">
+        <div class="modal-content"
+            style="width: 80%; max-width: 800px; height: 80vh; background: #1e1e1e; border: 1px solid #444; display: flex; flex-direction: column; padding: 0;">
+            <div class="modal-header"
+                style="padding: 15px; background: #252525; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="margin: 0; display: flex; align-items: center; gap: 8px; color: #e2e8f0;">
+                    <span style="font-size: 20px;">✨</span> AI Drive Test Analyst
+                </h3>
+                <span class="close" onclick="closeAIModal()"
+                    style="color: #aaa; cursor: pointer; font-size: 24px;">&times;</span>
+            </div>
+
+            <div class="modal-body"
+                style="flex: 1; padding: 20px; overflow-y: auto; color: #e2e8f0; font-family: 'Inter', sans-serif;">
+
+                <!-- API Key Section -->
+                <div id="aiApiKeySection"
+                    style="margin-bottom: 20px; padding: 15px; background: #2d2d2d; border-radius: 8px; border: 1px solid #3f3f46;">
+
+                    <!-- Provider Selector -->
+                    <div
+                        style="margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+                        <label style="font-size: 13px; color: #ccc;">AI Provider:</label>
+                        <div style="display: flex; gap: 15px;">
+                            <label style="display: flex; align-items: center; cursor: pointer;">
+                                <input type="radio" name="aiProvider" value="gemini" checked
+                                    onchange="toggleAIProvider()" style="margin-right: 6px;">
+                                <span style="color: #e2e8f0; font-size: 13px;">Google Gemini</span>
+                            </label>
+                            <label style="display: flex; align-items: center; cursor: pointer;">
+                                <input type="radio" name="aiProvider" value="openai" onchange="toggleAIProvider()"
+                                    style="margin-right: 6px;">
+                                <span style="color: #e2e8f0; font-size: 13px;">OpenAI ChatGPT</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <p style="margin: 0 0 10px 0; font-size: 14px; color: #94a3b8;">Enter your API Key to enable
+                        analysis. Keys are stored locally.</p>
+
+                    <div style="margin-bottom: 10px;">
+                        <label for="geminiModelSelect"
+                            style="font-size: 12px; color: #ccc; display: block; margin-bottom: 4px;">Model:</label>
+                        <select id="geminiModelSelect"
+                            style="width: 100%; padding: 8px; background: #18181b; color: white; border: 1px solid #4b5563; border-radius: 6px;">
+                            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (New)</option>
+                            <option value="gemini-flash-latest">Gemini Flash Latest</option>
+                            <option value="gemini-pro-latest">Gemini Pro Latest</option>
+                            <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash (Latest)</option>
+                            <option value="gemini-1.5-flash-001">Gemini 1.5 Flash (v001)</option>
+                            <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro (Latest)</option>
+                            <option value="gemini-pro">Gemini 1.0 Pro</option>
+                        </select>
+                    </div>
+
+                    <!-- Gemini Key Input -->
+                    <div id="geminiKeyContainer" style="display: flex; gap: 10px; align-items:center;">
+                        <input type="password" id="geminiApiKey" placeholder="Paste Gemini API Key (AIza...)"
+                            style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #4b5563; background: #18181b; color: white;">
+                        <button onclick="window.checkGeminiModels()"
+                            style="padding: 8px 12px; border-radius: 6px; border: 1px solid #4b5563; background: #333; color: white; white-space: nowrap; cursor: pointer;">Check
+                            Models</button>
+                    </div>
+
+                    <!-- OpenAI Key Input (Hidden by default) -->
+                    <div id="openaiKeyContainer" style="display: none; gap: 10px; align-items:center;">
+                        <input type="password" id="openaiApiKey" placeholder="Paste OpenAI API Key (sk-...)"
+                            style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #4b5563; background: #18181b; color: white;">
+                    </div>
+                    <div id="aiModelDebugLog"
+                        style="margin-top: 10px; font-size: 11px; color: #888; font-family: monospace; white-space: pre-wrap; display:none; background: #111; padding: 10px; border-radius: 4px;">
+                    </div>
+                </div>
+
+                <!-- Loading State -->
+                <div id="aiLoading"
+                    style="display: none; flex-direction: column; align-items: center; justify-content: center; padding: 40px;">
+                    <div class="ai-spinner"></div>
+                    <p style="margin-top: 15px; color: #94a3b8;">Analyzing log data...</p>
+                </div>
+
+                <!-- Result Content -->
+                <div id="aiContent" style="line-height: 1.6;">
+                    <div style="text-align: center; color: #64748b; margin-top: 40px;">
+                        <p>Click "Analyze" to generate insights from the current log.</p>
+                        <button onclick="window.runAIAnalysis()" id="runAnalysisBtn"
+                            style="margin-top: 10px; padding: 10px 20px; background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
+                            Generate Analysis
+                        </button>
+                    </div>
+                </div>
+
+            </div> <!-- End modal-body -->
+        </div> <!-- End modal-content -->
+    </div> <!-- End aiModal -->
+
     <!-- Context Menu -->
     <!-- Context Menu -->
     <div id="metricContextMenu" class="context-menu"
@@ -293,6 +429,7 @@
 
     <script src="map_renderer.js?v=29"></script>
     <script src="parser.js?v=27"></script>
+    <script src="theme_config.js?v=1"></script>
     <script src="app.js?v=v90"></script>
 </body>
 

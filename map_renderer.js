@@ -1,6 +1,8 @@
 class MapRenderer {
     constructor(elementId) {
-        this.map = L.map(elementId).setView([33.5, -7.5], 6); // Default to Morocco view
+        // PERFORMANCE: preferCanvas = true forces Leaflet to use Canvas renderer for Vectors
+        // This makes rendering 10k-50k points buttery smooth compared to SVG.
+        this.map = L.map(elementId, { preferCanvas: true }).setView([33.5, -7.5], 6); // Default to Morocco view
 
         // Base Maps
         const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -76,26 +78,24 @@ class MapRenderer {
     getColor(val, metric = 'level') {
         if (val === undefined || isNaN(val)) return '#888';
 
-        // 3G RSCP / Level
-        if (['level', 'rscp', 'n1_rscp', 'n2_rscp', 'n3_rscp'].includes(metric)) {
-            if (val > -70) return '#22c55e';
-            if (val > -85) return '#84cc16';
-            if (val > -95) return '#eab308';
-            if (val > -105) return '#f97316';
-            return '#ef4444';
-        }
+        if (window.getThresholdKey && window.themeConfig) {
+            const rangeKey = window.getThresholdKey(metric);
+            if (rangeKey) {
+                const thresholds = window.themeConfig.thresholds[rangeKey];
+                if (thresholds) {
+                    for (const t of thresholds) {
+                        // Check Min
+                        if (t.min !== undefined && val <= t.min) continue;
+                        // Check Max
+                        if (t.max !== undefined && val > t.max) continue;
 
-        // EcNo (dB) - typically -0.5 to -20
-        // > -6 Excellent
-        // -6 to -10 Good
-        // -10 to -14 Fair
-        // < -14 Poor
-        if (['ecno', 'n1_ecno', 'n2_ecno', 'n3_ecno'].includes(metric)) {
-            if (val > -6) return '#22c55e';
-            if (val > -10) return '#84cc16';
-            if (val > -14) return '#eab308';
-            if (val > -18) return '#f97316';
-            return '#ef4444';
+                        // If we are here, it matches
+                        return t.color;
+                    }
+                    // Fallback if no match found (should be caught by last rule usually)
+                    return '#888';
+                }
+            }
         }
 
         // Default / Frequency / Count

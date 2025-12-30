@@ -19,6 +19,374 @@ document.addEventListener('DOMContentLoaded', () => {
         mapContainer.style.boxShadow = 'none';
     });
 
+    // --- AI Integration Logic ---
+
+    const aiModal = document.getElementById('aiModal');
+    const geminiApiKeyInput = document.getElementById('geminiApiKey');
+    const aiContent = document.getElementById('aiContent');
+    const aiLoading = document.getElementById('aiLoading');
+
+    // Restore API Key if saved
+    const savedKey = localStorage.getItem('gemini_api_key');
+    if (savedKey) {
+        geminiApiKeyInput.value = savedKey;
+    }
+
+    window.openAIAnalysis = function () {
+        aiModal.style.display = 'block';
+
+        // Make Draggable
+        const aiModalContent = aiModal.querySelector('.modal-content');
+        const aiModalHeader = aiModal.querySelector('.modal-header');
+        if (aiModalContent && aiModalHeader) {
+            // Ensure function exists (it's defined below in this file or seemingly globally available in this scope)
+            if (typeof makeElementDraggable === 'function') {
+                makeElementDraggable(aiModalHeader, aiModalContent);
+            } else {
+                console.warn('makeElementDraggable function not found');
+            }
+        }
+    }
+
+    window.closeAIModal = function () {
+        aiModal.style.display = 'none';
+    }
+
+    window.saveApiKey = function () {
+        const key = geminiApiKeyInput.value.trim();
+        if (key) {
+            localStorage.setItem('gemini_api_key', key);
+            alert('API Key saved!');
+        } else {
+            alert('Please enter a valid API Key.');
+        }
+    }
+
+    // Attach Event Listener to Button
+    const aiBtn = document.getElementById('aiAnalyzeBtn');
+    if (aiBtn) {
+        aiBtn.onclick = window.openAIAnalysis;
+    }
+
+    window.checkGeminiModels = async function () {
+        const key = geminiApiKeyInput.value.trim();
+        const debugLog = document.getElementById('aiModelDebugLog');
+        if (!key) {
+            alert('Please enter an API Key first.');
+            return;
+        }
+
+        debugLog.style.display = 'block';
+        debugLog.textContent = 'Checking available models...';
+
+        try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
+            const data = await response.json();
+
+            if (data.error) {
+                debugLog.style.color = '#ef4444';
+                debugLog.textContent = 'Error: ' + data.error.message;
+            } else if (data.models) {
+                debugLog.style.color = '#4ade80';
+                const names = data.models.map(m => m.name.replace('models/', '')).filter(n => n.includes('gemini'));
+                debugLog.textContent = 'Available Gemini Models:\n' + names.join('\n');
+            } else {
+                debugLog.textContent = 'No models found (Unknown response format).';
+            }
+        } catch (e) {
+            debugLog.style.color = '#ef4444';
+            debugLog.textContent = 'Network Error: ' + e.message;
+        }
+    };
+
+    // AI Provider Logic
+    window.toggleAIProvider = function () {
+        const providerRadio = document.querySelector('input[name="aiProvider"]:checked');
+        const provider = providerRadio ? providerRadio.value : 'gemini';
+
+        const geminiContainer = document.getElementById('geminiKeyContainer');
+        const openaiContainer = document.getElementById('openaiKeyContainer');
+        const modelSelect = document.getElementById('geminiModelSelect');
+        const debugLog = document.getElementById('aiModelDebugLog');
+
+        // Reset debug log
+        if (debugLog) debugLog.style.display = 'none';
+
+        if (provider === 'gemini') {
+            if (geminiContainer) geminiContainer.style.display = 'flex';
+            if (openaiContainer) openaiContainer.style.display = 'none';
+            // Populate Gemini Models
+            if (modelSelect) {
+                modelSelect.innerHTML = `
+                    <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (New)</option>
+                    <option value="gemini-flash-latest">Gemini Flash Latest</option>
+                    <option value="gemini-pro-latest">Gemini Pro Latest</option>
+                    <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash (Latest)</option>
+                    <option value="gemini-1.5-flash-001" selected>Gemini 1.5 Flash (v001)</option>
+                    <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro (Latest)</option>
+                    <option value="gemini-pro">Gemini 1.0 Pro</option>
+                `;
+            }
+        } else {
+            if (geminiContainer) geminiContainer.style.display = 'none';
+            if (openaiContainer) openaiContainer.style.display = 'flex';
+            // Populate OpenAI Models
+            if (modelSelect) {
+                modelSelect.innerHTML = `
+                    <option value="gpt-4o" selected>GPT-4o (Fast & Smart)</option>
+                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                    <option value="gpt-4">GPT-4</option>
+                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Fast)</option>
+                `;
+            }
+        }
+    };
+
+    // Load Saved Keys on Init
+    setTimeout(() => {
+        const savedGeminiKey = localStorage.getItem('gemini_api_key');
+        const savedOpenAIKey = localStorage.getItem('openai_api_key');
+        const geminiInput = document.getElementById('geminiApiKey');
+        const openaiInput = document.getElementById('openaiApiKey');
+
+        if (savedGeminiKey && geminiInput) geminiInput.value = savedGeminiKey;
+        if (savedOpenAIKey && openaiInput) openaiInput.value = savedOpenAIKey;
+    }, 1000);
+
+    // Update Save Key function (this was existing, we override or ensure it handles both if bound)
+    // Actually, saveApiKey logic needs to be robust, but simple existence check is good.
+    window.saveApiKey = function () {
+        const geminiInput = document.getElementById('geminiApiKey');
+        const openaiInput = document.getElementById('openaiApiKey');
+
+        if (geminiInput && geminiInput.value.trim()) {
+            localStorage.setItem('gemini_api_key', geminiInput.value.trim());
+        }
+        if (openaiInput && openaiInput.value.trim()) {
+            localStorage.setItem('openai_api_key', openaiInput.value.trim());
+        }
+        alert('API Keys saved successfully!');
+    };
+
+    async function callOpenAIAPI(key, model, prompt) {
+        const url = 'https://api.openai.com/v1/chat/completions';
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${key}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    { role: "system", content: "You are an expert RF Optimization Engineer. Analyze drive test data." },
+                    { role: "user", content: prompt }
+                ],
+                temperature: 0.7
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error?.message || 'OpenAI API Request Failed');
+        }
+
+        return data.choices[0].message.content;
+    }
+
+    window.runAIAnalysis = async function () {
+        const providerRadio = document.querySelector('input[name="aiProvider"]:checked');
+        const provider = providerRadio ? providerRadio.value : 'gemini';
+        const model = document.getElementById('geminiModelSelect').value;
+        let key = '';
+
+        if (provider === 'gemini') {
+            const kInput = document.getElementById('geminiApiKey');
+            key = kInput ? kInput.value.trim() : '';
+            if (!key) { alert('Please enter a Gemini API Key first.'); return; }
+        } else {
+            const kInput = document.getElementById('openaiApiKey');
+            key = kInput ? kInput.value.trim() : '';
+            if (!key) { alert('Please enter an OpenAI API Key first.'); return; }
+        }
+
+        if (loadedLogs.length === 0) {
+            alert('No logs loaded to analyze.');
+            return;
+        }
+
+        const aiContent = document.getElementById('aiContent');
+        const aiLoading = document.getElementById('aiLoading');
+        const apiKeySection = document.getElementById('aiApiKeySection');
+
+        // Show Loading
+        if (apiKeySection) apiKeySection.style.display = 'none';
+        if (aiContent) aiContent.innerHTML = '';
+        if (aiLoading) aiLoading.style.display = 'flex';
+
+        try {
+            const metrics = extractLogMetrics();
+            const prompt = generateAIPrompt(metrics);
+            let result = '';
+
+            if (provider === 'gemini') {
+                result = await callGeminiAPI(key, model, prompt);
+            } else {
+                result = await callOpenAIAPI(key, model, prompt);
+            }
+
+            renderAIResult(result);
+        } catch (error) {
+            console.error("AI Error:", error);
+            let userMsg = error.message;
+            if (userMsg.includes('API key not valid') || userMsg.includes('Incorrect API key')) userMsg = 'Invalid API Key. Please check your key.';
+            if (userMsg.includes('404')) userMsg = 'Model not found or API endpoint invalid.';
+            if (userMsg.includes('429') || userMsg.includes('insufficient_quota')) userMsg = 'Quota exceeded. Check your plan.';
+
+            if (aiContent) {
+                aiContent.innerHTML = `<div style="color: #ef4444; text-align: center; padding: 20px;">
+                    <h3>Analysis Failed</h3>
+                    <p><strong>Error:</strong> ${userMsg}</p>
+                    <p style="font-size:12px; color:#aaa; margin-top:5px;">Check console for details.</p>
+                    <div style="display:flex; justify-content:center; gap:10px; margin-top:20px;">
+                         <button onclick="window.runAIAnalysis()" class="btn" style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); width: auto;">Retry</button>
+                         <button onclick="document.getElementById('aiApiKeySection').style.display='block'; document.getElementById('aiLoading').style.display='none'; document.getElementById('aiContent').innerHTML='';" class="btn" style="background:#555;">Back</button>
+                    </div>
+                </div>`;
+            }
+        } finally {
+            if (aiLoading) aiLoading.style.display = 'none';
+        }
+    }
+
+    function extractLogMetrics() {
+        // Aggregate data from all loaded logs or the active one
+        // For simplicity, let's look at the first log or combined
+        let totalPoints = 0;
+        let weakSignalCount = 0;
+        let avgRscp = 0;
+        let avgEcno = 0;
+        let totalRscp = 0;
+        let totalEcno = 0;
+        let technologies = new Set();
+        let collectedCells = {}; // SC -> count
+
+        loadedLogs.forEach(log => {
+            log.points.forEach(p => {
+                totalPoints++;
+
+                // Tech detection
+                let tech = 'Unknown';
+                if (p.rscp !== undefined) tech = '3G';
+                else if (p.rsrp !== undefined) tech = '4G';
+                else if (p.rxLev !== undefined) tech = '2G'; // Simplified
+                if (tech !== 'Unknown') technologies.add(tech);
+
+                // 3G Metrics
+                if (p.rscp !== undefined && p.rscp !== null) {
+                    totalRscp += p.rscp;
+                    if (p.rscp < -100) weakSignalCount++;
+                }
+                if (p.ecno !== undefined && p.ecno !== null) {
+                    totalEcno += p.ecno;
+                }
+
+                // Top Servers
+                if (p.sc !== undefined) {
+                    collectedCells[p.sc] = (collectedCells[p.sc] || 0) + 1;
+                }
+            });
+        });
+
+        if (totalPoints === 0) throw new Error("No data points found.");
+
+        const validRscpCount = totalPoints; // Approximation
+        avgRscp = (totalRscp / validRscpCount).toFixed(1);
+        avgEcno = (totalEcno / validRscpCount).toFixed(1);
+        const weakSignalPct = ((weakSignalCount / totalPoints) * 100).toFixed(1);
+
+        // Sort top 5 cells
+        const topCells = Object.entries(collectedCells)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([sc, count]) => `SC ${sc} (${((count / totalPoints) * 100).toFixed(1)}%)`)
+            .join(', ');
+
+        return {
+            totalPoints,
+            technologies: Array.from(technologies).join(', '),
+            avgRscp,
+            avgEcno,
+            weakSignalPct,
+            topCells
+        };
+    }
+
+    function generateAIPrompt(metrics) {
+        return `You are an expert RF Optimization Engineer. Analyze the following drive test summary data:
+        
+        - Technologies Found: ${metrics.technologies}
+        - Total Samples: ${metrics.totalPoints}
+        - Average Signal Strength (RSCP/RSRP): ${metrics.avgRscp} dBm
+        - Average Quality (EcNo/RSRQ): ${metrics.avgEcno} dB
+        - Weak Coverage Samples (< -100dBm): ${metrics.weakSignalPct}%
+        - Top Serving Cells: ${metrics.topCells}
+
+        Provide a concise analysis in Markdown format:
+        1. **Overall Health**: Assess the network condition (Good, Fair, Poor).
+        2. **Key Issues**: Identify potential problems (e.g., coverage holes, interference, dominance).
+        3. **Recommended Actions**: Suggest 3 specific optimization actions (e.g., downtilt, power adjustment, neighbor checks).
+        
+        Keep it professional and technical.`;
+    }
+
+    async function callGeminiAPI(key, model, prompt) {
+        // Use selected model
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{
+                        text: prompt
+                    }]
+                }]
+            })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error?.message || 'API Request Failed');
+        }
+
+        const data = await response.json();
+        return data.candidates[0].content.parts[0].text;
+    }
+
+    function renderAIResult(markdownText) {
+        // Simple Markdown to HTML converter (bold, headings, lists)
+        let html = markdownText
+            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+            .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+            .replace(/\n\n/gim, '<br><br>')
+            .replace(/^- (.*$)/gim, '<ul><li>$1</li></ul>') // Naive list
+            .replace(/<\/ul><ul>/gim, '') // Merge lists
+            ;
+
+        aiContent.innerHTML = html;
+
+        // Show "Analysis Done" button or reset?
+        // We keep the "Generate" button visible in the bottom if user wants to retry.
+    }
+
     mapContainer.addEventListener('drop', (e) => {
         e.preventDefault();
         mapContainer.style.boxShadow = 'none';
@@ -162,7 +530,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Prepare Data
         const labels = [];
-        // Datasets arrays
+        // Datasets arrays (OPTIMIZED: {x,y} format for Decimation)
         const dsServing = [];
         const dsA2 = [];
         const dsA3 = [];
@@ -192,33 +560,31 @@ document.addEventListener('DOMContentLoaded', () => {
             // Always add point to prevent index mismatch (Chart Index must equal Log Index)
             const label = p.time || `Pt ${i}`;
             labels.push(label);
-            dsServing.push(parseFloat(val));
+
+            // OPTIMIZATION: Push {x,y} objects
+            dsServing.push({ x: i, y: parseFloat(val) });
 
             if (isComposite) {
-                dsA2.push(p.a2_rscp !== undefined ? parseFloat(p.a2_rscp) : null);
-                dsA3.push(p.a3_rscp !== undefined ? parseFloat(p.a3_rscp) : null);
-                dsN1.push(p.n1_rscp !== undefined ? parseFloat(p.n1_rscp) : null);
-                dsN2.push(p.n2_rscp !== undefined ? parseFloat(p.n2_rscp) : null);
-                dsN3.push(p.n3_rscp !== undefined ? parseFloat(p.n3_rscp) : null);
+                dsA2.push({ x: i, y: p.a2_rscp !== undefined ? parseFloat(p.a2_rscp) : null });
+                dsA3.push({ x: i, y: p.a3_rscp !== undefined ? parseFloat(p.a3_rscp) : null });
+                dsN1.push({ x: i, y: p.n1_rscp !== undefined ? parseFloat(p.n1_rscp) : null });
+                dsN2.push({ x: i, y: p.n2_rscp !== undefined ? parseFloat(p.n2_rscp) : null });
+                dsN3.push({ x: i, y: p.n3_rscp !== undefined ? parseFloat(p.n3_rscp) : null });
             } else {
-                dataPoints.push(parseFloat(val));
+                dataPoints.push({ x: i, y: parseFloat(val) });
             }
         });
 
         // Default Settings
         const chartSettings = {
-            type: 'line', // 'line' or 'bar'
+            type: 'bar', // FORCED BAR
             servingColor: '#3b82f6', // BLUE for Serving (A1)
-            useGradient: false, // Turn off neon gradient
+            useGradient: false,
             a2Color: '#3b82f6', // BLUE
             a3Color: '#3b82f6', // BLUE
             n1Color: '#22c55e', // GREEN
             n2Color: '#22c55e', // GREEN
             n3Color: '#22c55e', // GREEN
-            servingWidth: 4,
-            n1Width: 2,
-            n2Width: 2,
-            n3Width: 2
         };
 
         const controlsId = 'chartControls_' + Date.now();
@@ -238,14 +604,7 @@ document.addEventListener('DOMContentLoaded', () => {
         container.innerHTML = `
                     <div id="${headerId}" style="padding:10px; background:#2d2d2d; border-bottom:1px solid #444; display:flex; justify-content:space-between; align-items:center; cursor:${dragCursor}; user-select:none;">
                         <div style="display:flex; align-items:center; pointer-events:none;">
-                            <h3 style="margin:0; margin-right:20px; pointer-events:auto; font-size:14px;">${log.name} - ${isComposite ? 'RSCP & Neighbors' : param.toUpperCase()}</h3>
-                            
-                            <div style="display:flex; gap:5px; align-items:center; margin-right:20px; pointer-events:auto;">
-                                 <button id="zoomInBtn" title="Zoom In" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">+</button>
-                                 <button id="zoomOutBtn" title="Zoom Out" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">-</button>
-                                 <button id="resetZoomBtn" title="Reset Zoom" style="background:#333; color:white; border:1px solid #555; padding:5px 10px; cursor:pointer;">Reset</button>
-                            </div>
-
+                            <h3 style="margin:0; margin-right:20px; pointer-events:auto; font-size:14px;">${log.name} - ${isComposite ? 'RSCP & Neighbors' : param.toUpperCase()} (Snapshot)</h3>
                             <button id="styleToggleBtn" style="background:#333; color:#ccc; border:1px solid #555; padding:5px 10px; cursor:pointer; pointer-events:auto; font-size:11px;">⚙️ Style</button>
                         </div>
                         <div style="pointer-events:auto; display:flex; gap:10px;">
@@ -256,54 +615,31 @@ document.addEventListener('DOMContentLoaded', () => {
                     
                     <!-- Settings Panel -->
                     <div id="${controlsId}" style="display:none; background:#252525; padding:10px; border-bottom:1px solid #444; gap:15px; align-items:center; flex-wrap:wrap;">
-                         <!-- General Settings -->
-                        <div style="display:flex; flex-direction:column; gap:2px; border-right:1px solid #444; padding-right:10px;">
-                             <label style="color:#aaa; font-size:10px; font-weight:bold;">Type</label>
-                             <select id="chartTypeSelect" style="background:#333; color:white; border:1px solid #555; font-size:11px;">
-                                 <option value="line">Line (Timeline)</option>
-                                 <option value="bar">Bar (Snapshot)</option>
-                             </select>
-                        </div>
                         <!-- Serving Controls -->
                         <div style="display:flex; flex-direction:column; gap:2px; border-right:1px solid #444; padding-right:10px;">
                             <label style="color:#aaa; font-size:10px; font-weight:bold;">Serving</label>
-                            <div style="display:flex; gap:5px; align-items:center;">
-                                <input type="color" id="pickerServing" value="#3b82f6" style="border:none; width:30px; height:20px; cursor:pointer;">
-                                <label style="color:#ccc; font-size:11px;"><input type="checkbox" id="checkGradient"> Grad</label>
-                            </div>
-                            <div style="display:flex; gap:5px; align-items:center;">
-                                 <label style="color:#aaa; font-size:10px;">Width</label>
-                                 <input type="range" id="rangeServingWidth" min="1" max="10" value="4" style="width:60px;">
-                            </div>
+                             <input type="color" id="pickerServing" value="#3b82f6" style="border:none; width:30px; height:20px; cursor:pointer;">
                         </div>
 
                         ${isComposite ? `
                         <div style="display:flex; flex-direction:column; gap:2px; padding-right:5px;">
                             <label style="color:#aaa; font-size:10px;">N1 Style</label>
                             <input type="color" id="pickerN1" value="#22c55e" style="border:none; width:30px; height:20px; cursor:pointer;">
-                            <input type="range" id="rangeN1Width" min="1" max="8" value="2" style="width:50px;">
                         </div>
                         <div style="display:flex; flex-direction:column; gap:2px; padding-right:5px;">
                             <label style="color:#aaa; font-size:10px;">N2 Style</label>
                             <input type="color" id="pickerN2" value="#22c55e" style="border:none; width:30px; height:20px; cursor:pointer;">
-                            <input type="range" id="rangeN2Width" min="1" max="8" value="2" style="width:50px;">
                         </div>
                         <div style="display:flex; flex-direction:column; gap:2px;">
                             <label style="color:#aaa; font-size:10px;">N3 Style</label>
                             <input type="color" id="pickerN3" value="#22c55e" style="border:none; width:30px; height:20px; cursor:pointer;">
-                            <input type="range" id="rangeN3Width" min="1" max="8" value="2" style="width:50px;">
                         </div>
                         ` : ''}
                     </div>
 
                     <div style="flex:1; padding:10px; display:flex; gap:10px; height: 100%; min-height: 0;">
-                        <!-- Line Chart Section (50%) -->
-                        <div id="lineChartContainer" style="flex:1; position:relative; min-width:0;">
-                            <canvas id="lineChartCanvas"></canvas>
-                        </div>
-                        
-                        <!-- Bar Chart Section (50%) -->
-                        <div id="barChartContainer" style="flex:1; position:relative; min-width:0; border-left:1px solid #444; padding-left:10px;">
+                        <!-- Bar Chart Section (100%) -->
+                        <div id="barChartContainer" style="flex:1; position:relative; min-width:0;">
                             <canvas id="barChartCanvas"></canvas>
                              <div id="barOverlayInfo" style="position:absolute; top:10px; right:10px; color:white; background:rgba(0,0,0,0.7); padding:2px 5px; border-radius:4px; font-size:10px; pointer-events:none;">
                                 Snapshot
@@ -359,12 +695,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        const lineCtx = document.getElementById('lineChartCanvas').getContext('2d');
         const barCtx = document.getElementById('barChartCanvas').getContext('2d');
 
         // Define Gradient Creator (Use Line Context)
         const createGradient = (color1, color2) => {
-            const g = lineCtx.createLinearGradient(0, 0, 0, 400);
+            const g = barCtx.createLinearGradient(0, 0, 0, 400);
             g.addColorStop(0, color1);
             g.addColorStop(1, color2);
             return g;
@@ -412,7 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         // 3. Draw Badge (Pill) ABOVE the point
                         const measure = chart.data.datasets[0].data[activeIndex];
-                        const text = typeof measure === 'number' ? measure.toFixed(1) : measure;
+                        const text = typeof measure === 'object' ? measure.y.toFixed(1) : (typeof measure === 'number' ? measure.toFixed(1) : measure);
 
                         ctx.font = 'bold 12px sans-serif';
                         const textWidth = ctx.measureText(text).width;
@@ -585,8 +920,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Use a horizontal gradient (magento to blue)
                 let gradientStroke = chartSettings.servingColor;
                 if (chartSettings.useGradient) {
-                    const width = lineCtx.canvas.width;
-                    const gradient = lineCtx.createLinearGradient(0, 0, width, 0);
+                    const width = barCtx.canvas.width;
+                    const gradient = barCtx.createLinearGradient(0, 0, width, 0);
                     gradient.addColorStop(0, '#ff00cc'); // Magenta
                     gradient.addColorStop(0.5, '#a855f7'); // Purple
                     gradient.addColorStop(1, '#3b82f6'); // Blue
@@ -682,7 +1017,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                     datasets.push({
                         label: 'A1 SC',
-                        data: log.points.map(p => p.sc !== undefined ? p.sc : (p.parsed && p.parsed.serving ? p.parsed.serving.sc : null)),
+                        data: log.points.map((p, i) => ({ x: i, y: p.sc !== undefined ? p.sc : (p.parsed && p.parsed.serving ? p.parsed.serving.sc : null) })),
                         borderColor: chartSettings.servingColor,
                         borderDash: [5, 5],
                         borderWidth: 1,
@@ -706,7 +1041,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                     datasets.push({
                         label: 'A2 SC',
-                        data: log.points.map(p => p.n1_sc !== undefined ? p.n1_sc : (p.parsed && p.parsed.neighbors && p.parsed.neighbors[0] ? p.parsed.neighbors[0].pci : null)),
+                        data: log.points.map((p, i) => ({ x: i, y: p.n1_sc !== undefined ? p.n1_sc : (p.parsed && p.parsed.neighbors && p.parsed.neighbors[0] ? p.parsed.neighbors[0].pci : null) })),
                         borderColor: chartSettings.n1Color,
                         borderDash: [5, 5],
                         borderWidth: 1,
@@ -730,7 +1065,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                     datasets.push({
                         label: 'A3 SC',
-                        data: log.points.map(p => p.n2_sc !== undefined ? p.n2_sc : (p.parsed && p.parsed.neighbors && p.parsed.neighbors[1] ? p.parsed.neighbors[1].pci : null)),
+                        data: log.points.map((p, i) => ({ x: i, y: p.n2_sc !== undefined ? p.n2_sc : (p.parsed && p.parsed.neighbors && p.parsed.neighbors[1] ? p.parsed.neighbors[1].pci : null) })),
                         borderColor: chartSettings.n2Color,
                         borderDash: [5, 5],
                         borderWidth: 1,
@@ -847,14 +1182,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        // Use 'let' to allow reassignment later
-        // Initialize Contexts (Already done above)
-
         // Common Option Factory
         const getCommonOptions = (isLine) => {
-            return {
+            const opts = {
                 responsive: true,
                 maintainAspectRatio: false,
+                animation: false,
+                normalized: true,
+                parsing: isLine ? false : true, // Only disable parsing for Line (custom x/y)
                 layout: { padding: { top: 40 } },
                 onClick: (e) => {
                     // Only Line Chart drives selection
@@ -862,7 +1197,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         const points = lineChartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: false }, true);
                         if (points.length) {
                             activeIndex = points[0].index;
-                            // Use Central Update to trigger Global Sync
                             if (window.updateDualCharts) {
                                 window.updateDualCharts(activeIndex);
                             }
@@ -871,7 +1205,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 scales: {
                     x: {
-                        ticks: { color: '#666', maxTicksLimit: 10 },
+                        type: isLine ? 'linear' : 'category', // LINEAR for Line Chart (Decimation), CATEGORY for Bar
+                        ticks: {
+                            color: '#666',
+                            maxTicksLimit: 10,
+                            callback: isLine ? function (val, index) {
+                                // Map Linear Index back to Label
+                                return labels[val] || '';
+                            } : undefined
+                        },
                         grid: { color: 'rgba(255,255,255,0.05)', display: false }
                     },
                     y: {
@@ -893,18 +1235,37 @@ document.addEventListener('DOMContentLoaded', () => {
                             mode: 'x'
                         },
                         pan: { enabled: true, mode: 'x' }
+                    } : false,
+                    // DECIMATION PLUGIN CONFIG
+                    decimation: isLine ? {
+                        enabled: true,
+                        algorithm: 'min-max', // Preserves peaks, good for signal data
+                        samples: 200, // Downsample to ~200 px resolution (very fast)
+                        threshold: 500 // Only kick in if > 500 points
                     } : false
                 }
             };
+            return opts;
         };
 
-        // Instantiate Line Chart
-        let lineChartInstance = new Chart(lineCtx, {
-            type: 'line',
-            data: getChartConfigData('line'),
-            options: getCommonOptions(true),
-            plugins: [verticalLinePlugin, glowPlugin]
-        });
+        // ... REST OF FILE ...
+
+        // Ensure updateDualCharts uses correct data structure update
+        window.updateDualCharts = (idx, skipGlobalSync = false) => {
+            activeIndex = idx;
+            // No need to rebuild data for Line Chart, just draw updates (selection)
+            // But Bar chart relies on getChartConfigData('bar') which is fresh.
+            barChartInstance.data = getChartConfigData('bar');
+            barChartInstance.update();
+            updateBarOverlay();
+
+            if (!skipGlobalSync && log.points[idx]) {
+                const source = isScrubbing ? 'chart_scrub' : 'chart';
+                window.globalSync(window.currentChartLogId, idx, source);
+            }
+        };
+
+
 
         // Instantiate Bar Chart
         let barChartInstance = new Chart(barCtx, {
@@ -990,12 +1351,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        window.addEventListener('mouseup', () => {
-            if (isScrubbing) {
-                isScrubbing = false;
-                lineCanvas.style.cursor = 'default'; // Or check hover again?
-            }
-        });
+
 
         const updateBarOverlay = () => {
             const overlay = document.getElementById('barOverlayInfo');
@@ -1006,370 +1362,340 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Store globally for Sync
         window.currentChartLogId = log.id;
-        window.currentChartInstance = lineChartInstance; // Primary for some checks? Or maybe expose both?
+        window.currentChartInstance = barChartInstance;
+
         // Let's expose specific update function
         window.updateDualCharts = (idx, skipGlobalSync = false) => {
             activeIndex = idx;
-            lineChartInstance.draw();
+            // Removed Line Chart update
             barChartInstance.data = getChartConfigData('bar');
             barChartInstance.update();
             updateBarOverlay();
 
-            // Trigger Global Sync if this update came from the Chart itself (Scrub/Click)
-            // If skipGlobalSync is true, it means globalSync called us, so don't loop back.
+            // Trigger Global Sync if this update came from the Chart itself
+            // NOTE: Since Bar Chart doesn't inherently scrub, this is mostly for external triggers 
+            // OR if we add click-to-sync on Bar Chart later?
             if (!skipGlobalSync && log.points[idx]) {
-                // Differentiate between Scrub and Click? 
-                // We'll treat this as 'chart' source. 
-                // If dragging, maybe use 'chart_scrub' to avoid pan?
-                // For now, let's use 'chart_scrub' if isScrubbing is true.
-                // We need to access isScrubbing variable. It's in this closure.
-                const source = isScrubbing ? 'chart_scrub' : 'chart';
-                window.globalSync(window.currentChartLogId, idx, source);
-            } else if (log.points[idx]) {
-                // Even if triggered by sync, we still update floating panel? 
-                // globalSync handles floating panel too.
+                // No scrubbing on Bar Chart usually
             }
         };
 
         // Function to update Active Index from Map
         window.currentChartActiveIndexSet = (idx) => {
-            window.updateDualCharts(idx);
+            window.updateDualCharts(idx, true); // True = Skip Global Sync loopback
         };
 
         // Global function to update the Floating Info Panel
-        window.updateFloatingInfoPanel = (p) => {
-            const panel = document.getElementById('floatingInfoPanel');
-            const content = document.getElementById('infoPanelContent');
-            if (!panel || !content) return;
-            // FORCE LOG: using error to bypass potential filters
-            // console.error("DEBUG: updateFloatingInfoPanel called for point:", p ? p.time : 'null');
 
-            // Show panel if hidden
-            if (panel.style.display === 'none') {
-                panel.style.display = 'block';
-            }
-
-            // --- Helper: Lookup Cell Name from SiteData ---
-            const resolveCellName = (pci, cellId, lac, freq, lat, lng, rnc) => {
-                const NO_MATCH = { name: null, id: null };
-
-                // 0. Helper & Dist
-                if (!window.mapRenderer || !window.mapRenderer.siteData) return NO_MATCH;
-                const siteData = window.mapRenderer.siteData;
-
-                const getName = (s) => s.cellName || s.name || s.siteName;
-                const getDist = (s) => {
-                    if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999;
-                    return Math.sqrt(Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2));
-                };
-
-                // 1. Serving Cell Logic: STRICT CellID Match
-                if (cellId !== undefined && cellId !== null) {
-                    // A. Exact Match (Long ID)
-                    let match = siteData.find(s => s.cellId == cellId);
-                    // if (match) console.log(`[Resolution A] Exact Long ID Match: ${cellId} -> ${getName(match)}`);
-
-                    // B. Fallback: Short CID + LAC Match
-                    if (!match && lac) {
-                        const shortCid = cellId & 0xFFFF;
-                        match = siteData.find(s => s.cellId == shortCid && s.lac == lac);
-                        // if (match) console.log(`[Resolution B] Short+LAC Match: ${shortCid}/${lac} -> ${getName(match)}`);
-                    }
-
-                    // C. Fallback: RNC/CID Format Match (User Request)
-                    const shortCid = cellId & 0xFFFF;
-                    const rncCidStr = `${rnc}/${shortCid}`;
-
-                    if (!match && rnc !== undefined && rnc !== null) {
-                        const norm = (val) => String(val).replace(/\s/g, '');
-                        match = siteData.find(s => norm(s.cellId) == norm(rncCidStr));
-                        // console.log(`[Resolution C] RNC/CID Check: ${rncCidStr}. Found=${match ? getName(match) : 'No'}. (DB Size: ${siteData.length})`);
-                    }
-
-                    if (match) {
-                        // CROSS-CHECK: Does the resolved cell's SC match the point's SC?
-                        // If the parser holds a "stale" CellID (from previous lines) but the SC has changed (Handover),
-                        // we must NOT lock onto the old CellID.
-                        if (pci !== undefined && pci !== null) {
-                            const dbSc = match.pci || match.sc;
-                            if (dbSc !== undefined && parseInt(dbSc) !== parseInt(pci)) {
-                                // console.log(`[Resolution] Stale ID Detected! ID ${cellId} has SC ${dbSc}, but Point has SC ${pci}. Ignoring ID match.`);
-                                match = null; // Invalidate match to force SC lookup below
-                            }
-                        }
-                    }
-
-                    if (match) return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng };
-                }
-
-                // 2. Neighbor Logic: SC + Freq + Proximity
-                if (pci !== undefined && pci !== null) {
-                    let candidates = siteData.filter(s => s.pci == pci || s.sc == pci);
-                    if (freq) {
-                        const freqCandidates = candidates.filter(s => {
-                            const sFreq = s.freq || s.dl_freq;
-                            return Math.abs(parseFloat(sFreq) - parseFloat(freq)) < 5;
-                        });
-                        if (freqCandidates.length > 0) candidates = freqCandidates;
-                    }
-                    if (candidates.length > 0) {
-                        candidates.sort((a, b) => getDist(a) - getDist(b));
-                        return { name: getName(candidates[0]), id: candidates[0].cellId, lat: candidates[0].lat, lng: candidates[0].lng };
-                    }
-                }
-                return NO_MATCH;
-            };
-
-            // --- DATA PREPARATION ---
-            let connectionTargets = []; // Array to hold line targets {lat, lng, color}
-
-            // 1. Serving Cell
-            const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
-            const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
-
-            let servingRes = resolveCellName(p.sc, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
-            if (!servingRes.name && p.cellId) servingRes = resolveCellName(null, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
-            // Add Serving Line (BLUE)
-            if (servingRes.lat && servingRes.lng) {
-                // Weight 8 (Super Bold), connecting to Tip (via cellId lookup)
-                connectionTargets.push({
-                    lat: servingRes.lat,
-                    lng: servingRes.lng,
-                    color: '#3b82f6',
-                    weight: 8,
-                    cellId: servingRes.id
-                });
-            }
-
-            const servingData = {
-                type: 'Serving',
-                name: servingRes.name || 'Unknown',
-                cellId: servingRes.id || p.cellId, // Fallback to log ID if no match
-                sc: p.sc,
-                rscp: p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : (p.parsed.serving.level || '-')),
-                ecno: p.ecno !== undefined ? p.ecno : (p.parsed.serving.ecno || '-'),
-                freq: sFreq || '-'
-            };
-
-            // 2. Active Set (A2, A3)
-            let activeRows = [];
-            // Parse Active Set string "SC1, SC2, SC3" or check properties
-            // The parser already calculates a2_sc, a2_rscp, etc. if active_set string exists
-            if (p.a2_sc !== undefined && p.a2_sc !== null) {
-                // Resolve A2 Name (using sc + serving freq as guess, or neighbor lookup)
-                const a2Res = resolveCellName(p.a2_sc, null, sLac, sFreq, p.lat, p.lng);
-                // Find EcNo for A2 - typically in neighbors list
-                const nA2 = p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a2_sc) : null;
-
-                // Add A2 Line (RED)
-                if (a2Res.lat && a2Res.lng) {
-                    connectionTargets.push({
-                        lat: a2Res.lat,
-                        lng: a2Res.lng,
-                        color: '#ef4444',
-                        weight: 8,
-                        cellId: a2Res.id
-                    });
-                }
-
-                activeRows.push({
-                    type: '2nd Active Set',
-                    name: a2Res.name || 'Unknown',
-                    cellId: a2Res.id,
-                    sc: p.a2_sc,
-                    rscp: p.a2_rscp || (nA2 ? nA2.rscp : '-'),
-                    ecno: nA2 ? nA2.ecno : '-',
-                    freq: sFreq || '-' // Intra-freq assumption for AS
-                });
-            }
-            if (p.a3_sc !== undefined && p.a3_sc !== null) {
-                const a3Res = resolveCellName(p.a3_sc, null, sLac, sFreq, p.lat, p.lng);
-                const nA3 = p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a3_sc) : null;
-
-                // Add A3 Line (RED)
-                if (a3Res.lat && a3Res.lng) {
-                    connectionTargets.push({
-                        lat: a3Res.lat,
-                        lng: a3Res.lng,
-                        color: '#ef4444',
-                        weight: 8,
-                        cellId: a3Res.id
-                    });
-                }
-
-                activeRows.push({
-                    type: '3rd Active Set',
-                    name: a3Res.name || 'Unknown',
-                    cellId: a3Res.id,
-                    sc: p.a3_sc,
-                    rscp: p.a3_rscp || (nA3 ? nA3.rscp : '-'),
-                    ecno: nA3 ? nA3.ecno : '-',
-                    freq: sFreq || '-'
-                });
-            }
-
-            // 3. Neighbors (N1, N2, N3)
-            // We want Top 3 neighbors that are NOT in Active Set (usually N1 might be A2?)
-            // But user request just says "N1, N2..." which implies the sorted neighbor list.
-            // Let's just show top 3 neighbors            // 3. Neighbors (N1...N)
-            let neighborRows = [];
-            if (p.parsed && p.parsed.neighbors) {
-                // Collect Active Set SCs to exclude them from Neighbor list
-                const activeSCs = [p.sc];
-                if (p.a2_sc !== undefined && p.a2_sc !== null) activeSCs.push(p.a2_sc);
-                if (p.a3_sc !== undefined && p.a3_sc !== null) activeSCs.push(p.a3_sc);
-
-                // Filter out ANY Active/Serving SC
-                const neighbors = p.parsed.neighbors.filter(n => !activeSCs.includes(n.pci));
-
-                // Show ALL remaining neighbors
-                neighbors.forEach((n, idx) => {
-                    const nRes = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng);
-
-                    // Add Neighbor Line (GREEN)
-                    if (nRes.lat && nRes.lng) {
-                        connectionTargets.push({
-                            lat: nRes.lat,
-                            lng: nRes.lng,
-                            color: '#22c55e',
-                            weight: 3,
-                            cellId: nRes.id
-                        });
-                    }
-
-                    neighborRows.push({
-                        type: `N${idx + 1}`,
-                        name: nRes.name || 'Unknown',
-                        cellId: nRes.id,
-                        sc: n.pci,
-                        rscp: n.rscp,
-                        ecno: n.ecno,
-                        freq: n.freq
-                    });
-                });
-            }
-
-            // Draw Connections
-            if (window.mapRenderer && window.mapRenderer.drawConnections) {
-                window.mapRenderer.drawConnections({ lat: p.lat, lng: p.lng }, connectionTargets);
-            }
-            // --- RENDER HTML ---
-            const renderRow = (d, isBold = false) => {
-                const hasId = d.cellId !== undefined && d.cellId !== null;
-                const nameContent = hasId
-                    ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${d.cellId})</span>`
-                    : d.name;
-
-                return `
-                    <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
-                        <td style="padding:4px 4px;">${d.type}</td>
-                        <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.highlightCell('${d.cellId}')" title="Click to highlight sector">
-                            ${nameContent}
-                        </td>
-                        <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
-                        <td style="padding:4px 4px; text-align:right;">${d.rscp !== undefined && d.rscp !== '-' && !isNaN(d.rscp) ? Number(d.rscp).toFixed(1) : '-'}</td>
-                        <td style="padding:4px 4px; text-align:right;">${d.ecno !== undefined && d.ecno !== '-' && !isNaN(d.ecno) ? Number(d.ecno).toFixed(1) : '-'}</td>
-                        <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
-                    </tr>
-                `;
-            };
-
-            let tableRows = '';
-            tableRows += renderRow(servingData, true); // Serving in Bold Name? or Type? User said "first line is cell name" (header), but also table.
-            activeRows.forEach(r => tableRows += renderRow(r));
-            neighborRows.forEach(r => tableRows += renderRow(r));
-
-
-            content.innerHTML = `
-                <!-- Header: Serving Cell Name -->
-                <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">
-                    ${servingRes.name || 'Unknown Site'}
-                </div>
-
-                <!-- Subheader: Lat/Lng -->
-                <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
-                    <span>Lat: ${p.lat.toFixed(6)}</span>
-                    <span>Lng: ${p.lng.toFixed(6)}</span>
-                    <span style="margin-left:auto; color:#666;">${p.time}</span>
-                </div>
-
-                <!-- Unified Table -->
-                 <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
-                    <tr style="border-bottom: 1px solid #555; text-align:left;">
-                        <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
-                    </tr>
-                    ${tableRows}
-                </table>
-            `;
-        };
 
         // Event Listeners for Controls
         const updateChartStyle = () => {
             // No Type Select anymore, or ignored
 
             chartSettings.servingColor = document.getElementById('pickerServing').value;
-            chartSettings.useGradient = document.getElementById('checkGradient').checked;
-            chartSettings.servingWidth = document.getElementById('rangeServingWidth').value;
+            chartSettings.useGradient = false; // Always false for bar chart
 
             if (isComposite) {
                 chartSettings.n1Color = document.getElementById('pickerN1').value;
-                chartSettings.n1Width = document.getElementById('rangeN1Width') ? document.getElementById('rangeN1Width').value : 2;
                 chartSettings.n2Color = document.getElementById('pickerN2').value;
-                chartSettings.n2Width = document.getElementById('rangeN2Width') ? document.getElementById('rangeN2Width').value : 2;
                 chartSettings.n3Color = document.getElementById('pickerN3').value;
-                chartSettings.n3Width = document.getElementById('rangeN3Width') ? document.getElementById('rangeN3Width').value : 2;
             }
 
             // Update Both Charts (Data & Options if needed)
-            lineChartInstance.data = getChartConfigData('line');
-            lineChartInstance.update();
-
             barChartInstance.data = getChartConfigData('bar');
             barChartInstance.update();
         };
 
         // Bind events
-        document.getElementById('chartTypeSelect').addEventListener('change', updateChartStyle);
         document.getElementById('pickerServing').addEventListener('input', updateChartStyle);
-        document.getElementById('checkGradient').addEventListener('change', updateChartStyle);
-        document.getElementById('rangeServingWidth').addEventListener('input', updateChartStyle);
 
         if (isComposite) {
             document.getElementById('pickerN1').addEventListener('input', updateChartStyle);
-            document.getElementById('rangeN1Width').addEventListener('input', updateChartStyle);
             document.getElementById('pickerN2').addEventListener('input', updateChartStyle);
-            document.getElementById('rangeN2Width').addEventListener('input', updateChartStyle);
             document.getElementById('pickerN3').addEventListener('input', updateChartStyle);
-            document.getElementById('rangeN3Width').addEventListener('input', updateChartStyle);
         }
 
-        // Helper for "Window of 10" Zoom
-        const zoomToActiveWindow = () => {
-            if (lineChartInstance && activeIndex !== null && activeIndex >= 0) {
-                const range = 5; // +/- 5 points = Window of ~10 (11 actually)
-                const min = Math.max(0, activeIndex - range);
-                const max = Math.min(lineChartInstance.data.labels.length - 1, activeIndex + range);
+        if (isComposite) {
+            document.getElementById('pickerN1').addEventListener('input', updateChartStyle);
+            document.getElementById('pickerN2').addEventListener('input', updateChartStyle);
+            document.getElementById('pickerN3').addEventListener('input', updateChartStyle);
+        }
 
-                // Update Scales directly for "Window" zoom
-                lineChartInstance.options.scales.x.min = min;
-                lineChartInstance.options.scales.x.max = max;
-                lineChartInstance.update();
+    }
+
+    // ----------------------------------------------------
+    // SEARCH LOGIC (CGPS)
+    // ----------------------------------------------------
+    const searchInput = document.getElementById('searchInput');
+    const searchBtn = document.getElementById('searchBtn');
+
+    window.searchMarker = null;
+
+    window.handleSearch = () => {
+        const query = searchInput.value.trim();
+        if (!query) return;
+
+        // Supported Formats:
+        // 33.58, -7.60 (Standard)
+        // 34,03360748	-6,7520895 (European/Tab)
+        // 33.58 -7.60 (Space)
+
+        // Robust Extraction: Find number-like patterns (integer or float with . or ,)
+        // Regex: Optional Sign + Digits + Optional (Dot/Comma + Digits)
+        const numberPattern = /[-+]?\d+([.,]\d+)?/g;
+        const matches = query.match(numberPattern);
+
+        if (matches && matches.length >= 2) {
+            // Normalize: Replace ',' with '.' for JS parsing
+            const lat = parseFloat(matches[0].replace(',', '.'));
+            const lng = parseFloat(matches[1].replace(',', '.'));
+
+            if (!isNaN(lat) && !isNaN(lng)) {
+                // Validate Range
+                if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                    alert(`Invalid Coordinates: Out of range (${lat}, ${lng}).`); // Added debug info
+                    return;
+                }
+
+                // Action
+                // 1. Zoom Map
+                window.map.flyTo([lat, lng], 18, { animate: true, duration: 1.5 });
+
+                // 2. Place Marker
+                if (window.searchMarker) window.map.removeLayer(window.searchMarker);
+
+                window.searchMarker = L.marker([lat, lng])
+                    .addTo(window.map)
+                    .bindPopup(`<b>Search Location</b><br>Lat: ${lat}<br>Lng: ${lng}`)
+                    .openPopup();
+
+                // 3. Update Status
+                document.getElementById('fileStatus').textContent = `Zoomed to ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+
             } else {
-                if (lineChartInstance) lineChartInstance.zoom(1.1);
+                alert("Invalid Coordinates format. Could not parse numbers.");
             }
+        } else {
+            alert("Could not find two coordinates in input. Please use 'Lat Lng' format.");
+        }
+    };
+
+    if (searchBtn) {
+        searchBtn.onclick = window.handleSearch;
+    }
+
+    if (searchInput) {
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') window.handleSearch();
+        });
+    }
+
+    // ----------------------------------------------------
+    // THEMATIC SETTINGS UI LOGIC
+    // ----------------------------------------------------
+    const themeSettingsBtn = document.getElementById('themeSettingsBtn');
+    const themeSettingsPanel = document.getElementById('themeSettingsPanel');
+    const closeThemeSettings = document.getElementById('closeThemeSettings');
+    const applyThemeBtn = document.getElementById('applyThemeBtn');
+    const resetThemeBtn = document.getElementById('resetThemeBtn');
+    const themeSelect = document.getElementById('themeSelect');
+    const thresholdsContainer = document.getElementById('thresholdsContainer');
+
+    // Legend Elements
+    let legendControl = null;
+
+    function updateLegend() {
+        if (!window.themeConfig || !window.map) return;
+
+        // Remove existing legend
+        if (legendControl) {
+            window.map.removeControl(legendControl);
+            legendControl = null;
+        }
+
+        const theme = themeSelect ? themeSelect.value : 'level';
+        const thresholds = window.themeConfig.thresholds[theme];
+        if (!thresholds) return;
+
+        const LegendCtor = L.Control.extend({
+            options: { position: 'bottomright' },
+            onAdd: function (map) {
+                const div = L.DomUtil.create('div', 'info legend');
+                div.style.background = 'rgba(30, 30, 30, 0.9)';
+                div.style.padding = '10px';
+                div.style.borderRadius = '5px';
+                div.style.boxShadow = '0 0 15px rgba(0,0,0,0.5)';
+                div.style.color = '#ddd';
+                div.style.fontSize = '11px';
+                div.style.fontFamily = 'Inter, sans-serif';
+
+                div.innerHTML = `<div style="font-weight:700; margin-bottom:5px;">${theme.toUpperCase()} Legend</div>`;
+
+                // Iterate thresholds (render exactly as configured)
+                thresholds.forEach(t => {
+                    let label = t.label;
+                    if (!label) {
+                        if (t.min !== undefined && t.max !== undefined) label = `${t.min} to ${t.max}`;
+                        else if (t.min !== undefined) label = `> ${t.min}`;
+                        else if (t.max !== undefined) label = `< ${t.max}`;
+                    }
+
+                    div.innerHTML += `
+                        <div style="display:flex; align-items:center; margin-bottom:4px;">
+                            <span style="background:${t.color}; width:15px; height:15px; display:inline-block; margin-right:8px; border-radius:3px;"></span>
+                            <span>${label}</span>
+                        </div>
+                   `;
+                });
+
+                return div;
+            }
+        });
+
+        legendControl = new LegendCtor();
+        legendControl.addTo(window.map);
+    }
+
+    // Hook updateLegend into UI actions
+    // Initial Load (delayed to ensure map exists)
+    setTimeout(updateLegend, 2000);
+
+    // Global Add/Remove Handlers (attached to window for inline onclicks)
+    window.removeThreshold = (idx) => {
+        const theme = themeSelect.value;
+        if (window.themeConfig.thresholds[theme].length <= 1) {
+            alert("Must have at least one range.");
+            return;
+        }
+        window.themeConfig.thresholds[theme].splice(idx, 1);
+        renderThresholdInputs();
+        // Note: Changes not applied to map until "Apply" is clicked, but UI updates immediately.
+    };
+
+    window.addThreshold = () => {
+        const theme = themeSelect.value;
+        // Add a default gray range
+        window.themeConfig.thresholds[theme].push({
+            min: -120, max: -100, color: '#cccccc', label: 'New Range'
+        });
+        renderThresholdInputs();
+    };
+
+    function renderThresholdInputs() {
+        if (!window.themeConfig) return;
+        const theme = themeSelect.value; // 'level' or 'quality'
+        const thresholds = window.themeConfig.thresholds[theme];
+        thresholdsContainer.innerHTML = '';
+
+        thresholds.forEach((t, idx) => {
+            const div = document.createElement('div');
+            div.className = 'setting-item';
+            div.style.marginBottom = '5px';
+
+            // Allow Min/Max editing based on position
+            let inputs = '';
+            // If it has Min, show Min Input
+            if (t.min !== undefined) {
+                inputs += `<label style="font-size:10px; color:#aaa;">Min</label>
+                           <input type="number" class="thresh-min" data-idx="${idx}" value="${t.min}" style="width:50px; background:#333; border:1px solid #555; color:#fff; font-size:11px; padding:2px;">`;
+            } else {
+                inputs += `<span style="font-size:10px; color:#aaa; width:50px; display:inline-block;">( -∞ )</span>`;
+            }
+
+            // If it has Max, show Max Input
+            if (t.max !== undefined) {
+                inputs += `<label style="font-size:10px; color:#aaa; margin-left:5px;">Max</label>
+                           <input type="number" class="thresh-max" data-idx="${idx}" value="${t.max}" style="width:50px; background:#333; border:1px solid #555; color:#fff; font-size:11px; padding:2px;">`;
+            } else {
+                inputs += `<span style="font-size:10px; color:#aaa; width:50px; display:inline-block; margin-left:5px;">( +∞ )</span>`;
+            }
+
+            // Remove Button
+            const removeBtn = `<button onclick="window.removeThreshold(${idx})" style="margin-left:auto; background:none; border:none; color:#ef4444; cursor:pointer;" title="Remove Range">✖</button>`;
+
+            div.innerHTML = `
+                <div style="display:flex; align-items:center;">
+                    <input type="color" class="thresh-color" data-idx="${idx}" value="${t.color}" style="border:none; width:20px; height:20px; cursor:pointer; margin-right:5px;">
+                    ${inputs}
+                    ${removeBtn}
+                </div>
+            `;
+            thresholdsContainer.appendChild(div);
+        });
+
+        // Add "Add Range" Button at bottom
+        const addDiv = document.createElement('div');
+        addDiv.style.textAlign = 'center';
+        addDiv.style.marginTop = '10px';
+        addDiv.innerHTML = `<button onclick="window.addThreshold()" style="background:#3b82f6; border:none; color:white; padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer;">+ Add Range</button>`;
+        thresholdsContainer.appendChild(addDiv);
+    }
+
+    if (themeSettingsBtn) {
+        themeSettingsBtn.onclick = () => {
+            themeSettingsPanel.style.display = 'block';
+            renderThresholdInputs();
+            // Maybe update legend preview? Legend updates on Apply
         };
-        // Expose globally for Sync
-        window.zoomChartToActive = zoomToActiveWindow;
+    }
 
-        document.getElementById('zoomInBtn').onclick = zoomToActiveWindow;
-        document.getElementById('zoomOutBtn').onclick = () => { lineChartInstance.zoom(0.9); };
-        document.getElementById('resetZoomBtn').onclick = () => { lineChartInstance.resetZoom(); };
+    if (closeThemeSettings) {
+        closeThemeSettings.onclick = () => {
+            themeSettingsPanel.style.display = 'none';
+        };
+    }
 
+    if (themeSelect) {
+        themeSelect.onchange = () => {
+            renderThresholdInputs();
+            // Automatically update legend to preview?
+            updateLegend();
+        };
+    }
+
+    if (applyThemeBtn) {
+        applyThemeBtn.onclick = () => {
+            const theme = themeSelect.value;
+            const inputs = thresholdsContainer.querySelectorAll('.setting-item');
+
+            // Reconstruct thresholds array
+            let newThresholds = [];
+            inputs.forEach(div => {
+                const color = div.querySelector('.thresh-color').value;
+                const minInput = div.querySelector('.thresh-min');
+                const maxInput = div.querySelector('.thresh-max');
+
+                let t = { color: color };
+                if (minInput) t.min = parseFloat(minInput.value);
+                if (maxInput) t.max = parseFloat(maxInput.value);
+
+                // Keep label? (Simple logic: recreate label on load or lose it)
+                // For now, lose custom label, rely on auto-label in legend
+                if (t.min !== undefined && t.max !== undefined) t.label = `${t.min} to ${t.max}`;
+                else if (t.min !== undefined) t.label = `> ${t.min}`;
+                else if (t.max !== undefined) t.label = `< ${t.max}`;
+
+                newThresholds.push(t);
+            });
+
+            // Update Config
+            window.themeConfig.thresholds[theme] = newThresholds;
+
+            // Re-render Legend
+            updateLegend();
+
+            // Update Map Layers
+            // Iterate all visible log layers and re-render if they match current metric type
+            loadedLogs.forEach(log => {
+                const currentMetric = log.currentParam || 'level'; // We need to create this prop if missing
+                const key = window.getThresholdKey(currentMetric);
+                if (key === theme) {
+                    // Force Re-render
+                    map.updateLayerMetric(log.id, log.points, currentMetric);
+                }
+            });
+            alert('Theme Updated!');
+        };
     }
 
     // Grid Logic (Moved from openChartModal)
@@ -1492,16 +1818,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     // GLOBAL SYNC HIGHLIGHTER
     // ----------------------------------------------------
+    // Optimization: Track last highlighted row to avoid O(N) DOM query
+    window.lastHighlightedRowIndex = null;
+
     window.highlightPoint = (logId, index) => {
         // 1. Highlight Grid Row
         if (window.currentGridLogId === logId) {
-            const rows = document.querySelectorAll('.grid-row');
-            rows.forEach(r => r.classList.remove('selected-row'));
+            // efficient removal
+            if (window.lastHighlightedRowIndex !== null && window.lastHighlightedRowIndex !== index) {
+                const oldRow = document.getElementById(`grid-row-${window.lastHighlightedRowIndex}`);
+                if (oldRow) oldRow.classList.remove('selected-row');
+            }
 
+            // efficient addition
             const row = document.getElementById(`grid-row-${index}`);
             if (row) {
                 row.classList.add('selected-row');
-                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Debounce scroll or check if needed? ScrollIntoView is expensive.
+                // Only scroll if strictly necessary? For now, keep it but maybe 'nearest'?
+                row.scrollIntoView({ behavior: 'auto', block: 'nearest' }); // 'smooth' is slow for rapid sync
+                window.lastHighlightedRowIndex = index;
             }
         }
 
@@ -1968,7 +2304,195 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     // CENTRALIZED SYNCHRONIZATION
     // ----------------------------------------------------
+    // Global function to update the Floating Info Panel
+    window.updateFloatingInfoPanel = (p) => {
+        try {
+            const panel = document.getElementById('floatingInfoPanel');
+            const content = document.getElementById('infoPanelContent');
+            if (!panel || !content) return;
+
+            // Debug Log
+            console.log("DEBUG: updateFloatingInfoPanel called for point:", p);
+
+            // Show panel if hidden
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+            }
+
+            // --- Helper: Lookup Cell Name from SiteData ---
+            const resolveCellName = (pci, cellId, lac, freq, lat, lng, rnc) => {
+                const NO_MATCH = { name: null, id: null };
+                try {
+                    // 0. Helper & Dist
+                    if (!window.mapRenderer || !window.mapRenderer.siteData) return NO_MATCH;
+                    const siteData = window.mapRenderer.siteData;
+
+                    const getName = (s) => s.cellName || s.name || s.siteName;
+                    const getDist = (s) => {
+                        if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999;
+                        return Math.sqrt(Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2));
+                    };
+
+                    // 1. Serving Cell Logic: STRICT CellID Match
+                    if (cellId !== undefined && cellId !== null) {
+                        // A. Exact Match (Long ID)
+                        let match = siteData.find(s => s.cellId == cellId);
+
+                        // B. Fallback: Short CID + LAC Match
+                        if (!match && lac) {
+                            const shortCid = cellId & 0xFFFF;
+                            match = siteData.find(s => s.cellId == shortCid && s.lac == lac);
+                        }
+
+                        // C. Fallback: RNC/CID Format Match
+                        if (!match && rnc !== undefined && rnc !== null) {
+                            const shortCid = cellId & 0xFFFF;
+                            const rncCidStr = `${rnc}/${shortCid}`;
+                            const norm = (val) => String(val).replace(/\s/g, '');
+                            match = siteData.find(s => norm(s.cellId) == norm(rncCidStr));
+                        }
+
+                        if (match) return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng };
+                    }
+
+                    // 2. Neighbor Logic: SC + Freq + Proximity
+                    if (pci !== undefined && pci !== null) {
+                        let candidates = siteData.filter(s => s.pci == pci || s.sc == pci);
+                        if (freq) {
+                            const freqCandidates = candidates.filter(s => {
+                                const sFreq = s.freq || s.dl_freq;
+                                return Math.abs(parseFloat(sFreq) - parseFloat(freq)) < 5;
+                            });
+                            if (freqCandidates.length > 0) candidates = freqCandidates;
+                        }
+                        if (candidates.length > 0) {
+                            candidates.sort((a, b) => getDist(a) - getDist(b));
+                            return { name: getName(candidates[0]), id: candidates[0].cellId, lat: candidates[0].lat, lng: candidates[0].lng };
+                        }
+                    }
+                } catch (err) {
+                    console.error("Error in resolveCellName:", err);
+                }
+                return NO_MATCH;
+            };
+
+            // --- DATA PREPARATION ---
+            let connectionTargets = [];
+
+            // 1. Serving Cell
+            const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
+            const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
+
+            let servingRes = resolveCellName(p.sc, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
+            if (!servingRes.name && p.cellId) servingRes = resolveCellName(null, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
+
+            if (servingRes.lat && servingRes.lng) {
+                connectionTargets.push({
+                    lat: servingRes.lat,
+                    lng: servingRes.lng,
+                    color: '#3b82f6',
+                    weight: 8,
+                    cellId: servingRes.id
+                });
+            }
+
+            const safeVal = (v) => (v !== undefined && v !== '-' && !isNaN(v) ? Number(v).toFixed(1) : '-');
+
+            const servingData = {
+                type: 'Serving',
+                name: servingRes.name || 'Unknown',
+                cellId: servingRes.id || p.cellId,
+                sc: p.sc,
+                rscp: p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : (p.parsed && p.parsed.serving ? p.parsed.serving.level : '-')),
+                ecno: p.ecno !== undefined ? p.ecno : (p.parsed && p.parsed.serving ? p.parsed.serving.ecno : '-'),
+                freq: sFreq || '-'
+            };
+
+            // 2. Active Set
+            let activeRows = [];
+            if (p.a2_sc !== undefined && p.a2_sc !== null) {
+                const a2Res = resolveCellName(p.a2_sc, null, sLac, sFreq, p.lat, p.lng);
+                const nA2 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a2_sc) : null;
+                if (a2Res.lat && a2Res.lng) connectionTargets.push({ lat: a2Res.lat, lng: a2Res.lng, color: '#ef4444', weight: 8, cellId: a2Res.id });
+                activeRows.push({
+                    type: '2nd Active Set', name: a2Res.name || 'Unknown', cellId: a2Res.id, sc: p.a2_sc,
+                    rscp: p.a2_rscp || (nA2 ? nA2.rscp : '-'), ecno: nA2 ? nA2.ecno : '-', freq: sFreq || '-'
+                });
+            }
+            if (p.a3_sc !== undefined && p.a3_sc !== null) {
+                const a3Res = resolveCellName(p.a3_sc, null, sLac, sFreq, p.lat, p.lng);
+                const nA3 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a3_sc) : null;
+                if (a3Res.lat && a3Res.lng) connectionTargets.push({ lat: a3Res.lat, lng: a3Res.lng, color: '#ef4444', weight: 8, cellId: a3Res.id });
+                activeRows.push({
+                    type: '3rd Active Set', name: a3Res.name || 'Unknown', cellId: a3Res.id, sc: p.a3_sc,
+                    rscp: p.a3_rscp || (nA3 ? nA3.rscp : '-'), ecno: nA3 ? nA3.ecno : '-', freq: sFreq || '-'
+                });
+            }
+
+            // 3. Neighbors
+            let neighborRows = [];
+            if (p.parsed && p.parsed.neighbors) {
+                const activeSCs = [p.sc, p.a2_sc, p.a3_sc].filter(x => x !== undefined && x !== null);
+                const neighbors = p.parsed.neighbors.filter(n => !activeSCs.includes(n.pci));
+                neighbors.forEach((n, idx) => {
+                    const nRes = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng);
+                    if (nRes.lat && nRes.lng) connectionTargets.push({ lat: nRes.lat, lng: nRes.lng, color: '#22c55e', weight: 3, cellId: nRes.id });
+                    neighborRows.push({
+                        type: `N${idx + 1}`, name: nRes.name || 'Unknown', cellId: nRes.id, sc: n.pci,
+                        rscp: n.rscp, ecno: n.ecno, freq: n.freq
+                    });
+                });
+            }
+
+            if (window.mapRenderer && window.mapRenderer.drawConnections) {
+                window.mapRenderer.drawConnections({ lat: p.lat, lng: p.lng }, connectionTargets);
+            }
+
+            const renderRow = (d, isBold = false) => {
+                const hasId = d.cellId !== undefined && d.cellId !== null;
+                const nameContent = hasId ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${d.cellId})</span>` : d.name;
+                return `
+                    <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
+                        <td style="padding:4px 4px;">${d.type}</td>
+                        <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.highlightCell('${d.cellId}')">${nameContent}</td>
+                        <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
+                        <td style="padding:4px 4px; text-align:right;">${safeVal(d.rscp)}</td>
+                        <td style="padding:4px 4px; text-align:right;">${safeVal(d.ecno)}</td>
+                        <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
+                    </tr>`;
+            };
+
+            let tableRows = renderRow(servingData, true);
+            activeRows.forEach(r => tableRows += renderRow(r));
+            neighborRows.forEach(r => tableRows += renderRow(r));
+
+            content.innerHTML = `
+                <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || 'Unknown Site'}</div>
+                <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
+                    <span>Lat: ${Number(p.lat).toFixed(6)}</span>
+                    <span>Lng: ${Number(p.lng).toFixed(6)}</span>
+                    <span style="margin-left:auto; color:#666;">${p.time}</span>
+                </div>
+                <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
+                    <tr style="border-bottom: 1px solid #555; text-align:left;">
+                        <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
+                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
+                    </tr>
+                    ${tableRows}
+                </table>
+            `;
+
+        } catch (err) {
+            console.error("Critical Error in updateFloatingInfoPanel:", err);
+        }
+    };
+
     window.syncMarker = null; // Global marker for current sync point
+
 
     window.globalSync = (logId, index, source) => {
         const log = loadedLogs.find(l => l.id === logId);
@@ -1976,6 +2500,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const point = log.points[index];
 
+        // 1. Update Map (Marker & View)
         // 1. Update Map (Marker & View)
         if (source !== 'map') {
             if (!window.syncMarker) {
@@ -1989,14 +2514,12 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 window.syncMarker.setLatLng([point.lat, point.lng]);
             }
+        }
 
-            // Optional: Pan to point if out of view (or always?)
-            // Let's only pan if we haven't panned recently or if it's a click-like event?
-            // For chart scrubbing, we might NOT want to pan crazily.
-            // Let's pan only if it's NOT a rapid scrub (check source).
-            if (source !== 'chart_scrub') {
-                window.map.panTo([point.lat, point.lng], { animate: true, duration: 0.5 });
-            }
+        // View Navigation (Zoom/Pan) - User Request: Zoom in on click
+        if (source !== 'chart_scrub') {
+            const targetZoom = Math.max(window.map.getZoom(), 17);
+            window.map.flyTo([point.lat, point.lng], targetZoom, { animate: true, duration: 0.5 });
         }
 
         // 2. Update Charts
@@ -2082,59 +2605,120 @@ document.addEventListener('DOMContentLoaded', () => {
 
         fileStatus.textContent = `Loading ${file.name}...`;
 
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const content = event.target.result;
-            fileStatus.textContent = 'Parsing...';
-
-            setTimeout(() => {
-                try {
-                    const result = NMFParser.parse(content);
-                    // Handle new parser return format (object vs array)
-                    const parsedData = Array.isArray(result) ? result : result.points;
-                    const technology = Array.isArray(result) ? 'Unknown' : result.tech;
-                    const signalingData = !Array.isArray(result) ? result.signaling : [];
-
-                    console.log(`Parsed ${parsedData.length} measurement points and ${signalingData ? signalingData.length : 0} signaling messages. Tech: ${technology}`);
-
-                    if (parsedData.length > 0 || (signalingData && signalingData.length > 0)) {
-                        const id = Date.now().toString();
-                        const name = file.name.replace(/\.[^/.]+$/, "");
-
-                        // Add to Logs
-                        loadedLogs.push({
-                            id: id,
-                            name: name,
-                            points: parsedData,
-                            signaling: signalingData,
-                            tech: technology
-                        });
-
-                        if (parsedData.length > 0) {
-                            map.addLogLayer(id, parsedData);
-                            const first = parsedData[0];
-                            map.setView(first.lat, first.lng);
-                        }
-
-                        // Add Events Layer (HO Fail, Drop, etc.)
-                        if (signalingData && signalingData.length > 0) {
-                            map.addEventsLayer(id, signalingData);
-                        }
-
-                        updateLogsList();
-                        fileStatus.textContent = `Loaded ${parsedData.length} pts (${technology})`;
-
-                    } else {
-                        fileStatus.textContent = 'No valid data found.';
+        // NMFS Binary Check
+        if (file.name.toLowerCase().endsWith('.nmfs')) {
+            const headerReader = new FileReader();
+            headerReader.onload = (event) => {
+                const arr = new Uint8Array(event.target.result);
+                // ASCII for NMFS is 78 77 70 83 (0x4e 0x4d 0x46 0x53)
+                // Check if starts with NMFS
+                let isNMFS = false;
+                if (arr.length >= 4) {
+                    if (arr[0] === 0x4e && arr[1] === 0x4d && arr[2] === 0x46 && arr[3] === 0x53) {
+                        isNMFS = true;
                     }
-                } catch (err) {
-                    console.error('Parser Error:', err);
-                    fileStatus.textContent = 'Error parsing file: ' + err.message;
                 }
-            }, 100);
-        };
-        reader.readAsText(file);
-        e.target.value = '';
+
+                if (isNMFS) {
+                    alert("⚠️ SECURE FILE DETECTED\n\nThis is a proprietary Keysight Nemo 'Secure' Binary file (.nmfs).\n\nThis application can only parse TEXT log files (.nmf or .csv).\n\nPlease open this file in Nemo Outdoor/Analyze and export it as 'Nemo File Format (Text)'.");
+                    fileStatus.textContent = 'Error: Encrypted NMFS file.';
+                    e.target.value = ''; // Reset
+                    return;
+                } else {
+                    // Fallback: Maybe it's a text file named .nmfs? Try parsing as text.
+                    console.warn("File named .nmfs but missing signature. Attempting text parse...");
+                    parseTextLog(file);
+                }
+            };
+            headerReader.readAsArrayBuffer(file.slice(0, 10));
+            return;
+        }
+
+        // Excel / CSV Detection (Binary Read)
+        if (file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls')) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    fileStatus.textContent = 'Parsing Excel...';
+                    const data = event.target.result;
+                    const result = ExcelParser.parse(data);
+
+                    handleParsedResult(result, file.name);
+
+                } catch (err) {
+                    console.error('Excel Parse Error:', err);
+                    fileStatus.textContent = 'Error parsing Excel: ' + err.message;
+                }
+            };
+            reader.readAsArrayBuffer(file);
+            e.target.value = '';
+            return;
+        }
+
+        // Standard Text Log
+        parseTextLog(file);
+
+        function parseTextLog(f) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const content = event.target.result;
+                fileStatus.textContent = 'Parsing...';
+
+                setTimeout(() => {
+                    try {
+                        const result = NMFParser.parse(content);
+                        handleParsedResult(result, f.name);
+                    } catch (err) {
+                        console.error('Parser Error:', err);
+                        fileStatus.textContent = 'Error parsing file: ' + err.message;
+                    }
+                }, 100);
+            };
+            reader.readAsText(f);
+            e.target.value = '';
+        }
+
+        function handleParsedResult(result, fileName) {
+            // Handle new parser return format (object vs array)
+            const parsedData = Array.isArray(result) ? result : result.points;
+            const technology = Array.isArray(result) ? 'Unknown' : result.tech;
+            const signalingData = !Array.isArray(result) ? result.signaling : [];
+            const customMetrics = !Array.isArray(result) ? result.customMetrics : []; // New for Excel
+
+            console.log(`Parsed ${parsedData.length} measurement points and ${signalingData ? signalingData.length : 0} signaling messages. Tech: ${technology}`);
+
+            if (parsedData.length > 0 || (signalingData && signalingData.length > 0)) {
+                const id = Date.now().toString();
+                const name = fileName.replace(/\.[^/.]+$/, "");
+
+                // Add to Logs
+                loadedLogs.push({
+                    id: id,
+                    name: name,
+                    points: parsedData,
+                    signaling: signalingData,
+                    tech: technology,
+                    customMetrics: customMetrics // Store detected columns
+                });
+
+                if (parsedData.length > 0) {
+                    map.addLogLayer(id, parsedData);
+                    const first = parsedData[0];
+                    map.setView(first.lat, first.lng);
+                }
+
+                // Add Events Layer (HO Fail, Drop, etc.)
+                if (signalingData && signalingData.length > 0) {
+                    map.addEventsLayer(id, signalingData);
+                }
+
+                updateLogsList();
+                fileStatus.textContent = `Loaded ${parsedData.length} pts (${technology})`;
+
+            } else {
+                fileStatus.textContent = 'No valid data found.';
+            }
+        }
     });
 
     // Site Import Logic
@@ -2830,48 +3414,70 @@ document.addEventListener('DOMContentLoaded', () => {
                 return d;
             };
 
-            // GROUP: Serving Cell
-            actions.appendChild(addHeader('Serving Cell'));
-            actions.appendChild(addAction('Serving RSCP/Level', 'rscp_not_combined'));
-            actions.appendChild(addAction('Serving EcNo', 'ecno'));
-            actions.appendChild(addAction('Serving SC/SC', 'sc'));
-            actions.appendChild(addAction('Serving RNC', 'rnc'));
-            actions.appendChild(addAction('Active Set', 'active_set'));
-            actions.appendChild(addAction('Serving Freq', 'freq'));
-            actions.appendChild(addAction('Serving Band', 'band'));
-            actions.appendChild(addAction('LAC', 'lac'));
-            actions.appendChild(addAction('Cell ID', 'cellId'));
-            actions.appendChild(addAction('Serving Cell Name', 'serving_cell_name'));
+            // NEW: DYNAMIC METRICS VS FIXED METRICS
+            // If customMetrics exist, use them. Else use Fixed NMF list.
 
-            // GROUP: Active Set (Individual)
-            actions.appendChild(addHeader('Active Set Members'));
-            actions.appendChild(addAction('A1 RSCP', 'active_set_A1_RSCP'));
-            actions.appendChild(addAction('A1 SC', 'active_set_A1_SC'));
-            actions.appendChild(addAction('A2 RSCP', 'active_set_A2_RSCP'));
-            actions.appendChild(addAction('A2 SC', 'active_set_A2_SC'));
-            actions.appendChild(addAction('A3 RSCP', 'active_set_A3_RSCP'));
-            actions.appendChild(addAction('A3 SC', 'active_set_A3_SC'));
+            if (log.customMetrics && log.customMetrics.length > 0) {
+                actions.appendChild(addHeader('Detected Metrics'));
 
-            // GROUP: Neighbors
-            actions.appendChild(addHeader('Neighbors'));
-            // Neighbors Loop (N1 - N8)
-            for (let i = 1; i <= 8; i++) {
-                actions.appendChild(addAction(`N${i} RSCP`, `n${i}_rscp`));
-                actions.appendChild(addAction(`N${i} EcNo`, `n${i}_ecno`));
-                actions.appendChild(addAction(`N${i} SC`, `n${i}_sc`));
+                log.customMetrics.forEach(metric => {
+                    // Create clean label: e.g. "RSRP (dBm)" -> "RSRP" or just keep originals
+                    // For dynamic, original is best to avoid confusion.
+                    actions.appendChild(addAction(metric, metric));
+                });
+
+                // Also add "Time" and "GPS" if they exist in basic points but maybe not in customMetrics list?
+                // The parser excludes Time/Lat/Lon from customMetrics.
+                // So we can re-add them if we want buttons for them (usually just Time/Speed).
+                actions.appendChild(document.createElement('hr')).style.cssText = "border:0; border-top:1px solid #444; margin:10px 0;";
+                actions.appendChild(addAction('Time', 'time'));
+
+            } else {
+                // FALLBACK: OLD STATIC NMF METRICS
+
+                // GROUP: Serving Cell
+                actions.appendChild(addHeader('Serving Cell'));
+                actions.appendChild(addAction('Serving RSCP/Level', 'rscp_not_combined'));
+                actions.appendChild(addAction('Serving EcNo', 'ecno'));
+                actions.appendChild(addAction('Serving SC/SC', 'sc'));
+                actions.appendChild(addAction('Serving RNC', 'rnc'));
+                actions.appendChild(addAction('Active Set', 'active_set'));
+                actions.appendChild(addAction('Serving Freq', 'freq'));
+                actions.appendChild(addAction('Serving Band', 'band'));
+                actions.appendChild(addAction('LAC', 'lac'));
+                actions.appendChild(addAction('Cell ID', 'cellId'));
+                actions.appendChild(addAction('Serving Cell Name', 'serving_cell_name'));
+
+                // GROUP: Active Set (Individual)
+                actions.appendChild(addHeader('Active Set Members'));
+                actions.appendChild(addAction('A1 RSCP', 'active_set_A1_RSCP'));
+                actions.appendChild(addAction('A1 SC', 'active_set_A1_SC'));
+                actions.appendChild(addAction('A2 RSCP', 'active_set_A2_RSCP'));
+                actions.appendChild(addAction('A2 SC', 'active_set_A2_SC'));
+                actions.appendChild(addAction('A3 RSCP', 'active_set_A3_RSCP'));
+                actions.appendChild(addAction('A3 SC', 'active_set_A3_SC'));
+
+                // GROUP: Neighbors
+                actions.appendChild(addHeader('Neighbors'));
+                // Neighbors Loop (N1 - N8)
+                for (let i = 1; i <= 8; i++) {
+                    actions.appendChild(addAction(`N${i} RSCP`, `n${i}_rscp`));
+                    actions.appendChild(addAction(`N${i} EcNo`, `n${i}_ecno`));
+                    actions.appendChild(addAction(`N${i} SC`, `n${i}_sc`));
+                }
+
+                // OUTSIDE GROUPS: Composite & General
+                actions.appendChild(document.createElement('hr')).style.cssText = "border:0; border-top:1px solid #444; margin:10px 0;";
+
+                actions.appendChild(addAction('Composite RSCP & Neighbors', 'rscp_not_combined'));
+
+                actions.appendChild(document.createElement('hr')).style.cssText = "border:0; border-top:1px solid #444; margin:10px 0;";
+
+                // GPS & Others
+                actions.appendChild(addAction('GPS Speed', 'speed'));
+                actions.appendChild(addAction('GPS Altitude', 'alt'));
+                actions.appendChild(addAction('Time', 'time'));
             }
-
-            // OUTSIDE GROUPS: Composite & General
-            actions.appendChild(document.createElement('hr')).style.cssText = "border:0; border-top:1px solid #444; margin:10px 0;";
-
-            actions.appendChild(addAction('Composite RSCP & Neighbors', 'rscp_not_combined'));
-
-            actions.appendChild(document.createElement('hr')).style.cssText = "border:0; border-top:1px solid #444; margin:10px 0;";
-
-            // GPS & Others
-            actions.appendChild(addAction('GPS Speed', 'speed'));
-            actions.appendChild(addAction('GPS Altitude', 'alt'));
-            actions.appendChild(addAction('Time', 'time'));
 
             // Resurrected Signaling Modal Button
             const sigBtn = document.createElement('div');

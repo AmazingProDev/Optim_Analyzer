@@ -539,3 +539,49 @@ body,
 .dark-popup a.leaflet-popup-close-button:hover {
     color: #fff;
 }
+
+/* AI Spinner */
+.ai-spinner {
+    width: 50px;
+    height: 50px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #a855f7;
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* AI Markdown Styles */
+#aiContent h1,
+#aiContent h2,
+#aiContent h3 {
+    margin-top: 20px;
+    margin-bottom: 10px;
+    color: #f8fafc;
+}
+
+#aiContent ul,
+#aiContent ol {
+    margin-left: 20px;
+    margin-bottom: 15px;
+}
+
+#aiContent li {
+    margin-bottom: 5px;
+}
+
+#aiContent strong {
+    color: #a855f7;
+}
+
+#aiContent code {
+    background: #2d2d2d;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-family: monospace;
+}
