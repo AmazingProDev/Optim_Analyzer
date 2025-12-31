@@ -270,8 +270,12 @@ class MapRenderer {
 
         points.forEach(p => {
             if (!p.event) return;
+            // Skip points with invalid valid coordinates to prevent Leaflet crash
+            if (p.lat === undefined || p.lat === null || p.lng === undefined || p.lng === null || isNaN(p.lat) || isNaN(p.lng)) return;
 
             let color = '#000';
+
+
             let fillColor = '#fff';
             let radius = 6;
             let label = p.event;
@@ -313,11 +317,14 @@ class MapRenderer {
             });
 
             // Add popup with details
+            const latStr = (p.lat !== undefined && p.lat !== null) ? p.lat.toFixed(5) : 'N/A';
+            const lngStr = (p.lng !== undefined && p.lng !== null) ? p.lng.toFixed(5) : 'N/A';
+
             marker.bindPopup(`
                 <b>${label}</b><br>
                 Time: ${p.time}<br>
                 Cause: ${p.message}<br>
-                lat: ${p.lat.toFixed(5)}, lng: ${p.lng.toFixed(5)}
+                lat: ${latStr}, lng: ${lngStr}
              `);
 
             layerGroup.addLayer(marker);
@@ -442,6 +449,21 @@ class MapRenderer {
                 </div>
             `;
             polygon.bindPopup(content);
+
+            // Click Event for Spider Option
+            polygon.on('click', () => {
+                window.dispatchEvent(new CustomEvent('site-sector-clicked', {
+                    detail: {
+                        cellId: s.cellId,
+                        sc: s.sc || s.pci,
+                        lac: s.lac,
+                        freq: s.freq,
+                        lat: s.lat,
+                        lng: s.lng,
+                        azimuth: azimuth
+                    }
+                }));
+            });
         });
 
         this.sitesLayer.addTo(this.map);
@@ -536,5 +558,7 @@ class MapRenderer {
     clearConnections() {
         this.connectionsLayer.clearLayers();
     }
+
+
 
 }

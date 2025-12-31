@@ -5,6 +5,7 @@ const NMFParser = {
         let currentGPS = null;
         let currentLAC = 'N/A';
         let currentCellID = 'N/A';
+        let currentPSC = null;
 
         const uniqueHeaders = new Set();
 
@@ -38,6 +39,11 @@ const NMFParser = {
                             if (k + 1 < parts.length) {
                                 const nextVal = parseInt(parts[k + 1]);
                                 if (!isNaN(nextVal) && nextVal > 0 && nextVal < 65535) currentLAC = nextVal;
+                                // Try to guess PSC after LAC (k+2)
+                                if (k + 2 < parts.length) {
+                                    const pscVal = parseInt(parts[k + 2]);
+                                    if (!isNaN(pscVal) && pscVal >= 0 && pscVal <= 511) currentPSC = pscVal;
+                                }
                             }
                             break;
                         }
@@ -49,6 +55,35 @@ const NMFParser = {
                             if (!isNaN(cid) && cid > 0) currentCellID = cid;
                             const lac = parseInt(parts[8]);
                             if (!isNaN(lac)) currentLAC = lac;
+                            // Heuristic: Search for a valid PSC (Integer 0-511, NOT float)
+                            // Skip known indices for CellID (7/9) and LAC (8/10)
+                            // We look specifically for an integer that doesn't contain '.'
+                            for (let k = 9; k < parts.length; k++) {
+                                if (parts[k] && !parts[k].includes('.') && parts[k] !== '') {
+                                    const candidate = parseInt(parts[k]);
+                                    // PSC is usually <= 511. 
+                                    // Avoid confusing with other small integers like tech (5) or status (1) or PLMN (50001)
+                                    // PSC usually appears around indices 9-12.
+                                    if (!isNaN(candidate) && candidate >= 0 && candidate <= 511) {
+                                        // Double check it's not the same as a small CellID or LAC (unlikely here as they are large)
+                                        // Basic Priority: Index 9, 11, 12... 
+                                        // Current Logic: Take the first valid integer found after index 9?
+                                        // Or specific index? 
+                                        // Let's rely on it being the first "clean" integer > 0? No, SC can be 0.
+
+                                        // Given "3.0" at index 9 was filtered, let's see what's next.
+                                        // In the user's log: 3.0, 320, 6.0, 640...
+                                        // 320 is valid PSC. 640 is invalid.
+                                        // So maybe 320 is the PSC?
+
+                                        // Let's extract valid candidates and log them for now
+                                        // But to fix the "3" issue, excluding '.' is the key.
+                                        currentPSC = candidate;
+                                        console.log(`[Parser] CHI Found PSC Candidate (Index ${k}): ${candidate}`);
+                                        break; // Take first match? 
+                                    }
+                                }
+                            }
                         }
                     }
                 } else if (tech === 7) {
@@ -82,6 +117,10 @@ const NMFParser = {
             } else if (header === 'CELLMEAS') {
                 if (!currentGPS) continue;
 
+                // DEBUG: Log CELLMEAS to find PSC (Looking for 288)
+                // Only log first few to avoid spam
+                if (Math.random() < 0.01) console.log('[Parser] CELLMEAS Debug:', parts);
+
                 const techId = parseInt(parts[3]);
                 let servingFreq = 0;
                 let servingLevel = -999;
@@ -108,6 +147,11 @@ const NMFParser = {
                         // Reverted filter: User explicitly wants to see minor values like 0/1, 0/2.
                         // We strictly check valid positive integer > 0.
                         if (!isNaN(cellIdCandidate) && cellIdCandidate > 0) {
+                            if (currentCellID !== 'N/A' && currentCellID !== cellIdCandidate) {
+                                // CellID changed without a new CHI header? 
+                                // Invalidate PSC to avoid applying the old sector's SC to the new cell.
+                                currentPSC = null;
+                            }
                             currentCellID = cellIdCandidate;
                         }
                     }
@@ -118,6 +162,11 @@ const NMFParser = {
                     else if (servingFreq >= 2937 && servingFreq <= 3088) servingBand = 'B8 (900)';
                     else if (servingFreq > 10000) servingBand = 'High Band';
                     else if (servingFreq < 4000) servingBand = 'Low Band';
+
+                    // Use PSC from CHI if available (REVERTED: CHI index 9 is bad)
+                    // if (currentPSC !== null) {
+                    //    servingSc = currentPSC;
+                    // }
 
                     nStartIndex = 14;
                     nBlockSize = 17;
@@ -440,71 +489,166 @@ const ExcelParser = {
         // 2. Identify Metrics (Exclude key columns)
         const customMetrics = keys.filter(k => k !== timeKey && k !== latKey && k !== lngKey);
 
-        const points = [];
+        // 1. Identify Best Columns for Primary Metrics
+        const detectBestColumn = (candidates, exclusions = []) => {
+            // Enhanced exclusion check
+            const isExcluded = (n) => {
+                if (n.includes('serving')) return false; // Always trust 'serving'
+                if (exclusions.some(ex => n.includes(ex))) return true;
 
+                // Strict 'AS' and 'Neighbor' patterns
+                if (n.includes('as') && !n.includes('meas') && !n.includes('class') && !n.includes('phase') && !n.includes('pass') && !n.includes('alias')) return true;
+                if (/\bn\d/.test(n) || /^n\d/.test(n)) return true; // n1, n2...
+
+                return false;
+            };
+
+            for (let cand of candidates) {
+                // 1. Strict match
+                let match = keys.find(k => {
+                    const n = normalize(k);
+                    if (isExcluded(n)) return false;
+                    return n === cand || n === normalize(cand);
+                });
+                if (match) return match;
+
+                // 2. Loose match
+                match = keys.find(k => {
+                    const n = normalize(k);
+                    if (isExcluded(n)) return false;
+                    return n.includes(cand);
+                });
+                if (match) return match;
+            }
+            return null;
+        };
+
+        const scCol = detectBestColumn(['servingcellsc', 'servingsc', 'primarysc', 'primarypci', 'dl_pci', 'dl_sc', 'bestsc', 'bestpci', 'sc', 'pci', 'psc', 'scramblingcode'], ['active', 'set', 'neighbor', 'target', 'candidate']);
+        const levelCol = detectBestColumn(['servingcellrsrp', 'servingrsrp', 'rsrp', 'rscp', 'level'], ['active', 'set', 'neighbor']);
+        const ecnoCol = detectBestColumn(['servingcellrsrq', 'servingrsrq', 'rsrq', 'ecno', 'sinr'], ['active', 'set', 'neighbor']);
+        const freqCol = detectBestColumn(['servingcelldlearfcn', 'earfcn', 'uarfcn', 'freq', 'channel'], ['active', 'set', 'neighbor']);
+        const bandCol = detectBestColumn(['band'], ['active', 'set', 'neighbor']);
+        const cellIdCol = detectBestColumn(['cellid', 'ci', 'cid', 'cell_id', 'identity'], ['active', 'set', 'neighbor', 'target']); // Add CellID detection
+
+        const points = [];
         const len = json.length;
+
         for (let i = 0; i < len; i++) {
             const row = json[i];
-            // Safe Parsing with minimal overhead
             const lat = typeof row[latKey] === 'number' ? row[latKey] : parseFloat(row[latKey]);
             const lng = typeof row[lngKey] === 'number' ? row[lngKey] : parseFloat(row[lngKey]);
             const time = row[timeKey];
 
             if (!isNaN(lat) && !isNaN(lng)) {
-
-                // Create Base Point
+                // Create Base Point from Best Columns
                 const point = {
                     lat: lat,
                     lng: lng,
-                    time: time || 'N/A', // ensure string
+                    time: time || 'N/A',
                     type: 'MEASUREMENT',
-                    // Default legacy properties to avoid UI breakage
-                    level: -999, // dummy
+                    level: -999,
                     ecno: 0,
                     sc: 0,
-                    // Parse custom metrics
+                    rnc: null, // Init RNC
+                    cid: null, // Init CID
+                    // Use resolved columns directly
+                    level: (levelCol && row[levelCol] !== undefined) ? parseFloat(row[levelCol]) : -999,
+                    ecno: (ecnoCol && row[ecnoCol] !== undefined) ? parseFloat(row[ecnoCol]) : 0,
+                    sc: (scCol && row[scCol] !== undefined) ? parseInt(row[scCol]) : 0,
+                    freq: (freqCol && row[freqCol] !== undefined) ? parseFloat(row[freqCol]) : undefined,
+                    band: (bandCol && row[bandCol] !== undefined) ? row[bandCol] : undefined,
+                    cellId: (cellIdCol && row[cellIdCol] !== undefined) ? row[cellIdCol] : undefined
                 };
 
-                // Add Metric Value Directly to Point
-                // Use for loop for custom metrics too
+                // Parse RNC/CID from CellID if format is "RNC/CID" (e.g., "871/7588")
+                if (point.cellId) {
+                    const cidStr = String(point.cellId);
+                    if (cidStr.includes('/')) {
+                        const parts = cidStr.split('/');
+                        if (parts.length === 2) {
+                            const r = parseInt(parts[0]);
+                            const c = parseInt(parts[1]);
+                            if (!isNaN(r)) point.rnc = r;
+                            if (!isNaN(c)) point.cid = c;
+                        }
+                    } else {
+                        // Conventional Short CID
+                        point.cid = parseInt(point.cellId);
+                    }
+                }
+
+                // Add Custom Metrics (keep existing logic for other columns)
+                // Also scan for Neighbors (N1..N32) and Detected Set (D1..D12)
                 for (let j = 0; j < customMetrics.length; j++) {
                     const m = customMetrics[j];
-                    let val = row[m];
-                    // Try to parse numbers if possible
+                    const val = row[m];
+
+                    // Add all proprietary columns to point for popup details
                     if (typeof val !== 'number' && !isNaN(parseFloat(val))) {
                         point[m] = parseFloat(val);
                     } else {
                         point[m] = val;
                     }
 
-                    // Intelligent Mapping for "Standard" Keys if they exist in Excel
-                    // This allows the existing renderer (Grid/Chart) to "just work" if the column is named "RSRP"
                     const normM = normalize(m);
 
-                    // Specific 4G Mappings (User Requested)
-                    // "SC Physical Cell ID" -> SC
-                    // "Serving Cell RSRP" -> Level
-                    // "Serving Cell RSRQ" -> EcNo
-                    // "Serving Cell DL EARFCN" -> Freq
+                    // ----------------------------------------------------------------
+                    // ACTIVE SET & NEIGHBORS (Enhanced parsing)
+                    // ----------------------------------------------------------------
 
-                    // Level/RSCP
-                    if (normM.includes('servingcellrsrp') || normM === 'rsrp') point.level = point[m];
-                    else if (point.level === -999 && normM.includes('rsrp')) point.level = point[m]; // Fallback
+                    // Regex helpers
+                    const extractIdx = (str, prefix) => {
+                        const matcha = str.match(new RegExp(`${prefix} (\\d +)`));
+                        return matcha ? parseInt(matcha[1]) : null;
+                    };
 
-                    // EcNo/RSRQ
-                    if (normM.includes('servingcellrsrq') || normM === 'rsrq') point.ecno = point[m];
-                    else if (point.ecno === 0 && (normM.includes('ecno') || normM.includes('sinr'))) point.ecno = point[m]; // Fallback
+                    // Neighbors N1..N8
+                    if (normM.includes('n') && (normM.includes('sc') || normM.includes('pci') || normM.includes('rscp') || normM.includes('rsrp') || normM.includes('ecno') || normM.includes('rsrq'))) {
+                        // Exclude if it looks like primary SC (though mapped above, safe to skip)
+                        if (m === scCol) continue;
 
-                    // SC/PCI
-                    if (normM.includes('scphysicalcellid') || normM === 'pci') point.sc = point[m];
-                    else if (point.sc === 0 && (normM.includes('physcialcellid') || normM.includes('pci'))) point.sc = point[m];
+                        const nIdx = extractIdx(normM, 'n'); // generic extractor needs refinement for "n1" string
+                        // Simpler check
+                        const digitMatch = normM.match(/n(\d+)/);
+                        if (digitMatch) {
+                            const idx = parseInt(digitMatch[1]);
+                            if (idx >= 1 && idx <= 32) {
+                                if (!point._neighborsHelper) point._neighborsHelper = {};
+                                if (!point._neighborsHelper[idx]) point._neighborsHelper[idx] = {};
 
-                    // Freq/EARFCN
-                    if (normM.includes('servingcelldlearfcn') || normM === 'earfcn') point.freq = point[m];
-                    else if (point.freq === undefined && (normM.includes('freq') || normM.includes('uarfcn') || normM.includes('channel'))) point.freq = point[m];
+                                if (normM.includes('sc') || normM.includes('pci')) point._neighborsHelper[idx].pci = val;
+                                if (normM.includes('rscp') || normM.includes('rsrp')) point._neighborsHelper[idx].rscp = val;
+                                if (normM.includes('ecno') || normM.includes('rsrq')) point._neighborsHelper[idx].ecno = val;
+                                if (normM.includes('freq') || normM.includes('earfcn')) point._neighborsHelper[idx].freq = val;
+                            }
+                        }
+                    }
 
-                    // Band
-                    if (normM.includes('band')) point.band = point[m];
+                    // Detected Set D1..D8
+                    if (normM.includes('d') && !normM.includes('data') && !normM.includes('band') && (normM.includes('sc') || normM.includes('pci'))) {
+                        const digitMatch = normM.match(/d(\d+)/);
+                        if (digitMatch) {
+                            const idx = parseInt(digitMatch[1]);
+                            if (idx >= 1 && idx <= 32) {
+                                if (!point._neighborsHelper) point._neighborsHelper = {};
+                                const key = 100 + idx;
+                                if (!point._neighborsHelper[key]) point._neighborsHelper[key] = { type: 'detected' };
+
+                                if (normM.includes('sc') || normM.includes('pci')) point._neighborsHelper[key].pci = val;
+                                if (normM.includes('rscp') || normM.includes('rsrp')) point._neighborsHelper[key].rscp = val;
+                                if (normM.includes('ecno') || normM.includes('rsrq')) point._neighborsHelper[key].ecno = val;
+                            }
+                        }
+                    }
+                } // End Custom Metrics Loop
+
+                // Construct Neighbors Array from Helper
+                const neighbors = [];
+                if (point._neighborsHelper) {
+                    Object.keys(point._neighborsHelper).sort((a, b) => a - b).forEach(idx => {
+                        neighbors.push(point._neighborsHelper[idx]);
+                    });
+                    delete point._neighborsHelper; // Parsing cleanup
                 }
 
                 // Add parsed object for safety if app expects it
@@ -514,19 +658,27 @@ const ExcelParser = {
                         ecno: point.ecno,
                         sc: point.sc,
                         freq: point.freq,
-                        band: point.band
-                    }
+                        band: point.band,
+                        lac: point.lac || 0 // Default LAC
+                    },
+                    neighbors: neighbors
                 };
 
                 points.push(point);
-            }
-        }
+            } // End if !isNaN
+        } // End for i loop
 
         return {
             points: points,
             tech: '4G (Excel)', // Assume 4G or Generic
             customMetrics: customMetrics,
-            signaling: [] // No signaling in simple excel for now
+            signaling: [], // No signaling in simple excel for now
+            debugInfo: {
+                scCol: scCol,
+                cellIdCol: cellIdCol,
+                rncCol: null, // extracted from cellId usually
+                levelCol: levelCol
+            }
         };
     }
 };

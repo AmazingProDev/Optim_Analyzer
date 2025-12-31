@@ -861,36 +861,37 @@ document.addEventListener('DOMContentLoaded', () => {
                     // Helper for SC Label
                     const lbl = (prefix, sc) => sc !== undefined && sc !== null ? `${prefix} (${sc})` : prefix;
 
+                    // Dynamic Data Construction
+                    const candidates = [
+                        { label: lbl('A1', p.sc), val: valServing, color: chartSettings.servingColor },
+                        { label: lbl('A2', p.a2_sc), val: p.a2_rscp, color: chartSettings.a2Color },
+                        { label: lbl('A3', p.a3_sc), val: p.a3_rscp, color: chartSettings.a3Color },
+                        { label: lbl('N1', n1 ? n1.pci : null), val: (n1 ? n1.rscp : null), color: chartSettings.n1Color },
+                        { label: lbl('N2', n2 ? n2.pci : null), val: (n2 ? n2.rscp : null), color: chartSettings.n2Color },
+                        { label: lbl('N3', n3 ? n3.pci : null), val: (n3 ? n3.rscp : null), color: chartSettings.n3Color }
+                    ];
+
+                    // Filter valid entries
+                    // Valid if val is defined, not null, not NaN, and not -999 (placeholder)
+                    const validData = candidates.filter(c =>
+                        c.val !== undefined &&
+                        c.val !== null &&
+                        !isNaN(c.val) &&
+                        c.val !== -999 &&
+                        c.val > -140 // Sanity check for empty/invalid RSCP
+                    );
+
                     return {
-                        labels: [
-                            lbl('A1', p.sc),
-                            lbl('A2', p.a2_sc),
-                            lbl('A3', p.a3_sc),
-                            lbl('N1', n1 ? n1.pci : null),
-                            lbl('N2', n2 ? n2.pci : null),
-                            lbl('N3', n3 ? n3.pci : null)
-                        ],
+                        labels: validData.map(c => c.label),
                         datasets: [{
                             label: 'Signal Strength',
-                            data: [
-                                mkBar(valServing),
-                                mkBar(p.a2_rscp),
-                                mkBar(p.a3_rscp),
-                                mkBar(n1 ? n1.rscp : null),
-                                mkBar(n2 ? n2.rscp : null),
-                                mkBar(n3 ? n3.rscp : null)
-                            ],
-                            backgroundColor: [
-                                chartSettings.servingColor,
-                                chartSettings.a2Color,
-                                chartSettings.a3Color,
-                                chartSettings.n1Color,
-                                chartSettings.n2Color,
-                                chartSettings.n3Color
-                            ],
+                            data: validData.map(c => mkBar(c.val)),
+                            backgroundColor: validData.map(c => c.color),
                             borderColor: '#fff',
                             borderWidth: 1,
-                            borderRadius: 4
+                            borderRadius: 4,
+                            barPercentage: 0.6, // Make bars slightly thinner
+                            categoryPercentage: 0.8
                         }]
                     };
                 } else {
@@ -1250,6 +1251,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // ... REST OF FILE ...
 
+        // Instantiate Bar Chart
+        let barChartInstance = new Chart(barCtx, {
+            type: 'bar',
+            data: getChartConfigData('bar'),
+            options: getCommonOptions(false),
+            plugins: [barLabelsPlugin] // Only Bar gets labels
+        });
+
+        const updateBarOverlay = () => {
+            const overlay = document.getElementById('barOverlayInfo');
+            if (overlay) {
+                overlay.textContent = (log.points[activeIndex] ? log.points[activeIndex].time : 'N/A');
+            }
+        };
+
         // Ensure updateDualCharts uses correct data structure update
         window.updateDualCharts = (idx, skipGlobalSync = false) => {
             activeIndex = idx;
@@ -1265,16 +1281,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-
-
-        // Instantiate Bar Chart
-        let barChartInstance = new Chart(barCtx, {
-            type: 'bar',
-            data: getChartConfigData('bar'),
-            options: getCommonOptions(false),
-            plugins: [barLabelsPlugin] // Only Bar gets labels
-        });
-
         // ----------------------------------------------------
         // Drag / Scrubbing Logic for Line Chart
         // ----------------------------------------------------
@@ -1284,101 +1290,61 @@ document.addEventListener('DOMContentLoaded', () => {
         let isScrubbing = false;
         const lineCanvas = document.getElementById('lineChartCanvas');
 
+        if (lineCanvas) {
+            // Helper to check if mouse is over badge
+            const isOverBadge = (e) => {
+                if (!lineChartInstance || !lineChartInstance.lastBadgeRect) return false;
+                const rect = lineCanvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const b = lineChartInstance.lastBadgeRect;
+                return (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+            };
 
-
-        // Helper to check if mouse is over badge
-        const isOverBadge = (e) => {
-            if (!lineChartInstance.lastBadgeRect) return false;
-            const rect = lineCanvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const b = lineChartInstance.lastBadgeRect;
-            return (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
-        };
-
-        const handleScrub = (e) => {
-            const points = lineChartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: false }, true);
-            if (points.length) {
-                const idx = points[0].index;
-                if (idx !== activeIndex) {
-                    window.updateDualCharts(idx);
+            const handleScrub = (e) => {
+                const points = lineChartInstance.getElementsAtEventForMode(e, 'nearest', { intersect: false }, true);
+                if (points.length) {
+                    const idx = points[0].index;
+                    if (idx !== activeIndex) {
+                        window.updateDualCharts(idx);
+                    }
                 }
-            }
-        };
+            };
 
-        // Explicit Click Listener for robust syncing (MOVED HERE TO AVOID REFERENCE ERROR)
-        lineCanvas.onclick = (e) => {
-            // If we were just scrubbing/dragging, ignore click to prevent jitters?
-            // Actually, scrubbing updates continuously. A final click update is harmless.
-            // Crucially, this catches clicks on the line that Chart.js 'onClick' sometimes misses.
-            handleScrub(e);
-
-            // NEW: Auto-Zoom to Window of 10 on Click
-            // Only auto-zoom if we have a valid selection
-            if (activeIndex !== null && lineChartInstance) {
-                zoomToActiveWindow();
-            }
-        };
-
-        lineCanvas.addEventListener('mousedown', (e) => {
-            // Check if clicking on the badge
-            // User requested "select the label... and drag"
-            // We differentiate: Drag Badge = Scrub. Drag Background = Pan (if zoomed).
-
-            if (isOverBadge(e)) {
-                isScrubbing = true;
-                lineCanvas.style.cursor = 'grabbing';
+            // Explicit Click Listener for robust syncing
+            lineCanvas.onclick = (e) => {
                 handleScrub(e);
-                // CRITICAL: Stop propagation to prevent Chart.js Pan plugin from handling this
-                e.stopPropagation();
-                // e.preventDefault(); // Optional, but stopPropagation is key here
-            } else {
-                // Allow default behavior (Pan)
-            }
-        }, true); // Use Capture phase to intercept before Chart.js plugin
+                if (activeIndex !== null && lineChartInstance) {
+                    // window.zoomChartToActive(); // Check if exists
+                }
+            };
 
-        lineCanvas.addEventListener('mousemove', (e) => {
-            if (isScrubbing) {
-                handleScrub(e);
-                lineCanvas.style.cursor = 'grabbing';
-            } else {
-                // Hover effect
+            lineCanvas.addEventListener('mousedown', (e) => {
                 if (isOverBadge(e)) {
-                    lineCanvas.style.cursor = 'grab';
-                } else {
-                    lineCanvas.style.cursor = 'default';
+                    isScrubbing = true;
+                    lineCanvas.style.cursor = 'grabbing';
+                    handleScrub(e);
+                    e.stopPropagation();
                 }
-            }
-        });
+            }, true);
 
-
-
-        const updateBarOverlay = () => {
-            const overlay = document.getElementById('barOverlayInfo');
-            if (overlay) {
-                overlay.textContent = (log.points[activeIndex] ? log.points[activeIndex].time : 'N/A');
-            }
-        };
+            lineCanvas.addEventListener('mousemove', (e) => {
+                if (isScrubbing) {
+                    handleScrub(e);
+                    lineCanvas.style.cursor = 'grabbing';
+                } else {
+                    if (isOverBadge(e)) {
+                        lineCanvas.style.cursor = 'grab';
+                    } else {
+                        lineCanvas.style.cursor = 'default';
+                    }
+                }
+            });
+        }
 
         // Store globally for Sync
         window.currentChartLogId = log.id;
         window.currentChartInstance = barChartInstance;
-
-        // Let's expose specific update function
-        window.updateDualCharts = (idx, skipGlobalSync = false) => {
-            activeIndex = idx;
-            // Removed Line Chart update
-            barChartInstance.data = getChartConfigData('bar');
-            barChartInstance.update();
-            updateBarOverlay();
-
-            // Trigger Global Sync if this update came from the Chart itself
-            // NOTE: Since Bar Chart doesn't inherently scrub, this is mostly for external triggers 
-            // OR if we add click-to-sync on Bar Chart later?
-            if (!skipGlobalSync && log.points[idx]) {
-                // No scrubbing on Bar Chart usually
-            }
-        };
 
         // Function to update Active Index from Map
         window.currentChartActiveIndexSet = (idx) => {
@@ -1726,7 +1692,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     <tr>
                         <th style="padding:4px 8px; text-align:left;">Time</th>
                         <th style="padding:4px 8px; text-align:left;">Lat</th>
-                        <th style="padding:4px 8px; text-align:left;">Lng</th>`;
+                        <th style="padding:4px 8px; text-align:left;">Lng</th>
+                        <th style="padding:4px 8px; text-align:left;">RNC/CID</th>`;
 
             window.currentGridColumns.forEach(col => {
                 tableHtml += `<th style="padding:4px 8px; text-align:left; text-transform:uppercase;">${col}</th>`;
@@ -1738,10 +1705,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
             log.points.slice(0, limit).forEach((p, i) => {
                 // Add ID and Click Handler
+                // RNC/CID Formatter
+                const rncCid = (p.rnc !== undefined && p.rnc !== null && p.cid !== undefined && p.cid !== null)
+                    ? `${p.rnc}/${p.cid}`
+                    : (p.cellId || '-');
+
                 let row = `<tr id="grid-row-${i}" class="grid-row" onclick="window.globalSync('${log.id}', ${i}, 'grid')" style="cursor:pointer; transition: background 0.1s;">
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.time}</td>
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lat.toFixed(5)}</td>
-                <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lng.toFixed(5)}</td>`;
+                <td style="padding:4px 8px; border-bottom:1px solid #333;">${p.lng.toFixed(5)}</td>
+                <td style="padding:4px 8px; border-bottom:1px solid #333;">${rncCid}</td>`;
 
                 window.currentGridColumns.forEach(col => {
                     let val = p[col];
@@ -2307,9 +2280,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Global function to update the Floating Info Panel
     window.updateFloatingInfoPanel = (p) => {
         try {
+            console.log("[InfoPanel] Updating for point:", p);
             const panel = document.getElementById('floatingInfoPanel');
             const content = document.getElementById('infoPanelContent');
-            if (!panel || !content) return;
+            if (!panel || !content) {
+                console.warn("[InfoPanel] Missing panel info elements");
+                return;
+            }
 
             // Debug Log
             console.log("DEBUG: updateFloatingInfoPanel called for point:", p);
@@ -2333,23 +2310,84 @@ document.addEventListener('DOMContentLoaded', () => {
                         return Math.sqrt(Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2));
                     };
 
-                    // 1. Serving Cell Logic: STRICT CellID Match
+                    // 1. Serving Cell Logic: STRICT CellID Match (with SC Disambiguation)
                     if (cellId !== undefined && cellId !== null) {
-                        // A. Exact Match (Long ID)
-                        let match = siteData.find(s => s.cellId == cellId);
+                        let candidates = [];
+
+                        // A. Exact Match (All candidates)
+                        candidates = siteData.filter(s => s.cellId == cellId);
 
                         // B. Fallback: Short CID + LAC Match
-                        if (!match && lac) {
+                        if (candidates.length === 0 && lac) {
                             const shortCid = cellId & 0xFFFF;
-                            match = siteData.find(s => s.cellId == shortCid && s.lac == lac);
+                            candidates = siteData.filter(s => s.cellId == shortCid && s.lac == lac);
                         }
 
-                        // C. Fallback: RNC/CID Format Match
-                        if (!match && rnc !== undefined && rnc !== null) {
-                            const shortCid = cellId & 0xFFFF;
-                            const rncCidStr = `${rnc}/${shortCid}`;
+                        // C. Fallback: RNC/CID Format Match (Robust)
+                        if (candidates.length === 0) {
                             const norm = (val) => String(val).replace(/\s/g, '');
-                            match = siteData.find(s => norm(s.cellId) == norm(rncCidStr));
+                            // Try matching by composite RNC/CID
+                            if (rnc !== undefined && rnc !== null) {
+                                const rncCidStr = `${rnc}/${cellId & 0xFFFF}`;
+                                candidates = siteData.filter(s => norm(s.cellId) === norm(rncCidStr));
+
+                                // If not found, try matching just component parts if site has "RNC/CID" format
+                                if (candidates.length === 0) {
+                                    candidates = siteData.filter(s => {
+                                        if (String(s.cellId).includes('/')) {
+                                            const parts = String(s.cellId).split('/');
+                                            const sCid = parts[parts.length - 1];
+                                            const sRnc = parts.length > 1 ? parts[parts.length - 2] : null;
+                                            return (norm(sRnc) === norm(rnc) && norm(sCid) === norm(cellId & 0xFFFF));
+                                        }
+                                        return false;
+                                    });
+                                }
+                            }
+                            // If Point has "RNC/CID" in cellId
+                            else if (String(cellId).includes('/')) {
+                                candidates = siteData.filter(s => norm(s.cellId) === norm(cellId));
+                            }
+                        }
+
+                        // DISAMBIGUATE: If multiple candidates, use SC (pci) to pick the right one
+                        let match = null;
+                        if (candidates.length > 0) {
+                            if (pci !== undefined && pci !== null) {
+                                // Try loose match on SC or PCI
+                                match = candidates.find(s => s.sc == pci || s.pci == pci);
+                            }
+                            // Fallback: Use first candidate if no SC match or no SC provided
+                            if (!match) match = candidates[0];
+                        }
+
+                        // STALE CELLID CHECK:
+                        // If we found a match by CellID, BUT the SC does not match the Point's SC,
+                        // it is likely the NMF Log has a stale CellID (Header didn't update during HO).
+                        // In this case, we shout NOT blindly trust the CellID match.
+                        // We should try to find a site by SC + Location instead.
+                        if (match && pci !== undefined && pci !== null && (match.sc != pci && match.pci != pci)) {
+                            // Only override if we can find a *better* candidate by SC
+                            // Reuse logic from "2. Neighbor Logic" below effectively
+                            let scCandidates = siteData.filter(s => s.pci == pci || s.sc == pci);
+                            if (freq) {
+                                const fTol = 2; // Tolerance
+                                scCandidates = scCandidates.filter(s => !s.dl_earfcn || Math.abs(s.dl_earfcn - freq) < fTol || !s.uarfcn || Math.abs(s.uarfcn - freq) < fTol);
+                            }
+                            if (scCandidates.length > 0) {
+                                // Sort by distance
+                                scCandidates.sort((a, b) => getDist(a) - getDist(b));
+                                const bestScMatch = scCandidates[0];
+                                const distSc = getDist(bestScMatch);
+                                const distId = getDist(match);
+
+                                // Logic: If the SC-based match is reasonably close (e.g. < 20km or closer than ID match), use it.
+                                // Usually valid serving cells are within few km.
+                                if (distSc < 50000) { // Safety threshold 50km
+                                    // We prefer the SC match because SC is real-time measurement, CellID in log might be stale.
+                                    return { name: getName(bestScMatch), id: bestScMatch.cellId, lat: bestScMatch.lat, lng: bestScMatch.lng };
+                                }
+                            }
                         }
 
                         if (match) return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng };
@@ -2429,18 +2467,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
 
-            // 3. Neighbors
+            // 3. Neighbors & Detected
             let neighborRows = [];
+            let detectedRows = []; // User Request: Display Detected Set
+
             if (p.parsed && p.parsed.neighbors) {
                 const activeSCs = [p.sc, p.a2_sc, p.a3_sc].filter(x => x !== undefined && x !== null);
-                const neighbors = p.parsed.neighbors.filter(n => !activeSCs.includes(n.pci));
-                neighbors.forEach((n, idx) => {
-                    const nRes = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng);
-                    if (nRes.lat && nRes.lng) connectionTargets.push({ lat: nRes.lat, lng: nRes.lng, color: '#22c55e', weight: 3, cellId: nRes.id });
-                    neighborRows.push({
-                        type: `N${idx + 1}`, name: nRes.name || 'Unknown', cellId: nRes.id, sc: n.pci,
-                        rscp: n.rscp, ecno: n.ecno, freq: n.freq
-                    });
+
+                p.parsed.neighbors.forEach((n, idx) => {
+                    // Check type from parser
+                    if (n.type === 'detected') {
+                        const nRes = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng);
+                        // Detected usually don't have lines drawn, or maybe different color?
+                        // Let's not draw lines for detected for now to avoid clutter
+                        detectedRows.push({
+                            type: `D${n.idx || (idx + 1)}`, // Use stored idx or auto
+                            name: nRes.name || 'Unknown',
+                            cellId: nRes.id,
+                            sc: n.pci,
+                            rscp: n.rscp,
+                            ecno: n.ecno,
+                            freq: n.freq
+                        });
+                    } else if (!activeSCs.includes(n.pci)) {
+                        // Regular Neighbor
+                        const nRes = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng);
+                        if (nRes.lat && nRes.lng) connectionTargets.push({ lat: nRes.lat, lng: nRes.lng, color: '#22c55e', weight: 3, cellId: nRes.id });
+                        neighborRows.push({
+                            type: `N${idx + 1}`, name: nRes.name || 'Unknown', cellId: nRes.id, sc: n.pci,
+                            rscp: n.rscp, ecno: n.ecno, freq: n.freq
+                        });
+                    }
                 });
             }
 
@@ -2450,7 +2507,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const renderRow = (d, isBold = false) => {
                 const hasId = d.cellId !== undefined && d.cellId !== null;
-                const nameContent = hasId ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${d.cellId})</span>` : d.name;
+                // Use displayId if available (for NMF raw values), else fall back to cellId
+                const displayId = d.displayId || d.cellId;
+
+                // If we have a displayId, show it. The click handler still uses d.cellId for matching.
+                const nameContent = hasId ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${displayId})</span>` : d.name;
                 return `
                     <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
                         <td style="padding:4px 4px;">${d.type}</td>
@@ -2465,6 +2526,12 @@ document.addEventListener('DOMContentLoaded', () => {
             let tableRows = renderRow(servingData, true);
             activeRows.forEach(r => tableRows += renderRow(r));
             neighborRows.forEach(r => tableRows += renderRow(r));
+            // Add Detected Rows after Neighbors
+            if (detectedRows.length > 0) {
+                // specific header or separator?
+                // tableRows += `<tr><td colspan="6" style="padding:4px; font-weight:bold; background:#333; color:#aaa;">Detected</td></tr>`;
+                detectedRows.forEach(r => tableRows += renderRow(r));
+            }
 
             content.innerHTML = `
                 <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || 'Unknown Site'}</div>
@@ -2502,24 +2569,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 1. Update Map (Marker & View)
         // 1. Update Map (Marker & View)
-        if (source !== 'map') {
-            if (!window.syncMarker) {
-                window.syncMarker = L.circleMarker([point.lat, point.lng], {
-                    radius: 8,
-                    color: '#ffff00',
-                    weight: 3,
-                    fillColor: 'transparent',
-                    fillOpacity: 0
-                }).addTo(window.map);
-            } else {
-                window.syncMarker.setLatLng([point.lat, point.lng]);
-            }
+        // Always update marker, even if source is map (to show selection highlight)
+        if (!window.syncMarker) {
+            window.syncMarker = L.circleMarker([point.lat, point.lng], {
+                radius: 18, // Larger radius to surround the point
+                color: '#ffff00', // Yellow
+                weight: 4,
+                fillColor: 'transparent',
+                fillOpacity: 0
+            }).addTo(window.map);
+        } else {
+            window.syncMarker.setLatLng([point.lat, point.lng]);
+            // Ensure style is consistent (in case it was overwritten or different)
+            window.syncMarker.setStyle({
+                radius: 18,
+                color: '#ffff00',
+                weight: 4,
+                fillColor: 'transparent',
+                fillOpacity: 0
+            });
         }
 
         // View Navigation (Zoom/Pan) - User Request: Zoom in on click
+        // UPDATED: Keep current zoom, just pan.
         if (source !== 'chart_scrub') {
-            const targetZoom = Math.max(window.map.getZoom(), 17);
-            window.map.flyTo([point.lat, point.lng], targetZoom, { animate: true, duration: 0.5 });
+            // const targetZoom = Math.max(window.map.getZoom(), 17); // Previous logic
+            // window.map.flyTo([point.lat, point.lng], targetZoom, { animate: true, duration: 0.5 });
+
+            // New Logic: Pan only, preserve zoom
+            window.map.panTo([point.lat, point.lng], { animate: true, duration: 0.5 });
         }
 
         // 2. Update Charts
@@ -2596,6 +2674,114 @@ document.addEventListener('DOMContentLoaded', () => {
             if (index !== -1) {
                 window.globalSync(logId, index, source || 'map');
             }
+        }
+    });
+
+    // SPIDER OPTION: Sector Click Listener
+    window.addEventListener('site-sector-clicked', (e) => {
+        const sector = e.detail;
+        if (!sector || !window.mapRenderer) return;
+
+        console.log("[Spider] Sector Clicked:", sector);
+
+        // Find all points served by this sector
+        const targetPoints = [];
+
+        // Calculate "Tip Top" (Outer Edge Center) based on Azimuth
+        // Default range is 200m (matches map_renderer default)
+        const range = 200;
+        const rad = Math.PI / 180;
+        const azRad = (sector.azimuth || 0) * rad;
+        const latRad = sector.lat * rad;
+
+        const dy = Math.cos(azRad) * range;
+        const dx = Math.sin(azRad) * range;
+        const dLat = dy / 111111;
+        const dLng = dx / (111111 * Math.cos(latRad));
+
+        const startPt = {
+            lat: sector.lat + dLat,
+            lng: sector.lng + dLng
+        };
+
+        let debugCount = 0;
+        loadedLogs.forEach(log => {
+            log.points.forEach(p => {
+                // Match Logic: CellID (Preferred) > SC+Freq+LAC
+                let isMatch = false;
+                const norm = (v) => String(v).trim();
+                const isValid = (v) => v !== undefined && v !== null && v !== 'N/A' && v !== '';
+
+                // 1. CellID Match (Robust to "LAC/CID" or "RNC/CID")
+                if (sector.cellId && isValid(p.cellId)) {
+                    // A. Standard Exact Match
+                    if (norm(p.cellId) === norm(sector.cellId)) {
+                        isMatch = true;
+                    }
+                    // B. Sector has RNC/CID format (e.g. 12/12345)
+                    else if (sector.cellId.includes('/')) {
+                        const parts = sector.cellId.split('/');
+                        const cid = parts[parts.length - 1];
+                        const rnc = parts.length > 1 ? parts[parts.length - 2] : null;
+
+                        // Case B1: Point has RNC and CID
+                        if (p.rnc !== undefined && p.rnc !== null) {
+                            if (rnc && norm(p.rnc) == norm(rnc) && norm(p.cellId) == norm(cid)) isMatch = true;
+                        }
+                        // Case B2: Point has RNC/CID in cellId string
+                        else if (String(p.cellId).includes('/')) {
+                            if (norm(p.cellId) === norm(sector.cellId)) isMatch = true;
+                        }
+                        // Case B3: Relaxed - Match CID only (Fallback)
+                        else if (norm(p.cellId) === norm(cid)) {
+                            isMatch = true;
+                        }
+                    }
+                }
+
+                // 2. SC Match (Secondary)
+                if (!isMatch && sector.sc !== undefined && isValid(p.sc)) {
+                    // Loose Check: SC matches
+                    if (p.sc == sector.sc) {
+                        isMatch = true;
+                        // Refine if other params exist AND are valid on point
+                        if (sector.lac && isValid(p.lac)) {
+                            if (norm(sector.lac) !== norm(p.lac)) {
+                                isMatch = false;
+                            }
+                        }
+
+                        // DISABLED Strict Freq Check due to data mismatches (e.g. 10788 vs 10838 or 3032)
+                        // if (sector.freq && isValid(p.freq) && Math.abs(sector.freq - p.freq) > 5) isMatch = false;
+                    }
+                }
+
+                if (isMatch) {
+                    targetPoints.push({
+                        lat: p.lat,
+                        lng: p.lng,
+                        color: '#ffff00', // Yellow lines
+                        weight: 2,
+                        dashArray: '4, 4'
+                    });
+                } else if (debugCount < 3) {
+                    // Debug first few SC-matched points that failed refinement
+                    if (p.sc == sector.sc) {
+                        console.log(`[Spider Debug] Mismatch: P(SC=${p.sc}, L=${p.lac}, F=${p.freq}) vs S(SC=${sector.sc}, L=${sector.lac}, F=${sector.freq})`);
+                        debugCount++;
+                    }
+                }
+            });
+        });
+
+        if (targetPoints.length > 0) {
+            console.log(`[Spider] Found ${targetPoints.length} points.`);
+            window.mapRenderer.drawConnections(startPt, targetPoints);
+            fileStatus.textContent = `Spider: Showing ${targetPoints.length} points for ${sector.cellId || sector.sc}`;
+        } else {
+            console.warn("[Spider] No matching points found.");
+            fileStatus.textContent = `Spider: No points found for ${sector.cellId || sector.sc}`;
+            window.mapRenderer.clearConnections();
         }
     });
 
@@ -2678,6 +2864,15 @@ document.addEventListener('DOMContentLoaded', () => {
             e.target.value = '';
         }
 
+        function getRandomColor() {
+            const letters = '0123456789ABCDEF';
+            let color = '#';
+            for (let i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+
         function handleParsedResult(result, fileName) {
             // Handle new parser return format (object vs array)
             const parsedData = Array.isArray(result) ? result : result.points;
@@ -2698,11 +2893,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     points: parsedData,
                     signaling: signalingData,
                     tech: technology,
-                    customMetrics: customMetrics // Store detected columns
+                    customMetrics: customMetrics,
+                    color: getRandomColor(),
+                    visible: true
                 });
 
+                // Update UI
+                updateLogsList();
+
                 if (parsedData.length > 0) {
-                    map.addLogLayer(id, parsedData);
+                    map.addLogLayer(id, parsedData, loadedLogs[loadedLogs.length - 1].color);
                     const first = parsedData[0];
                     map.setView(first.lat, first.lng);
                 }
@@ -2712,8 +2912,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     map.addEventsLayer(id, signalingData);
                 }
 
-                updateLogsList();
-                fileStatus.textContent = `Loaded ${parsedData.length} pts (${technology})`;
 
             } else {
                 fileStatus.textContent = 'No valid data found.';
@@ -3628,3 +3826,5 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
 });
+
+
