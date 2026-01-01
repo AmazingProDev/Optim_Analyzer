@@ -33,7 +33,7 @@ class MapRenderer {
         });
 
         // Set Default
-        darkLayer.addTo(this.map);
+        osmLayer.addTo(this.map);
 
         const baseMaps = {
             "Dark": darkLayer,
@@ -601,9 +601,9 @@ class MapRenderer {
         }
 
         const settings = this.siteSettings || {};
-        const range = parseInt(settings.range) || 200;
+        const range = parseInt(settings.range) || 100;
         const opacity = parseFloat(settings.opacity) || 0.6;
-        const beam = parseInt(settings.beamwidth) || 60;
+        const beam = parseInt(settings.beamwidth) || 35;
         const overrideColor = settings.useOverride ? settings.color : null;
 
         const renderedSiteLabels = new Set();
@@ -691,7 +691,23 @@ class MapRenderer {
                 </div>
             `;
             polygon.bindPopup(content);
-            polygon.on('click', () => { window.dispatchEvent(new CustomEvent('site-sector-clicked', { detail: { cellId: s.cellId, sc: s.sc || s.pci, lac: s.lac, freq: s.freq, lat: s.lat, lng: s.lng, azimuth: azimuth } })); });
+            polygon.on('click', () => {
+                window.dispatchEvent(new CustomEvent('site-sector-clicked', {
+                    detail: {
+                        cellId: s.cellId,
+                        sc: s.sc || s.pci,
+                        lac: s.lac,
+                        freq: s.freq,
+                        lat: s.lat,
+                        lng: s.lng,
+                        azimuth: azimuth,
+                        rnc: s.rnc,
+                        cid: s.cid,
+                        range: range,
+                        beamwidth: beam
+                    }
+                }));
+            });
         });
 
         this.sitesLayer.addTo(this.map);

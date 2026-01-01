@@ -2905,8 +2905,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const targetPoints = [];
 
         // Calculate "Tip Top" (Outer Edge Center) based on Azimuth
-        // Default range is 200m (matches map_renderer default)
-        const range = 200;
+        // Use range from the event (current rendering range)
+        const range = sector.range || 200;
         const rad = Math.PI / 180;
         const azRad = (sector.azimuth || 0) * rad;
         const latRad = sector.lat * rad;
@@ -2921,55 +2921,47 @@ document.addEventListener('DOMContentLoaded', () => {
             lng: sector.lng + dLng
         };
 
-        let debugCount = 0;
+        const norm = (v) => v !== undefined && v !== null ? String(v).trim() : '';
+        const isValid = (v) => v !== undefined && v !== null && v !== 'N/A' && v !== '';
+
         loadedLogs.forEach(log => {
             log.points.forEach(p => {
-                // Match Logic: CellID (Preferred) > SC+Freq+LAC
                 let isMatch = false;
-                const norm = (v) => String(v).trim();
-                const isValid = (v) => v !== undefined && v !== null && v !== 'N/A' && v !== '';
 
-                // 1. CellID Match (Robust to "LAC/CID" or "RNC/CID")
-                if (sector.cellId && isValid(p.cellId)) {
-                    // A. Standard Exact Match
-                    if (norm(p.cellId) === norm(sector.cellId)) {
+                // 1. Strict RNC/CID Match (Highest Priority)
+                if (isValid(sector.rnc) && isValid(sector.cid) && isValid(p.rnc) && isValid(p.cellId)) {
+                    if (norm(sector.rnc) === norm(p.rnc) && norm(sector.cid) === norm(p.cellId)) {
                         isMatch = true;
                     }
-                    // B. Sector has RNC/CID format (e.g. 12/12345)
+                }
+
+                // 2. Generic CellID Match (Fallback)
+                if (!isMatch && sector.cellId && isValid(p.cellId)) {
+                    if (norm(sector.cellId) === norm(p.cellId)) {
+                        isMatch = true;
+                    }
+                    // Support "RNC/CID" format in sector.cellId
                     else if (sector.cellId.includes('/')) {
                         const parts = sector.cellId.split('/');
                         const cid = parts[parts.length - 1];
                         const rnc = parts.length > 1 ? parts[parts.length - 2] : null;
 
-                        // Case B1: Point has RNC and CID
-                        if (p.rnc !== undefined && p.rnc !== null) {
-                            if (rnc && norm(p.rnc) == norm(rnc) && norm(p.cellId) == norm(cid)) isMatch = true;
-                        }
-                        // Case B2: Point has RNC/CID in cellId string
-                        else if (String(p.cellId).includes('/')) {
-                            if (norm(p.cellId) === norm(sector.cellId)) isMatch = true;
-                        }
-                        // Case B3: Relaxed - Match CID only (Fallback)
-                        else if (norm(p.cellId) === norm(cid)) {
+                        if (rnc && isValid(p.rnc) && norm(p.rnc) === norm(rnc) && norm(p.cellId) === norm(cid)) {
+                            isMatch = true;
+                        } else if (norm(p.cellId) === norm(cid) && !isValid(p.rnc)) {
                             isMatch = true;
                         }
                     }
                 }
 
-                // 2. SC Match (Secondary)
+                // 3. SC Match (Secondary Fallback)
                 if (!isMatch && sector.sc !== undefined && isValid(p.sc)) {
-                    // Loose Check: SC matches
                     if (p.sc == sector.sc) {
                         isMatch = true;
-                        // Refine if other params exist AND are valid on point
-                        if (sector.lac && isValid(p.lac)) {
-                            if (norm(sector.lac) !== norm(p.lac)) {
-                                isMatch = false;
-                            }
+                        // Refine with LAC if available
+                        if (sector.lac && isValid(p.lac) && norm(sector.lac) !== norm(p.lac)) {
+                            isMatch = false;
                         }
-
-                        // DISABLED Strict Freq Check due to data mismatches (e.g. 10788 vs 10838 or 3032)
-                        // if (sector.freq && isValid(p.freq) && Math.abs(sector.freq - p.freq) > 5) isMatch = false;
                     }
                 }
 
@@ -2981,12 +2973,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         weight: 2,
                         dashArray: '4, 4'
                     });
-                } else if (debugCount < 3) {
-                    // Debug first few SC-matched points that failed refinement
-                    if (p.sc == sector.sc) {
-                        console.log(`[Spider Debug] Mismatch: P(SC=${p.sc}, L=${p.lac}, F=${p.freq}) vs S(SC=${sector.sc}, L=${sector.lac}, F=${sector.freq})`);
-                        debugCount++;
-                    }
                 }
             });
         });
