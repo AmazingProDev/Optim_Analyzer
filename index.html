@@ -97,6 +97,15 @@
                 </div>
 
                 <div class="setting-item">
+                    <label class="setting-label">Color By</label>
+                    <select id="siteColorBy" class="setting-input"
+                        style="background:#333; color:#fff; border:1px solid #555;">
+                        <option value="tech">Technology</option>
+                        <option value="identity">Cell Identity (RNC/CID)</option>
+                    </select>
+                </div>
+
+                <div class="setting-item">
                     <label class="setting-label">Color Override</label>
                     <div style="display:flex; gap:10px; align-items:center;">
                         <input type="color" id="pickerSiteColor" value="#3b82f6"
@@ -167,7 +176,7 @@
 
             <div id="center-pane"
                 style="flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden;">
-                <div id="map" style="flex: 1;"></div>
+                <div id="map" style="flex: 1;" ondrop="window.drop(event)" ondragover="window.allowDrop(event)"></div>
 
                 <!-- Bottom Panel for Docked Views (Legacy/Bottom) -->
                 <div id="bottomPanel"
@@ -427,10 +436,10 @@
         </div>
     </div>
 
-    <script src="map_renderer.js?v=29"></script>
-    <script src="parser.js?v=27"></script>
-    <script src="theme_config.js?v=1"></script>
-    <script src="app.js?v=v90"></script>
+    <script src="map_renderer.js?v=62"></script>
+    <script src="parser.js?v=43"></script>
+    <script src="theme_config.js?v=2"></script>
+    <script src="app.js?v=v113"></script>
 </body>
 
 </html>

@@ -4,7 +4,19 @@ const NMFParser = {
         let allPoints = []; // Renamed to avoid confusion
         let currentGPS = null;
         let currentLAC = 'N/A';
+
+        // Debug Wrapper for currentCellID
+        let _currentCellID = 'N/A';
+        // We can't easily use a setter here without an object, but we can log updates
+        // Let's manually log where we assign it.
         let currentCellID = 'N/A';
+        let currentRNC = null; // New Global RNC Tracker
+        const setCellID = (val) => {
+            if (val !== currentCellID) {
+                // console.log(`[Parser] CellID Changed: ${currentCellID} -> ${val}`);
+                currentCellID = val;
+            }
+        };
         let currentPSC = null;
 
         const uniqueHeaders = new Set();
@@ -21,6 +33,7 @@ const NMFParser = {
 
             if (header === 'CHI') {
                 const tech = parseInt(parts[3]);
+
                 // CHI Parsing Rule based on Technology
                 // Tech 5 (3G/UMTS): CHI,Time,,5,PLMN,1,Freq,CellID,LAC,PSC...
                 // Tech 7 (4G/LTE):  CHI,Time,,7,PLMN,1,?,?,?,CellID,LAC...
@@ -48,6 +61,61 @@ const NMFParser = {
                             break;
                         }
                     }
+                    if (!foundCid) {
+                        // RNC Search Logic: 
+                        for (let k = 6; k < Math.min(parts.length, 14); k++) {
+                            const rncCand = parseInt(parts[k]);
+                            if (!isNaN(rncCand) && rncCand > 0 && rncCand < 4096) {
+                                // Heuristic: Avoid Tech(5), Status(1)
+                                if (rncCand > 10) {
+                                    currentRNC = rncCand;
+                                    // Now look for CID (Small) in this CHI line logic
+                                    // CID is usually near RNC.
+                                    for (let m = 6; m < Math.min(parts.length, 14); m++) {
+                                        if (m === k) continue; // Skip RNC itself
+                                        const cidCand = parseInt(parts[m]);
+                                        // HEURISTIC REFINEMENT:
+                                        // 1. Strict Float Exclusion: metrics like '3.0' or '6.0' are NOT IDs.
+                                        if (parts[m].includes('.')) continue;
+
+                                        // 2. Avoid Frequencies (UARFCNs). Frequencies are usually followed by a Level (negative number or float).
+                                        if (m + 1 < parts.length) {
+                                            const nextVal = parseFloat(parts[m + 1]);
+                                            if (!isNaN(nextVal) && (nextVal < 0 || parts[m + 1].includes('.'))) {
+                                                continue;
+                                            }
+                                        }
+
+                                        // 3. Known UARFCN Ranges
+                                        if ((cidCand >= 10562 && cidCand <= 10838) ||
+                                            (cidCand >= 2937 && cidCand <= 3088) ||
+                                            (cidCand > 9000)) {
+                                            continue;
+                                        }
+
+                                        // CID > 0, < 65535.
+                                        if (!isNaN(cidCand) && cidCand > 0 && cidCand < 65535) {
+                                            // Heuristic: CID is usually larger than RNC? Not always.
+                                            if (cidCand !== 5 && cidCand !== 1) { // Avoid obvious Tech/Status
+                                                const synId = (currentRNC << 16) + cidCand;
+                                                setCellID(synId);
+                                                foundCid = true;
+
+                                                // DEBUG: Trace origin of Weird IDs
+                                                if (currentRNC === 320 || cidCand === 3) {
+                                                    // console.log(`[Parser DEBUG] Synthesized RNC=${currentRNC} CID=${cidCand} from Indices RNC=${k} CID=${m}`);
+                                                    // console.log(`[Parser DEBUG] Parts[m]: "${parts[m]}"`);
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     if (!foundCid) {
                         // Fallback to strict index if search failed (though search covers strict ind 7)
                         if (parts.length >= 8) {
@@ -79,7 +147,7 @@ const NMFParser = {
                                         // Let's extract valid candidates and log them for now
                                         // But to fix the "3" issue, excluding '.' is the key.
                                         currentPSC = candidate;
-                                        console.log(`[Parser] CHI Found PSC Candidate (Index ${k}): ${candidate}`);
+                                        // console.log(`[Parser] CHI Found PSC Candidate (Index ${k}): ${candidate}`);
                                         break; // Take first match? 
                                     }
                                 }
@@ -119,7 +187,7 @@ const NMFParser = {
 
                 // DEBUG: Log CELLMEAS to find PSC (Looking for 288)
                 // Only log first few to avoid spam
-                if (Math.random() < 0.01) console.log('[Parser] CELLMEAS Debug:', parts);
+                // if (Math.random() < 0.01) console.log('[Parser] CELLMEAS Debug:', parts);
 
                 const techId = parseInt(parts[3]);
                 let servingFreq = 0;
@@ -141,18 +209,27 @@ const NMFParser = {
                     servingFreq = parseFloat(parts[7]);
                     servingLevel = parseFloat(parts[8]);
 
-                    // Attempt to parse CellID from CELLMEAS if available (Index 12 is common for CellID in some NMF formats)
+                    // Attempt to parse CellID from CELLMEAS
                     if (parts.length > 12) {
                         const cellIdCandidate = parseInt(parts[12]);
-                        // Reverted filter: User explicitly wants to see minor values like 0/1, 0/2.
-                        // We strictly check valid positive integer > 0.
-                        if (!isNaN(cellIdCandidate) && cellIdCandidate > 0) {
+
+                        // Rule 1: Standard Big Cell ID (RNC+CID combined)
+                        if (!isNaN(cellIdCandidate) && cellIdCandidate > 20000) {
                             if (currentCellID !== 'N/A' && currentCellID !== cellIdCandidate) {
-                                // CellID changed without a new CHI header? 
-                                // Invalidate PSC to avoid applying the old sector's SC to the new cell.
                                 currentPSC = null;
                             }
-                            currentCellID = cellIdCandidate;
+                            setCellID(cellIdCandidate);
+                            currentRNC = (cellIdCandidate >> 16); // Extract RNC from valid ID
+                        }
+                        // Rule 2: Split RNC/CID Case (Small CID + Known RNC)
+                        else if (!isNaN(cellIdCandidate) && cellIdCandidate > 0 && cellIdCandidate < 65535 && currentRNC > 0) {
+                            // Synthesize Full ID
+                            const synthesizedID = (currentRNC << 16) + cellIdCandidate;
+                            if (currentCellID !== 'N/A' && currentCellID !== synthesizedID) {
+                                currentPSC = null;
+                            }
+                            setCellID(synthesizedID);
+
                         }
                     }
 
@@ -433,10 +510,10 @@ const NMFParser = {
             }
         }
 
-        console.log('--- NMF PARSER DEBUG ---');
-        console.log('Unique Event Headers Found:', Array.from(uniqueHeaders));
-        console.log('Signaling Points Found:', allPoints.filter(p => p.type === 'SIGNALING').length);
-        console.log('------------------------');
+        // console.log('--- NMF PARSER DEBUG ---');
+        // console.log('Unique Event Headers Found:', Array.from(uniqueHeaders));
+        // console.log('Signaling Points Found:', allPoints.filter(p => p.type === 'SIGNALING').length);
+        // console.log('------------------------');
 
         // Split points
         const measurementPoints = allPoints.filter(p => p.type === 'MEASUREMENT');

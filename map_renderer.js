@@ -76,7 +76,8 @@ class MapRenderer {
     }
 
     getColor(val, metric = 'level') {
-        if (val === undefined || isNaN(val)) return '#888';
+        if (val === undefined) return '#888';
+        // Removed isNaN(val) check because CellID is a string "RNC/CID" and isNaN returns true!
 
         if (window.getThresholdKey && window.themeConfig) {
             const rangeKey = window.getThresholdKey(metric);
@@ -101,6 +102,11 @@ class MapRenderer {
         // Default / Frequency / Count
         // Use discrete coloring for IDs
         if (['cellId', 'pci', 'sc', 'lac', 'serving_cell_name'].includes(metric)) {
+            if (metric === 'cellId' || metric === 'cid') {
+                // ALWAYS use discrete coloring for Cell ID metric
+                // This prevents falling back to "Tech Coloring" (Grey) when siteSettings is unset
+                return this.getDiscreteColor(val);
+            }
             return this.getDiscreteColor(val);
         }
 
@@ -108,15 +114,35 @@ class MapRenderer {
     }
 
     getDiscreteColor(val) {
-        if (!val) return '#888';
-        // Simple hash to color
+        if (val === undefined || val === null || val === '' || val === 'N/A') return '#ff0000'; // RED for Invalid (Debug)
+
+        // Normalize: Remove whitespace to match Index keys
+        const str = String(val).replace(/\s/g, '');
+
+        // Custom 12-color palette from user image
+        const palette = [
+            '#FF0000', // red
+            '#0000FF', // blue
+            '#00A300', // green
+            '#FFFF00', // yellow
+            '#FF8C00', // orange
+            '#FF1493', // pink
+            '#FFFFFF', // white
+            '#808080', // gray
+            '#FF00FF', // magenta
+            '#6A0DAD', // purple
+            '#000000', // black
+            '#8B4513'  // brown
+        ];
+
         let hash = 0;
-        const str = String(val);
         for (let i = 0; i < str.length; i++) {
             hash = str.charCodeAt(i) + ((hash << 5) - hash);
         }
-        const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
-        return '#' + '00000'.substring(0, 6 - c.length) + c;
+
+        // Map hash to palette index
+        const index = Math.abs(hash) % palette.length;
+        return palette[index];
     }
 
     resolveServingName(p) {
@@ -158,61 +184,157 @@ class MapRenderer {
         // Create a new layer group for this log
         const layerGroup = L.layerGroup();
 
-        // Use a simpler rendering for large datasets to avoid browser freeze
-        // But for <10k points, CircleMarker is fine.
+        if (!points || points.length === 0) {
+            console.warn("[MapRenderer] addLogLayer: No points to render.");
+            return;
+        }
 
-        points.forEach(p => {
-            // Determine value based on metric
-            // Checks top-level or parsed.serving
+        let validCount = 0;
+        let naCount = 0;
+        let firstValid = null;
+
+        points.forEach((p, idx) => {
             let val = p[metric];
-
-            // Special handling for Serving Cell Name
-            if (metric === 'serving_cell_name') {
-                val = this.resolveServingName(p) || 'Unknown';
+            // Normalize CellID for check
+            if (metric === 'cellId' || metric === 'cid') {
+                // SMART COLORING: If metric is 'cellId' (default identity), try to use the Smart Resolved ID
+                // This covers cases where Log has Stale/Missing ID but 'p.sc' + 'p.freq' allows us to find the real Cell ID.
+                if (metric === 'cellId' && window.resolveSmartSite) {
+                    const resolved = window.resolveSmartSite(p);
+                    if (resolved && resolved.id) {
+                        val = resolved.id;
+                    } else if (p.rnc !== undefined && p.rnc !== null && p.cid !== undefined && p.cid !== null) {
+                        // Fallback to Raw RNC/CID if Smart Resolve failed
+                        val = `${p.rnc}/${p.cid}`;
+                    }
+                } else if (p.rnc !== undefined && p.rnc !== null && p.cid !== undefined && p.cid !== null) {
+                    val = `${p.rnc}/${p.cid}`;
+                }
             }
 
-            // Special handling for rscp / rscp_not_combined
-            if (metric === 'rscp_not_combined' || metric === 'rscp') {
-                if (val === undefined) val = p.level;
-                if (val === undefined) val = p.rscp;
-                if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving.level; // fallback
+            if (val === undefined || val === null || val === 'N/A' || val === '') {
+                naCount++;
+            } else {
+                validCount++;
+                if (!firstValid) firstValid = { idx, val, p };
             }
-
-            // Special handling for active_set_ metrics
-            if (metric.startsWith('active_set_')) {
-                const sub = metric.replace('active_set_', '').toLowerCase();
-                val = p[sub];
-            }
-
-            if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving[metric];
-
-            const color = this.getColor(val, metric);
-
-            const marker = L.circleMarker([p.lat, p.lng], {
-                radius: 5,
-                fillColor: color,
-                color: "#000",
-                weight: 1,
-                opacity: 1,
-                fillOpacity: 0.8
-            }).addTo(layerGroup);
-
-            // Add Click Event for Sync
-            marker.on('click', () => {
-                window.dispatchEvent(new CustomEvent('map-point-clicked', {
-                    detail: { logId: id, point: p }
-                }));
-                // We don't bind popup anymore, we updated the global info panel via the sync loop.
-            });
         });
+
+        if (!firstValid) {
+            console.warn("[MapRenderer] NO VALID POINTS FOUND for this metric!");
+        }
+
+
+        // CHUNKED RENDERING: Process points in batches to avoid freezing UI
+        const CHUNK_SIZE = 1000;
+        const totalPoints = points.length;
+        let pIdx = 0;
+        const validLocations = [];
+        const idsCollection = new Set(); // Accumulate IDs for Legend here
+
+        const processChunk = () => {
+            const end = Math.min(pIdx + CHUNK_SIZE, totalPoints);
+            for (let i = pIdx; i < end; i++) {
+                const p = points[i];
+                let val = p[metric];
+
+                // Special handling for Serving Cell Name
+                if (metric === 'serving_cell_name') {
+                    val = this.resolveServingName(p) || 'Unknown';
+                }
+
+                // Normalize CellID for color matching with Sites
+                if (metric === 'cellId' || metric === 'cid') {
+                    // Smart Resolve logic already likely applied in First Pass? 
+                    // No, "First Pass" above only Calc'd stats (validCount).
+                    // We need to re-apply Smart Logic here or cache it.
+                    // Caching would be better but let's re-run (it's O(1) now).
+
+                    if (window.resolveSmartSite) {
+                        const resolved = window.resolveSmartSite(p);
+                        if (resolved && resolved.id) {
+                            val = resolved.id;
+                        } else if (p.rnc !== undefined && p.cid !== undefined) {
+                            val = `${p.rnc}/${p.cid}`;
+                        }
+                    } else if (p.rnc !== undefined && p.cid !== undefined) {
+                        val = `${p.rnc}/${p.cid}`;
+                    }
+
+                    if (pIdx === 0 && i < 3) {
+                        console.log(`[MapRenderer] Point ${i} Debug:`, {
+                            hasResolve: !!window.resolveSmartSite,
+                            resolved: window.resolveSmartSite ? window.resolveSmartSite(p) : 'N/A',
+                            pRnc: p.rnc, pCid: p.cid, pCellId: p.cellId,
+                            FINAL_VAL: val
+                        });
+                    }
+
+                    // Collect ID for Legend (Async Accumulation)
+                    if (val) idsCollection.add(String(val));
+                }
+
+                // Special Metric Handling
+                if (metric === 'rscp_not_combined' || metric === 'rscp') {
+                    if (val === undefined) val = p.level;
+                    if (val === undefined) val = p.rscp;
+                    if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving.level;
+                }
+                if (metric.startsWith('active_set_')) {
+                    const sub = metric.replace('active_set_', '').toLowerCase();
+                    val = p[sub];
+                }
+                if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving[metric];
+
+                const color = this.getColor(val, metric);
+
+                if (p.lat !== undefined && p.lat !== null && p.lng !== undefined && p.lng !== null) {
+                    validLocations.push([p.lat, p.lng]);
+
+                    const marker = L.circleMarker([p.lat, p.lng], {
+                        radius: 5,
+                        fillColor: color,
+                        color: "#000",
+                        weight: 1,
+                        opacity: 1,
+                        fillOpacity: 0.8
+                    }).addTo(layerGroup);
+
+                    marker.on('click', () => {
+                        window.dispatchEvent(new CustomEvent('map-point-clicked', {
+                            detail: { logId: id, point: p }
+                        }));
+                    });
+                }
+            }
+
+            pIdx = end;
+            if (pIdx < totalPoints) {
+                // Yield to main thread
+                setTimeout(processChunk, 0);
+            } else {
+                // Done
+                if (validLocations.length > 0) {
+                    this.map.fitBounds(validLocations);
+                }
+
+                // Finalize Legend IDs if applicable
+                if (metric === 'cellId' || metric === 'cid') {
+                    this.activeMetricIds = Array.from(idsCollection).sort();
+                    // Re-render sites to match colors if needed
+                    this.renderSites(false);
+                }
+
+                // Signal that rendering and ID collection is complete
+                window.dispatchEvent(new CustomEvent('layer-metric-ready', { detail: { metric } }));
+            }
+        };
 
         this.logLayers[id] = layerGroup;
         layerGroup.addTo(this.map);
 
-        if (points.length > 0) {
-            const bounds = points.map(p => [p.lat, p.lng]);
-            this.map.fitBounds(bounds);
-        }
+        // Start Processing
+        processChunk();
     }
 
     highlightMarker(logId, index) {
@@ -242,7 +364,7 @@ class MapRenderer {
             // 3. Open Popup
             marker.openPopup();
 
-            // 4. Ensure view contains it (optional padding)
+            // 4. Ensure view contains it 
             if (!this.map.getBounds().contains(latLng)) {
                 this.map.panTo(latLng);
             }
@@ -250,6 +372,23 @@ class MapRenderer {
     }
 
     updateLayerMetric(id, points, metric) {
+        console.log(`[MapRenderer] updateLayerMetric: id=${id}, points=${points ? points.length : 0}, metric=${metric}`);
+
+        // SYNC SITES SETUP
+        if (metric === 'cellId' || metric === 'cid') {
+            // DEFER ID Collection to addLogLayer (Chunked) to avoid freeze
+            // this.activeMetricIds will be updated when rendering finishes.
+
+            // Force Identity Mode
+            if (!this.siteSettings) this.siteSettings = {};
+            this.siteSettings.colorBy = 'identity';
+
+            // Render Sites with Highlights (Initial pass, update happens after async processing)
+            this.renderSites(false);
+        } else {
+            this.activeMetricIds = null;
+        }
+
         this.removeLogLayer(id);
         this.addLogLayer(id, points, metric);
     }
@@ -259,7 +398,7 @@ class MapRenderer {
             this.map.removeLayer(this.logLayers[id]);
             delete this.logLayers[id];
         }
-        this.removeEventsLayer(id); // Components cleanup
+        this.removeEventsLayer(id);
     }
 
     addEventsLayer(id, points) {
@@ -270,6 +409,10 @@ class MapRenderer {
 
         points.forEach(p => {
             if (!p.event) return;
+            // Aggressive Filter for Testing
+            const evt = p.event.toLowerCase();
+            if (evt.includes('disconnect') || evt.includes('release') || evt.includes('end') || evt.includes('normal')) return;
+
             // Skip points with invalid valid coordinates to prevent Leaflet crash
             if (p.lat === undefined || p.lat === null || p.lng === undefined || p.lng === null || isNaN(p.lat) || isNaN(p.lng)) return;
 
@@ -343,6 +486,38 @@ class MapRenderer {
 
     addSiteLayer(sectors) {
         this.siteData = sectors; // Store original data
+
+        // Build Index for Performance
+        this.siteIndex = {
+            byId: new Map(),
+            bySc: new Map()
+        };
+
+        sectors.forEach(s => {
+            // Index by CellID (String normalized)
+            if (s.cellId) {
+                // Normalize: Remove whitespace to match app.js 'norm' logic
+                const normId = String(s.cellId).replace(/\s/g, '');
+                this.siteIndex.byId.set(normId, s);
+
+                // Also index by RNC/CID if available, just in case
+                if (s.rnc && s.cid) {
+                    const rncCid = `${s.rnc}/${s.cid}`.replace(/\s/g, '');
+                    this.siteIndex.byId.set(rncCid, s);
+                }
+            }
+
+            // Index by SC (PCI) for Fuzzy Freq Matching
+            const sc = s.sc || s.pci;
+            if (sc !== undefined) {
+                const key = String(sc);
+                if (!this.siteIndex.bySc.has(key)) {
+                    this.siteIndex.bySc.set(key, []);
+                }
+                this.siteIndex.bySc.get(key).push(s);
+            }
+        });
+
         this.renderSites(true); // Fit bounds on initial load
     }
 
@@ -353,10 +528,31 @@ class MapRenderer {
         }
     }
 
-    renderSites(fitBounds = false) {
+    getSiteColor(s) {
+        if (this.siteSettings && this.siteSettings.colorBy === 'identity') {
+            let idStr = s.cellId;
+            if (s.rnc && s.cid) idStr = `${s.rnc}/${s.cid}`;
+            return this.getDiscreteColor(idStr);
+        }
+
+        const tech = (s.tech || '').toLowerCase();
+        if (tech.includes('5g') || tech.includes('nr')) return '#8b5cf6'; // Purple
+        if (tech.includes('4g') || tech.includes('lte')) return '#ef4444'; // Red
+        if (tech.includes('3g') || tech.includes('umts') || tech.includes('wcdma')) return '#f59e0b'; // Amber
+        if (tech.includes('2g') || tech.includes('gsm')) return '#3b82f6'; // Blue
+        return '#6b7280'; // Gray
+    }
+
+    renderSites(fitBounds = false, activeCellIds = null) {
+        if (!activeCellIds && this.activeMetricIds) {
+            activeCellIds = this.activeMetricIds;
+        }
         if (this.sitesLayer) {
             this.map.removeLayer(this.sitesLayer);
         }
+
+        if (!this.siteData || this.siteData.length === 0) return;
+
         this.sitesLayer = L.layerGroup();
 
         // Clear Labels
@@ -364,21 +560,45 @@ class MapRenderer {
             this.siteLabelsLayer.clearLayers();
         }
 
-        // Defaults
-        const range = this.siteSettings && this.siteSettings.range ? parseInt(this.siteSettings.range) : 200;
-        const beamwidth = this.siteSettings && this.siteSettings.beamwidth ? parseInt(this.siteSettings.beamwidth) : 60;
-        const opacity = this.siteSettings && this.siteSettings.opacity ? parseFloat(this.siteSettings.opacity) : 0.6;
-        const overrideColor = this.siteSettings && this.siteSettings.useOverride ? this.siteSettings.color : null;
+        const settings = this.siteSettings || {};
+        const range = parseInt(settings.siteRange) || 300;
+        const opacity = parseFloat(settings.siteOpacity) || 0.6;
+        const beam = parseInt(settings.iconBeam) || 60;
+        const overrideColor = settings.useOverride ? settings.color : null;
 
-        const renderedSiteLabels = new Set(); // Track unique site names to avoid duplicates
-        this.sitePolygons = {}; // Lookup for highlighting
+        const renderedSiteLabels = new Set();
+        this.sitePolygons = {};
 
         this.siteData.forEach(s => {
             if (s.lat === undefined || s.lng === undefined || isNaN(s.lat) || isNaN(s.lng)) return;
 
-            const azimuth = s.azimuth || 0;
+            // COLOR LOGIC FOR SELECTIVE HIGHLIGHT
+            let color;
+            let finalOpacity = opacity;
+            let finalFillOpacity = opacity * 0.5;
 
-            // Calculate Triangle Vertices
+            if (activeCellIds) {
+                // HIGHLIGHT MODE: Default is dim
+                color = '#444';
+                finalOpacity = 0.2;
+                finalFillOpacity = 0.05;
+
+                let idStr = s.cellId;
+                if (s.rnc && s.cid) idStr = `${s.rnc}/${s.cid}`;
+
+                if (activeCellIds.includes(String(idStr)) || activeCellIds.includes(String(s.cellId))) {
+                    // Match! Use Identity Color
+                    color = this.getDiscreteColor(idStr);
+                    finalOpacity = 1;
+                    finalFillOpacity = 0.6;
+                }
+            } else {
+                // STANDARD MODE
+                color = overrideColor || this.getSiteColor(s);
+            }
+
+            // Calculations
+            const azimuth = s.azimuth || 0;
             const center = [s.lat, s.lng];
 
             const getPoint = (lat, lng, bearing, dist) => {
@@ -392,86 +612,51 @@ class MapRenderer {
                 return [lat + dLat, lng + dLng];
             };
 
-            const p1 = getPoint(s.lat, s.lng, azimuth - beamwidth / 2, range);
-            const p2 = getPoint(s.lat, s.lng, azimuth + beamwidth / 2, range);
-
-            const color = overrideColor || s.color || '#3b82f6';
+            const p1 = getPoint(s.lat, s.lng, azimuth - beam / 2, range);
+            const p2 = getPoint(s.lat, s.lng, azimuth + beam / 2, range);
 
             const polygon = L.polygon([center, p1, p2], {
                 color: '#333',
                 weight: 1,
                 fillColor: color,
-                fillOpacity: opacity
+                fillOpacity: finalFillOpacity,
+                opacity: finalOpacity
             }).addTo(this.sitesLayer);
 
             if (s.cellId) {
                 this.sitePolygons[s.cellId] = polygon;
             }
 
-            // Labels - Add to siteLabelsLayer
-            if (this.siteSettings && this.siteSettings.showSiteNames) {
-                const siteName = s.siteName || s.name; // Prioritize siteName
-
-                // Deduplicate: Only render if we haven't seen this site name yet
+            // Labels
+            if (settings.showSiteNames) {
+                const siteName = s.siteName || s.name;
                 if (siteName && !renderedSiteLabels.has(siteName)) {
                     renderedSiteLabels.add(siteName);
-
-                    const siteLabel = L.marker(center, {
-                        icon: L.divIcon({
-                            className: 'site-label',
-                            html: `<div style="color:#fff; font-size:10px; text-shadow:0 0 2px #000; white-space:nowrap;">${siteName}</div>`,
-                            iconAnchor: [20, 10] // Centerish
-                        }),
-                        interactive: false
-                    }).addTo(this.siteLabelsLayer);
+                    L.marker(center, { icon: L.divIcon({ className: 'site-label', html: `<div style="color:#fff; font-size:10px; text-shadow:0 0 2px #000; white-space:nowrap;">${siteName}</div>`, iconAnchor: [20, 10] }), interactive: false }).addTo(this.siteLabelsLayer);
                 }
             }
-
-            if (this.siteSettings && this.siteSettings.showCellNames) {
+            if (settings.showCellNames) {
                 const tipMid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
-                const cellLabel = L.marker(tipMid, {
-                    icon: L.divIcon({
-                        className: 'cell-label',
-                        html: `<div style="color:#ddd; font-size:9px; text-shadow:0 0 2px #000; white-space:nowrap;">${s.cellId || ''}</div>`,
-                        iconAnchor: [10, 0]
-                    }),
-                    interactive: false
-                }).addTo(this.siteLabelsLayer);
+                L.marker(tipMid, { icon: L.divIcon({ className: 'cell-label', html: `<div style="color:#ddd; font-size:9px; text-shadow:0 0 2px #000; white-space:nowrap;">${s.cellId || ''}</div>`, iconAnchor: [10, 0] }), interactive: false }).addTo(this.siteLabelsLayer);
             }
 
-            // Bind Popup
+            // Popup
             const content = `
                 <div style="font-family: sans-serif; font-size: 13px;">
                     <strong>${s.name || 'Unknown Site'}</strong><br>
                     Cell: ${s.cellId || '-'}<br>
                     Azimuth: ${azimuth}°<br>
-                    Tech: ${s.tech || '-'}
+                    Tech: ${s.tech || '-'}<br>
+                    <span style="font-size:10px; color:#888;">(RNC/CID: ${s.rnc}/${s.cid})</span>
                 </div>
             `;
             polygon.bindPopup(content);
-
-            // Click Event for Spider Option
-            polygon.on('click', () => {
-                window.dispatchEvent(new CustomEvent('site-sector-clicked', {
-                    detail: {
-                        cellId: s.cellId,
-                        sc: s.sc || s.pci,
-                        lac: s.lac,
-                        freq: s.freq,
-                        lat: s.lat,
-                        lng: s.lng,
-                        azimuth: azimuth
-                    }
-                }));
-            });
+            polygon.on('click', () => { window.dispatchEvent(new CustomEvent('site-sector-clicked', { detail: { cellId: s.cellId, sc: s.sc || s.pci, lac: s.lac, freq: s.freq, lat: s.lat, lng: s.lng, azimuth: azimuth } })); });
         });
 
         this.sitesLayer.addTo(this.map);
-
-        // Update visibility based on zoom
         this.updateLabelVisibility();
 
-        // Fit bounds only if requested
         if (fitBounds && this.siteData.length > 0) {
             const bounds = L.latLngBounds(this.siteData.map(s => [s.lat, s.lng]));
             this.map.fitBounds(bounds.pad(0.1));

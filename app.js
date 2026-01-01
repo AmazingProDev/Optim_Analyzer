@@ -8,6 +8,14 @@ document.addEventListener('DOMContentLoaded', () => {
     window.map = map.map; // Expose Leaflet instance globally for inline onclicks
     window.mapRenderer = map; // Expose Renderer helper for debugging/verification
 
+    // Global Listener for Map Rendering Completion (Async Legend)
+    window.addEventListener('layer-metric-ready', (e) => {
+        // console.log(`[App] layer-metric-ready received for: ${e.detail.metric}`);
+        if (typeof window.updateLegend === 'function') {
+            window.updateLegend();
+        }
+    });
+
     // Map Drop Zone Logic
     const mapContainer = document.getElementById('map');
     mapContainer.addEventListener('dragover', (e) => {
@@ -396,8 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data && data.logId && data.param) {
                 // Determine Log and Points
                 const log = loadedLogs.find(l => l.id === data.logId);
-                if (log) {
-                    console.log('Dropped on Map:', data);
+                if (data.type === 'metric') {
                     // Update Map Layer
                     map.updateLayerMetric(log.id, log.points, data.param);
                     // Optional: Show some feedback?
@@ -1372,6 +1379,13 @@ document.addEventListener('DOMContentLoaded', () => {
             barChartInstance.update();
         };
 
+        // Listen for Async Map Rendering Completion - MOVED TO GLOBAL
+        // window.addEventListener('layer-metric-ready', (e) => { ... });
+
+        // Handle Theme Change
+        document.getElementById('theme-select').addEventListener('change', (e) => {
+            updateLegend();
+        });
         // Bind events
         document.getElementById('pickerServing').addEventListener('input', updateChartStyle);
 
@@ -1470,7 +1484,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Legend Elements
     let legendControl = null;
 
-    function updateLegend() {
+    window.updateLegend = function () {
         if (!window.themeConfig || !window.map) return;
 
         // Remove existing legend
@@ -1480,6 +1494,96 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const theme = themeSelect ? themeSelect.value : 'level';
+        // console.log(`[App] updateLegend called. Theme: ${theme}`);
+
+        // SPECIAL LEGEND FOR CELL ID / DISCRETE
+        if (theme === 'cellId' || theme === 'cid') {
+            let ids = window.mapRenderer ? window.mapRenderer.activeMetricIds : [];
+            // Remove legacy fallback that caused iteration spam
+            if (!ids) ids = [];
+
+            // Create Draggable Custom Legend (Not Leaflet Control)
+            let existingLegend = document.getElementById('draggable-legend');
+            if (existingLegend) {
+                existingLegend.remove();
+            }
+
+            const container = document.createElement('div');
+            container.id = 'draggable-legend';
+            container.setAttribute('style', `
+                position: absolute;
+                top: 80px; 
+                right: 20px;
+                width: 200px;
+                max-height: 400px;
+                background-color: rgba(30, 30, 30, 0.95);
+                border: 2px solid #555;
+                border-radius: 6px;
+                color: #fff;
+                z-index: 10001; /* Above map and standard controls */
+                box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+                display: flex;
+                flex-direction: column;
+            `);
+
+            // Header for Dragging
+            const header = document.createElement('div');
+            header.setAttribute('style', `
+                padding: 8px 10px;
+                background-color: #252525;
+                font-weight: bold;
+                font-size: 13px;
+                border-bottom: 1px solid #444;
+                cursor: grab;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-radius: 6px 6px 0 0;
+            `);
+            header.innerHTML = `<span>Cell IDs (${ids ? ids.length : 0})</span> <span onclick="this.parentElement.parentElement.remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa;">&times;</span>`;
+
+            // Content Body
+            const body = document.createElement('div');
+            body.setAttribute('style', `
+                padding: 10px;
+                overflow-y: auto;
+                flex: 1;
+            `);
+
+            // Render IDs
+            if (ids && ids.length > 0) {
+                let html = `<div style="display:flex; flex-direction:column; gap:2px;">`;
+                ids.forEach(id => {
+                    const color = window.mapRenderer.getDiscreteColor(id);
+                    html += `
+                        <div style="display:flex; align-items:center;">
+                            <span style="background:${color}; width:12px; height:12px; min-width:12px; display:inline-block; margin-right:8px; border-radius:3px; border:1px solid #ddd;"></span>
+                            <span style="font-size:11px; white-space:nowrap; font-family:monospace;">${id}</span>
+                        </div>
+                    `;
+                });
+                html += `</div>`;
+                body.innerHTML = html;
+            } else {
+                body.innerHTML = `<i style="font-size:11px; color:#f87171;">No Cell IDs found.</i>`;
+            }
+
+            container.appendChild(header);
+            container.appendChild(body);
+            document.body.appendChild(container);
+
+            // Make it Draggable
+            if (typeof makeElementDraggable === 'function') {
+                makeElementDraggable(header, container);
+            } else {
+                // Fallback inline drag if function missing from scope (unlikely)
+            }
+
+            // Sync legacy var for cleanup
+            legendControl = { remove: () => container.remove(), addTo: () => { } };
+            return;
+        }
+
         const thresholds = window.themeConfig.thresholds[theme];
         if (!thresholds) return;
 
@@ -1524,7 +1628,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Hook updateLegend into UI actions
     // Initial Load (delayed to ensure map exists)
-    setTimeout(updateLegend, 2000);
+    setTimeout(window.updateLegend, 2000);
 
     // Global Add/Remove Handlers (attached to window for inline onclicks)
     window.removeThreshold = (idx) => {
@@ -1686,17 +1790,23 @@ document.addEventListener('DOMContentLoaded', () => {
             const titleEl = document.getElementById('gridTitle');
             if (titleEl) titleEl.textContent = `Grid View: ${log.name}`;
 
+            // Store ID for dragging context
+            window.currentGridLogId = log.id;
+
             // Build Table
+            // Build Table
+            // Ensure headers are draggable for metric drop functionality
             let tableHtml = `<table style="width:100%; border-collapse:collapse; color:#eee; font-size:12px;">
                 <thead style="position:sticky; top:0; background:#333; height:30px;">
                     <tr>
                         <th style="padding:4px 8px; text-align:left;">Time</th>
                         <th style="padding:4px 8px; text-align:left;">Lat</th>
                         <th style="padding:4px 8px; text-align:left;">Lng</th>
-                        <th style="padding:4px 8px; text-align:left;">RNC/CID</th>`;
+                        <th draggable="true" ondragstart="window.handleHeaderDragStart(event)" data-param="cellId" style="padding:4px 8px; text-align:left; cursor:grab;">RNC/CID</th>`;
 
             window.currentGridColumns.forEach(col => {
-                tableHtml += `<th style="padding:4px 8px; text-align:left; text-transform:uppercase;">${col}</th>`;
+                if (col === 'cellId') return; // Skip cellId as it is handled by RNC/CID column
+                tableHtml += `<th draggable="true" ondragstart="window.handleHeaderDragStart(event)" data-param="${col}" style="padding:4px 8px; text-align:left; text-transform:uppercase; cursor:grab;">${col}</th>`;
             });
             tableHtml += `</tr></thead><tbody>`;
 
@@ -1717,6 +1827,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding:4px 8px; border-bottom:1px solid #333;">${rncCid}</td>`;
 
                 window.currentGridColumns.forEach(col => {
+                    if (col === 'cellId') return; // Skip cellId
                     let val = p[col];
 
                     // Handling complex parsing access
@@ -2277,6 +2388,157 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     // CENTRALIZED SYNCHRONIZATION
     // ----------------------------------------------------
+    // --- Global Helper: Lookup Cell Name from SiteData ---
+    window.resolveSmartSite = (p) => {
+        const NO_MATCH = { name: null, id: null };
+        const pci = p.sc || p.pci; // Normalized SC
+        const cellId = p.cellId;
+        const lac = p.lac;
+        const freq = p.freq;
+        const lat = p.lat;
+        const lng = p.lng;
+        const rnc = p.rnc;
+
+        try {
+            // 0. Helper & Dist
+            if (!window.mapRenderer || !window.mapRenderer.siteData) return NO_MATCH;
+            const siteData = window.mapRenderer.siteData;
+
+            const getName = (s) => s.cellName || s.name || s.siteName;
+            const getDistSq = (s) => {
+                if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999999999;
+                return Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2);
+            };
+
+            const norm = (val) => String(val).replace(/\s/g, '');
+
+            // 1. Serving Cell Logic: STRICT CellID Match (with SC Disambiguation)
+            let match = null;
+            if (cellId !== undefined && cellId !== null && cellId !== 'N/A') {
+                let candidates = [];
+
+                // A. Exact Match (All candidates via Index)
+                if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
+                    const indexed = window.mapRenderer.siteIndex.byId.get(String(cellId));
+                    if (indexed) candidates = [indexed];
+                } else {
+                    // Fallback if index missing
+                    // Fallback if index missing
+                    // REMOVED LINEAR SCAN: candidates = siteData.filter(s => s.cellId == cellId);
+                    // If Index is missing, we simply fail fast.
+                }
+
+                // B. Fallback: Short CID + LAC Match
+                if (candidates.length === 0 && lac) {
+                    const shortCid = cellId & 0xFFFF;
+                    if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
+                        const match = window.mapRenderer.siteIndex.byId.get(String(shortCid));
+                        if (match && match.lac == lac) candidates = [match];
+                    }
+                    if (candidates.length === 0) {
+                        // REMOVED LINEAR SCAN: candidates = siteData.filter(s => s.cellId == shortCid && s.lac == lac);
+                    }
+                }
+
+                // C. Fallback: RNC/CID Format Match (Robust)
+                if (candidates.length === 0) {
+                    // Try decomposition for 28-bit IDs (3G) if RNC is missing but cellId is large
+                    let lookupRnc = rnc;
+                    let lookupCid = cellId & 0xFFFF;
+
+                    if ((lookupRnc === undefined || lookupRnc === null || lookupRnc === 'N/A') && cellId > 65535) {
+                        lookupRnc = cellId >> 16;
+                    }
+
+                    if (lookupRnc !== undefined && lookupRnc !== null && lookupRnc !== 'N/A') {
+                        const rncCidStr = `${lookupRnc}/${lookupCid}`;
+                        if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
+                            const match = window.mapRenderer.siteIndex.byId.get(rncCidStr);
+                            if (match) candidates = [match];
+                        }
+                    }
+
+                    // If Point has "RNC/CID" string directly in cellId
+                    if (candidates.length === 0 && String(cellId).includes('/')) {
+                        if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
+                            const match = window.mapRenderer.siteIndex.byId.get(String(cellId));
+                            if (match) candidates = [match];
+                        }
+                    }
+                }
+
+                // DISAMBIGUATE: If multiple candidates, use SC (pci) to pick the right one
+                if (candidates.length > 0) {
+                    if (pci !== undefined && pci !== null) {
+                        // Try loose match on SC or PCI
+                        match = candidates.find(s => s.sc == pci || s.pci == pci);
+                    }
+                    // Fallback: Use first candidate if no SC match or no SC provided
+                    if (!match) match = candidates[0];
+                }
+            }
+
+            // STALE CELLID CHECK (or MISSING ID RECOVERY):
+            // Logic: If (Match found but SC mismatch) OR (No Match found), try SC+Location Search
+            const isStale = match && pci !== undefined && pci !== null && (match.sc != pci && match.pci != pci);
+            const isMissing = !match;
+
+            if (isStale || isMissing) {
+                // Try to find a site primarily by SC + Location (and Freq)
+                if (pci !== undefined && pci !== null) {
+                    let scCandidates = [];
+                    if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.bySc) {
+                        const indexed = window.mapRenderer.siteIndex.bySc.get(String(pci));
+                        if (indexed) scCandidates = [...indexed]; // Copy to avoid mutation
+                    } else {
+                        // REMOVED LINEAR SCAN: scCandidates = siteData.filter(s => s.pci == pci || s.sc == pci);
+                    }
+                    if (freq) {
+                        const fTol = 2; // Tolerance
+                        scCandidates = scCandidates.filter(s => !s.dl_earfcn || Math.abs(s.dl_earfcn - freq) < fTol || !s.uarfcn || Math.abs(s.uarfcn - freq) < fTol);
+                    }
+                    if (scCandidates.length > 0) {
+                        // Pick closest
+                        let best = scCandidates[0];
+                        let bestDistSq = getDistSq(best);
+                        for (let i = 1; i < scCandidates.length; i++) {
+                            const dSq = getDistSq(scCandidates[i]);
+                            if (dSq < bestDistSq) {
+                                best = scCandidates[i];
+                                bestDistSq = dSq;
+                            }
+                        }
+                        // If we found a valid SC candidate close enough (< 20km approx 0.2 deg? No, using lat/lng diff directly is flawed if not conv to meters?
+                        // Wait, previous code used lat/lng diff directly inside Math.sqrt.
+                        // 1 deg lat ~= 111km. 20km ~= 0.18 deg. 
+                        // 0.18^2 = 0.0324.
+                        // User's previous code check `bestDist < 20000` assuming `getDist` returns meters?
+                        // BUT `getDist` above was `Math.sqrt((lat-lat)^2 + ...)`. That returns DEGREES.
+                        // So `bestDist < 20000` was ALWAYS TRUE (Degree diff is like 0.001).
+                        // So the check was useless. I will keep it logic-equivalent (always true) or fix it?
+                        // I will assume degrees. 20km is roughly 0.2 degrees.
+                        // 0.2^2 = 0.04.
+
+                        if (best && bestDistSq < 0.04) { // Approx 22km limit
+                            // Override match with this "Smart" match
+                            match = best;
+                            // console.log(`[SmartMatch] Overrode Stale/Missing ID ${cellId} with Site ${match.cellId} (Dist: ${Math.round(bestDist)}m)`);
+                        }
+                    }
+                }
+            }
+
+            if (match) {
+                return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng, site: match };
+            }
+            return NO_MATCH;
+
+        } catch (e) {
+            console.error("Error in resolveSmartSite:", e);
+            return NO_MATCH;
+        }
+    };
+
     // Global function to update the Floating Info Panel
     window.updateFloatingInfoPanel = (p) => {
         try {
@@ -2295,134 +2557,40 @@ document.addEventListener('DOMContentLoaded', () => {
             if (panel.style.display === 'none') {
                 panel.style.display = 'block';
             }
+        } catch (err) {
+            console.error("Error in resolveCellName:", err);
+        }
+        return NO_MATCH;
+    };
 
-            // --- Helper: Lookup Cell Name from SiteData ---
-            const resolveCellName = (pci, cellId, lac, freq, lat, lng, rnc) => {
-                const NO_MATCH = { name: null, id: null };
-                try {
-                    // 0. Helper & Dist
-                    if (!window.mapRenderer || !window.mapRenderer.siteData) return NO_MATCH;
-                    const siteData = window.mapRenderer.siteData;
+    // Global function to update the Floating Info Panel
+    window.updateFloatingInfoPanel = (p) => {
+        try {
+            console.log("[InfoPanel] Updating for point:", p);
+            const panel = document.getElementById('floatingInfoPanel');
+            const content = document.getElementById('infoPanelContent');
+            if (!panel || !content) {
+                return;
+            }
 
-                    const getName = (s) => s.cellName || s.name || s.siteName;
-                    const getDist = (s) => {
-                        if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999;
-                        return Math.sqrt(Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2));
-                    };
-
-                    // 1. Serving Cell Logic: STRICT CellID Match (with SC Disambiguation)
-                    if (cellId !== undefined && cellId !== null) {
-                        let candidates = [];
-
-                        // A. Exact Match (All candidates)
-                        candidates = siteData.filter(s => s.cellId == cellId);
-
-                        // B. Fallback: Short CID + LAC Match
-                        if (candidates.length === 0 && lac) {
-                            const shortCid = cellId & 0xFFFF;
-                            candidates = siteData.filter(s => s.cellId == shortCid && s.lac == lac);
-                        }
-
-                        // C. Fallback: RNC/CID Format Match (Robust)
-                        if (candidates.length === 0) {
-                            const norm = (val) => String(val).replace(/\s/g, '');
-                            // Try matching by composite RNC/CID
-                            if (rnc !== undefined && rnc !== null) {
-                                const rncCidStr = `${rnc}/${cellId & 0xFFFF}`;
-                                candidates = siteData.filter(s => norm(s.cellId) === norm(rncCidStr));
-
-                                // If not found, try matching just component parts if site has "RNC/CID" format
-                                if (candidates.length === 0) {
-                                    candidates = siteData.filter(s => {
-                                        if (String(s.cellId).includes('/')) {
-                                            const parts = String(s.cellId).split('/');
-                                            const sCid = parts[parts.length - 1];
-                                            const sRnc = parts.length > 1 ? parts[parts.length - 2] : null;
-                                            return (norm(sRnc) === norm(rnc) && norm(sCid) === norm(cellId & 0xFFFF));
-                                        }
-                                        return false;
-                                    });
-                                }
-                            }
-                            // If Point has "RNC/CID" in cellId
-                            else if (String(cellId).includes('/')) {
-                                candidates = siteData.filter(s => norm(s.cellId) === norm(cellId));
-                            }
-                        }
-
-                        // DISAMBIGUATE: If multiple candidates, use SC (pci) to pick the right one
-                        let match = null;
-                        if (candidates.length > 0) {
-                            if (pci !== undefined && pci !== null) {
-                                // Try loose match on SC or PCI
-                                match = candidates.find(s => s.sc == pci || s.pci == pci);
-                            }
-                            // Fallback: Use first candidate if no SC match or no SC provided
-                            if (!match) match = candidates[0];
-                        }
-
-                        // STALE CELLID CHECK:
-                        // If we found a match by CellID, BUT the SC does not match the Point's SC,
-                        // it is likely the NMF Log has a stale CellID (Header didn't update during HO).
-                        // In this case, we shout NOT blindly trust the CellID match.
-                        // We should try to find a site by SC + Location instead.
-                        if (match && pci !== undefined && pci !== null && (match.sc != pci && match.pci != pci)) {
-                            // Only override if we can find a *better* candidate by SC
-                            // Reuse logic from "2. Neighbor Logic" below effectively
-                            let scCandidates = siteData.filter(s => s.pci == pci || s.sc == pci);
-                            if (freq) {
-                                const fTol = 2; // Tolerance
-                                scCandidates = scCandidates.filter(s => !s.dl_earfcn || Math.abs(s.dl_earfcn - freq) < fTol || !s.uarfcn || Math.abs(s.uarfcn - freq) < fTol);
-                            }
-                            if (scCandidates.length > 0) {
-                                // Sort by distance
-                                scCandidates.sort((a, b) => getDist(a) - getDist(b));
-                                const bestScMatch = scCandidates[0];
-                                const distSc = getDist(bestScMatch);
-                                const distId = getDist(match);
-
-                                // Logic: If the SC-based match is reasonably close (e.g. < 20km or closer than ID match), use it.
-                                // Usually valid serving cells are within few km.
-                                if (distSc < 50000) { // Safety threshold 50km
-                                    // We prefer the SC match because SC is real-time measurement, CellID in log might be stale.
-                                    return { name: getName(bestScMatch), id: bestScMatch.cellId, lat: bestScMatch.lat, lng: bestScMatch.lng };
-                                }
-                            }
-                        }
-
-                        if (match) return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng };
-                    }
-
-                    // 2. Neighbor Logic: SC + Freq + Proximity
-                    if (pci !== undefined && pci !== null) {
-                        let candidates = siteData.filter(s => s.pci == pci || s.sc == pci);
-                        if (freq) {
-                            const freqCandidates = candidates.filter(s => {
-                                const sFreq = s.freq || s.dl_freq;
-                                return Math.abs(parseFloat(sFreq) - parseFloat(freq)) < 5;
-                            });
-                            if (freqCandidates.length > 0) candidates = freqCandidates;
-                        }
-                        if (candidates.length > 0) {
-                            candidates.sort((a, b) => getDist(a) - getDist(b));
-                            return { name: getName(candidates[0]), id: candidates[0].cellId, lat: candidates[0].lat, lng: candidates[0].lng };
-                        }
-                    }
-                } catch (err) {
-                    console.error("Error in resolveCellName:", err);
-                }
-                return NO_MATCH;
-            };
+            if (panel.style.display === 'none') {
+                panel.style.display = 'block';
+            }
 
             // --- DATA PREPARATION ---
             let connectionTargets = [];
-
-            // 1. Serving Cell
             const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
             const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
 
-            let servingRes = resolveCellName(p.sc, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
-            if (!servingRes.name && p.cellId) servingRes = resolveCellName(null, p.cellId, sLac, sFreq, p.lat, p.lng, p.rnc);
+            // 1. Serving Cell
+            // Construct a "point-like" object for serving resolution if needed, but 'p' is usually sufficient
+            // But for consistency with new resolveSmartSite(p), we use p directly.
+            let servingRes = window.resolveSmartSite(p);
+
+            // Fallback for NMF raw ID logic (point might lack some context but have cellId)
+            if (!servingRes.name && p.cellId) {
+                // Try again? resolveSmartSite handles p.cellId. 
+            }
 
             if (servingRes.lat && servingRes.lng) {
                 connectionTargets.push({
@@ -2436,65 +2604,86 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const safeVal = (v) => (v !== undefined && v !== '-' && !isNaN(v) ? Number(v).toFixed(1) : '-');
 
+            const formatId = (id) => {
+                if (!id || id === 'N/A') return id;
+                const strId = String(id);
+                if (strId.includes('/')) return id;
+                const num = Number(strId.replace(/[^\d]/g, ''));
+                if (!isNaN(num) && num > 65535) {
+                    return `${num >> 16}/${num & 0xFFFF}`;
+                }
+                return id;
+            };
+
             const servingData = {
                 type: 'Serving',
                 name: servingRes.name || 'Unknown',
                 cellId: servingRes.id || p.cellId,
+                displayId: formatId(servingRes.id || p.cellId),
                 sc: p.sc,
                 rscp: p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : (p.parsed && p.parsed.serving ? p.parsed.serving.level : '-')),
                 ecno: p.ecno !== undefined ? p.ecno : (p.parsed && p.parsed.serving ? p.parsed.serving.ecno : '-'),
                 freq: sFreq || '-'
             };
 
+            const resolveNeighbor = (pci, cellId, freq) => {
+                // Construct synthetic point for neighbor lookup
+                return window.resolveSmartSite({
+                    sc: pci,
+                    cellId: cellId,
+                    lac: sLac,
+                    freq: freq || sFreq,
+                    lat: p.lat,
+                    lng: p.lng
+                });
+            }
+
             // 2. Active Set
             let activeRows = [];
             if (p.a2_sc !== undefined && p.a2_sc !== null) {
-                const a2Res = resolveCellName(p.a2_sc, null, sLac, sFreq, p.lat, p.lng);
+                const a2Res = resolveNeighbor(p.a2_sc, null, sFreq);
                 const nA2 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a2_sc) : null;
                 if (a2Res.lat && a2Res.lng) connectionTargets.push({ lat: a2Res.lat, lng: a2Res.lng, color: '#ef4444', weight: 8, cellId: a2Res.id });
                 activeRows.push({
-                    type: '2nd Active Set', name: a2Res.name || 'Unknown', cellId: a2Res.id, sc: p.a2_sc,
+                    type: '2nd Active Set', name: a2Res.name || 'Unknown', cellId: a2Res.id, displayId: formatId(a2Res.id || p.a2_cellid), sc: p.a2_sc,
                     rscp: p.a2_rscp || (nA2 ? nA2.rscp : '-'), ecno: nA2 ? nA2.ecno : '-', freq: sFreq || '-'
                 });
             }
             if (p.a3_sc !== undefined && p.a3_sc !== null) {
-                const a3Res = resolveCellName(p.a3_sc, null, sLac, sFreq, p.lat, p.lng);
+                const a3Res = resolveNeighbor(p.a3_sc, null, sFreq);
                 const nA3 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a3_sc) : null;
                 if (a3Res.lat && a3Res.lng) connectionTargets.push({ lat: a3Res.lat, lng: a3Res.lng, color: '#ef4444', weight: 8, cellId: a3Res.id });
                 activeRows.push({
-                    type: '3rd Active Set', name: a3Res.name || 'Unknown', cellId: a3Res.id, sc: p.a3_sc,
+                    type: '3rd Active Set', name: a3Res.name || 'Unknown', cellId: a3Res.id, displayId: formatId(a3Res.id || p.a3_cellid), sc: p.a3_sc,
                     rscp: p.a3_rscp || (nA3 ? nA3.rscp : '-'), ecno: nA3 ? nA3.ecno : '-', freq: sFreq || '-'
                 });
             }
 
             // 3. Neighbors & Detected
             let neighborRows = [];
-            let detectedRows = []; // User Request: Display Detected Set
+            let detectedRows = [];
 
             if (p.parsed && p.parsed.neighbors) {
                 const activeSCs = [p.sc, p.a2_sc, p.a3_sc].filter(x => x !== undefined && x !== null);
 
                 p.parsed.neighbors.forEach((n, idx) => {
-                    // Check type from parser
                     if (n.type === 'detected') {
-                        const nRes = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng);
-                        // Detected usually don't have lines drawn, or maybe different color?
-                        // Let's not draw lines for detected for now to avoid clutter
+                        const nRes = resolveNeighbor(n.pci, n.cellId, n.freq);
                         detectedRows.push({
-                            type: `D${n.idx || (idx + 1)}`, // Use stored idx or auto
+                            type: `D${n.idx || (idx + 1)}`,
                             name: nRes.name || 'Unknown',
                             cellId: nRes.id,
+                            displayId: formatId(nRes.id || n.cellId),
                             sc: n.pci,
                             rscp: n.rscp,
                             ecno: n.ecno,
                             freq: n.freq
                         });
                     } else if (!activeSCs.includes(n.pci)) {
-                        // Regular Neighbor
-                        const nRes = resolveCellName(n.pci, n.cellId, sLac, n.freq, p.lat, p.lng);
+                        const nRes = resolveNeighbor(n.pci, n.cellId, n.freq);
                         if (nRes.lat && nRes.lng) connectionTargets.push({ lat: nRes.lat, lng: nRes.lng, color: '#22c55e', weight: 3, cellId: nRes.id });
                         neighborRows.push({
-                            type: `N${idx + 1}`, name: nRes.name || 'Unknown', cellId: nRes.id, sc: n.pci,
+                            type: `N${idx + 1}`, name: nRes.name || 'Unknown', cellId: nRes.id, displayId: formatId(nRes.id || n.cellId), sc: n.pci,
                             rscp: n.rscp, ecno: n.ecno, freq: n.freq
                         });
                     }
@@ -2507,51 +2696,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const renderRow = (d, isBold = false) => {
                 const hasId = d.cellId !== undefined && d.cellId !== null;
-                // Use displayId if available (for NMF raw values), else fall back to cellId
                 const displayId = d.displayId || d.cellId;
-
-                // If we have a displayId, show it. The click handler still uses d.cellId for matching.
                 const nameContent = hasId ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${displayId})</span>` : d.name;
                 return `
-                    <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
-                        <td style="padding:4px 4px;">${d.type}</td>
-                        <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.highlightCell('${d.cellId}')">${nameContent}</td>
-                        <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
-                        <td style="padding:4px 4px; text-align:right;">${safeVal(d.rscp)}</td>
-                        <td style="padding:4px 4px; text-align:right;">${safeVal(d.ecno)}</td>
-                        <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
-                    </tr>`;
+                            <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
+                                <td style="padding:4px 4px;">${d.type}</td>
+                                <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.highlightCell('${d.cellId}')">${nameContent}</td>
+                                <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
+                                <td style="padding:4px 4px; text-align:right;">${safeVal(d.rscp)}</td>
+                                <td style="padding:4px 4px; text-align:right;">${safeVal(d.ecno)}</td>
+                                <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
+                            </tr>`;
             };
 
             let tableRows = renderRow(servingData, true);
             activeRows.forEach(r => tableRows += renderRow(r));
             neighborRows.forEach(r => tableRows += renderRow(r));
-            // Add Detected Rows after Neighbors
             if (detectedRows.length > 0) {
-                // specific header or separator?
-                // tableRows += `<tr><td colspan="6" style="padding:4px; font-weight:bold; background:#333; color:#aaa;">Detected</td></tr>`;
                 detectedRows.forEach(r => tableRows += renderRow(r));
             }
 
             content.innerHTML = `
-                <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || 'Unknown Site'}</div>
-                <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
-                    <span>Lat: ${Number(p.lat).toFixed(6)}</span>
-                    <span>Lng: ${Number(p.lng).toFixed(6)}</span>
-                    <span style="margin-left:auto; color:#666;">${p.time}</span>
-                </div>
-                <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
-                    <tr style="border-bottom: 1px solid #555; text-align:left;">
-                        <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
-                        <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
-                    </tr>
-                    ${tableRows}
-                </table>
-            `;
+                        <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || 'Unknown Site'}</div>
+                        <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
+                            <span>Lat: ${Number(p.lat).toFixed(6)}</span>
+                            <span>Lng: ${Number(p.lng).toFixed(6)}</span>
+                            <span style="margin-left:auto; color:#666;">${p.time}</span>
+                        </div>
+                        <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
+                            <tr style="border-bottom: 1px solid #555; text-align:left;">
+                                <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
+                                <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
+                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
+                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
+                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
+                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
+                            </tr>
+                            ${tableRows}
+                        </table>
+                    `;
 
         } catch (err) {
             console.error("Critical Error in updateFloatingInfoPanel:", err);
@@ -2902,7 +3085,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateLogsList();
 
                 if (parsedData.length > 0) {
-                    map.addLogLayer(id, parsedData, loadedLogs[loadedLogs.length - 1].color);
+                    console.log('[App] Debug First Point:', parsedData[0]);
+                    map.addLogLayer(id, parsedData, 'level');
                     const first = parsedData[0];
                     map.setView(first.lat, first.lng);
                 }
@@ -2911,6 +3095,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (signalingData && signalingData.length > 0) {
                     map.addEventsLayer(id, signalingData);
                 }
+
+                fileStatus.textContent = `Loaded: ${name} (${parsedData.length} pts)`;
 
 
             } else {
@@ -3041,12 +3227,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const settingsBtn = document.getElementById('siteSettingsBtn');
     const settingsPanel = document.getElementById('siteSettingsPanel');
     const closeSettings = document.getElementById('closeSiteSettings');
+    const siteColorBy = document.getElementById('siteColorBy'); // NEW
 
     if (settingsBtn && settingsPanel) {
         settingsBtn.onclick = () => {
             settingsPanel.style.display = settingsPanel.style.display === 'none' ? 'block' : 'none';
         };
         closeSettings.onclick = () => settingsPanel.style.display = 'none';
+
+        // Wire up Color By
+        if (siteColorBy) {
+            siteColorBy.onchange = (e) => {
+                if (window.map) {
+                    window.map.updateSiteSettings({ colorBy: e.target.value });
+                }
+            };
+        }
 
         // Generic Modal Close
         window.onclick = (event) => {
@@ -3811,7 +4007,35 @@ document.addEventListener('DOMContentLoaded', () => {
         const param = window.currentContextParam;
 
         if (action === 'map') {
-            map.updateLayerMetric(log.id, log.points, param);
+            if (window.mapRenderer) {
+                // Perform visualization
+                window.mapRenderer.updateLayerMetric(log.id, log.points, param);
+
+                // Auto-Switch Theme/Legend
+                const themeSelect = document.getElementById('themeSelect');
+                if (themeSelect) {
+                    // Check if 'cellId' option exists, if not add it (though it likely doesn't match a config key)
+                    // We handle 'cellId' specially in updateLegend now.
+                    if (param === 'cellId') {
+                        // Temporarily add option if missing or just hijack the value
+                        let opt = Array.from(themeSelect.options).find(o => o.value === 'cellId');
+                        if (!opt) {
+                            opt = document.createElement('option');
+                            opt.value = 'cellId';
+                            opt.text = 'Cell ID';
+                            themeSelect.add(opt);
+                        }
+                        themeSelect.value = 'cellId';
+                    } else if (param.toLowerCase().includes('qual')) {
+                        themeSelect.value = 'quality';
+                    } else {
+                        themeSelect.value = 'level';
+                    }
+                    // Trigger Change Listener to update Legend
+                    // Or call directly:
+                    if (typeof window.updateLegend === 'function') window.updateLegend();
+                }
+            }
         } else if (action === 'chart') {
             window.openChartModal(log, param);
         } else if (action === 'grid') {
@@ -3824,6 +4048,81 @@ document.addEventListener('DOMContentLoaded', () => {
         const menu = document.getElementById('metricContextMenu');
         if (menu) menu.style.display = 'none';
     });
+
+    // DRAG AND DROP MAP HANDLERS
+    window.allowDrop = (ev) => {
+        ev.preventDefault();
+    };
+
+    window.drop = (ev) => {
+        ev.preventDefault();
+        try {
+            const data = JSON.parse(ev.dataTransfer.getData("application/json"));
+            if (!data || !data.logId || !data.param) return;
+
+            console.log("Dropped Metric:", data);
+
+            const log = loadedLogs.find(l => l.id.toString() === data.logId.toString());
+            if (!log) return;
+
+            // 1. Determine Theme based on Metric
+            const p = data.param.toLowerCase();
+            const l = data.label.toLowerCase();
+            const themeSelect = document.getElementById('themeSelect');
+            let newTheme = 'level'; // Default
+
+            // Heuristic for Quality vs Coverage vs CellID
+            if (p === 'cellid' || p === 'cid' || p === 'cell_id') {
+                // Temporarily add option if missing or just hijack the value
+                let opt = Array.from(themeSelect.options).find(o => o.value === 'cellId');
+                if (!opt) {
+                    opt = document.createElement('option');
+                    opt.value = 'cellId';
+                    opt.text = 'Cell ID';
+                    themeSelect.add(opt);
+                }
+                newTheme = 'cellId';
+            } else if (p.includes('qual') || p.includes('ecno') || p.includes('sinr')) {
+                newTheme = 'quality';
+            }
+
+            // 2. Apply Theme if detected
+            if (newTheme && themeSelect) {
+                themeSelect.value = newTheme;
+                console.log(`[Drop] Switched theme to: ${newTheme}`);
+
+                // Trigger any change handlers if strictly needed, but we usually just call render
+                if (window.renderThresholdInputs) {
+                    window.renderThresholdInputs();
+                }
+                // Force Legend Update
+                // Force Legend Update (REMOVED: let Async event handle it)
+                // if (window.updateLegend) {
+                //    window.updateLegend();
+                // }
+            }
+
+            // 3. Visualize
+            if (window.mapRenderer) {
+                // console.log(`[Drop] Calling updateLayerMetric for log ${log.id}, param: ${data.param}`);
+                window.mapRenderer.updateLayerMetric(log.id, log.points, data.param);
+
+                // Ensure Legend is updated AGAIN after metric update (metrics might be calc'd inside renderer)
+                // Ensure Legend is updated AGAIN after metric update (metrics might be calc'd inside renderer)
+                // REMOVED: let Async event handle it to avoid "0 Cell IDs" flash
+                // setTimeout(() => {
+                //     if (window.updateLegend) window.updateLegend();
+                // }, 100);
+            } else {
+                console.error("[Drop] window.mapRenderer is undefined!");
+                alert("Internal Error: Map Renderer not initialized.");
+            }
+
+        } catch (e) {
+            console.error("Drop failed:", e);
+            alert("Drop failed: " + e.message);
+        }
+    };
 
 });
 
