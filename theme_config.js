@@ -27,7 +27,9 @@ window.themeConfig = {
 
 // Map 'metric' names to threshold keys
 window.getThresholdKey = (metric) => {
-    if (['level', 'rscp', 'rsrp', 'n1_rscp', 'n2_rscp', 'n3_rscp'].includes(metric)) return 'level';
-    if (['ecno', 'rsrq', 'n1_ecno', 'n2_ecno', 'n3_ecno'].includes(metric)) return 'quality';
+    if (!metric) return null;
+    const m = metric.toLowerCase();
+    if (['level', 'rscp', 'rsrp', 'n1_rscp', 'n2_rscp', 'n3_rscp'].includes(m)) return 'level';
+    if (['ecno', 'rsrq', 'n1_ecno', 'n2_ecno', 'n3_ecno'].includes(m)) return 'quality';
     return null; // Uses discrete coloring
 };

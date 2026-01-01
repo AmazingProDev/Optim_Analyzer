@@ -1487,145 +1487,166 @@ document.addEventListener('DOMContentLoaded', () => {
     window.updateLegend = function () {
         if (!window.themeConfig || !window.map) return;
 
-        // Remove existing legend
+        // Remove existing legend (Legacy Leaflet Control cleanup)
         if (legendControl) {
-            window.map.removeControl(legendControl);
+            if (typeof legendControl.remove === 'function') legendControl.remove();
             legendControl = null;
         }
 
         const theme = themeSelect ? themeSelect.value : 'level';
-        // console.log(`[App] updateLegend called. Theme: ${theme}`);
 
-        // SPECIAL LEGEND FOR CELL ID / DISCRETE
+        // Remove existing draggable legend if any
+        let existingLegend = document.getElementById('draggable-legend');
+        if (existingLegend) {
+            existingLegend.remove();
+        }
+
+        const stats = window.mapRenderer.activeMetricStats || new Map();
+        const total = window.mapRenderer.totalActiveSamples || 1;
+
+        const container = document.createElement('div');
+        container.id = 'draggable-legend';
+        container.setAttribute('style', `
+            position: absolute;
+            top: 80px; 
+            right: 20px;
+            width: 320px;
+            min-width: 250px;
+            max-width: 600px;
+            max-height: 480px;
+            background-color: rgba(30, 30, 30, 0.95);
+            border: 2px solid #555;
+            border-radius: 6px;
+            color: #fff;
+            z-index: 10001; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            resize: both;
+            overflow: auto;
+        `);
+
+        // Header
+        const header = document.createElement('div');
+        header.setAttribute('style', `
+            padding: 8px 10px;
+            background-color: #252525;
+            font-weight: bold;
+            font-size: 13px;
+            border-bottom: 1px solid #444;
+            cursor: grab;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-radius: 6px 6px 0 0;
+            flex-shrink: 0;
+        `);
+
+        // Content Body
+        const body = document.createElement('div');
+        body.setAttribute('style', `
+            padding: 10px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            flex: 1;
+        `);
+
+        // DISCRETE LEGEND (Cell ID / CID)
         if (theme === 'cellId' || theme === 'cid') {
             let ids = window.mapRenderer ? window.mapRenderer.activeMetricIds : [];
-            // Remove legacy fallback that caused iteration spam
             if (!ids) ids = [];
 
-            // Create Draggable Custom Legend (Not Leaflet Control)
-            let existingLegend = document.getElementById('draggable-legend');
-            if (existingLegend) {
-                existingLegend.remove();
-            }
+            const sortedIds = (ids || []).slice().sort((a, b) => {
+                const countA = stats.get(a) || 0;
+                const countB = stats.get(b) || 0;
+                return countB - countA;
+            });
 
-            const container = document.createElement('div');
-            container.id = 'draggable-legend';
-            container.setAttribute('style', `
-                position: absolute;
-                top: 80px; 
-                right: 20px;
-                width: 200px;
-                max-height: 400px;
-                background-color: rgba(30, 30, 30, 0.95);
-                border: 2px solid #555;
-                border-radius: 6px;
-                color: #fff;
-                z-index: 10001; /* Above map and standard controls */
-                box-shadow: 0 4px 15px rgba(0,0,0,0.6);
-                display: flex;
-                flex-direction: column;
-            `);
+            header.innerHTML = `
+                <span>Serving Cells (${ids.length})</span>
+                <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">Total: ${total}</span>
+                <span onclick="this.parentElement.parentElement.remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; margin-left:auto;">&times;</span>
+            `;
 
-            // Header for Dragging
-            const header = document.createElement('div');
-            header.setAttribute('style', `
-                padding: 8px 10px;
-                background-color: #252525;
-                font-weight: bold;
-                font-size: 13px;
-                border-bottom: 1px solid #444;
-                cursor: grab;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                border-radius: 6px 6px 0 0;
-            `);
-            header.innerHTML = `<span>Cell IDs (${ids ? ids.length : 0})</span> <span onclick="this.parentElement.parentElement.remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa;">&times;</span>`;
+            const formatId = (id) => {
+                if (!id || id === 'N/A') return id;
+                const strId = String(id);
+                if (strId.includes('/')) return id;
+                const num = Number(strId.replace(/[^\d]/g, ''));
+                if (!isNaN(num) && num > 65535) return `${num >> 16}/${num & 0xFFFF}`;
+                return id;
+            };
 
-            // Content Body
-            const body = document.createElement('div');
-            body.setAttribute('style', `
-                padding: 10px;
-                overflow-y: auto;
-                flex: 1;
-            `);
+            const getSiteName = (id) => {
+                if (window.mapRenderer && window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
+                    const site = window.mapRenderer.siteIndex.byId.get(id);
+                    if (site) return site.cellName || site.name || site.siteName || '';
+                }
+                return '';
+            };
 
-            // Render IDs
-            if (ids && ids.length > 0) {
-                let html = `<div style="display:flex; flex-direction:column; gap:2px;">`;
-                ids.forEach(id => {
+            if (sortedIds.length > 0) {
+                let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
+                sortedIds.forEach(id => {
                     const color = window.mapRenderer.getDiscreteColor(id);
+                    const name = getSiteName(id);
+                    const count = stats.get(id) || 0;
+                    const pct = ((count / total) * 100).toFixed(1);
+
+                    const label = name ? `<span>${name}</span> <span style="color:#888; font-size:9px;">(${formatId(id)})</span>` : `${formatId(id)}`;
                     html += `
-                        <div style="display:flex; align-items:center;">
-                            <span style="background:${color}; width:12px; height:12px; min-width:12px; display:inline-block; margin-right:8px; border-radius:3px; border:1px solid #ddd;"></span>
-                            <span style="font-size:11px; white-space:nowrap; font-family:monospace;">${id}</span>
+                        <div style="display:flex; align-items:center; border-bottom:1px solid #333; padding-bottom:2px;">
+                            <input type="color" value="${color}" 
+                                   style="width:16px; height:16px; padding:0; border:1px solid #555; background:none; cursor:pointer; flex-shrink:0;"
+                                   onchange="window.mapRenderer.setCustomColor('${id}', this.value); document.dispatchEvent(new CustomEvent('metric-color-changed', { detail: { id: '${id}', color: this.value } }));" />
+                            <span style="font-size:11px; white-space:nowrap; font-family:sans-serif; overflow:hidden; text-overflow:ellipsis; flex-grow:1; margin-left:8px;" title="${name || id}">${label}</span>
+                            <span style="margin-left:auto; font-size:10px; color:#aaa; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
                         </div>
                     `;
                 });
                 html += `</div>`;
                 body.innerHTML = html;
             } else {
-                body.innerHTML = `<i style="font-size:11px; color:#f87171;">No Cell IDs found.</i>`;
+                body.innerHTML = `<i style="font-size:11px; color:#f87171;">0 Cell IDs found.</i>`;
             }
+        } else {
+            // THEMATIC LEGEND (Coverage/Quality)
+            const thresholds = window.themeConfig.thresholds[theme];
+            if (!thresholds) return;
 
-            container.appendChild(header);
-            container.appendChild(body);
-            document.body.appendChild(container);
+            header.innerHTML = `
+                <span>${theme.toUpperCase()} Analysis</span>
+                <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">Sum: ${total}</span>
+                <span onclick="this.parentElement.parentElement.remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; margin-left:auto;">&times;</span>
+            `;
 
-            // Make it Draggable
-            if (typeof makeElementDraggable === 'function') {
-                makeElementDraggable(header, container);
-            } else {
-                // Fallback inline drag if function missing from scope (unlikely)
-            }
+            let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
+            thresholds.forEach(t => {
+                const count = stats.get(t.label) || 0;
+                const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
 
-            // Sync legacy var for cleanup
-            legendControl = { remove: () => container.remove(), addTo: () => { } };
-            return;
+                html += `
+                    <div style="display:flex; align-items:center; border-bottom:1px solid #333; padding-bottom:2px;">
+                        <span style="background:${t.color}; width:16px; height:16px; min-width:16px; display:inline-block; margin-right:8px; border-radius:3px; border:1px solid #555;"></span>
+                        <span style="font-size:11px; font-family:sans-serif;">${t.label}</span>
+                        <span style="margin-left:auto; font-size:10px; color:#aaa; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
+                    </div>
+                `;
+            });
+            html += `</div>`;
+            body.innerHTML = html;
         }
 
-        const thresholds = window.themeConfig.thresholds[theme];
-        if (!thresholds) return;
+        container.appendChild(header);
+        container.appendChild(body);
+        document.body.appendChild(container);
 
-        const LegendCtor = L.Control.extend({
-            options: { position: 'bottomright' },
-            onAdd: function (map) {
-                const div = L.DomUtil.create('div', 'info legend');
-                div.style.background = 'rgba(30, 30, 30, 0.9)';
-                div.style.padding = '10px';
-                div.style.borderRadius = '5px';
-                div.style.boxShadow = '0 0 15px rgba(0,0,0,0.5)';
-                div.style.color = '#ddd';
-                div.style.fontSize = '11px';
-                div.style.fontFamily = 'Inter, sans-serif';
+        if (typeof makeElementDraggable === 'function') {
+            makeElementDraggable(header, container);
+        }
 
-                div.innerHTML = `<div style="font-weight:700; margin-bottom:5px;">${theme.toUpperCase()} Legend</div>`;
-
-                // Iterate thresholds (render exactly as configured)
-                thresholds.forEach(t => {
-                    let label = t.label;
-                    if (!label) {
-                        if (t.min !== undefined && t.max !== undefined) label = `${t.min} to ${t.max}`;
-                        else if (t.min !== undefined) label = `> ${t.min}`;
-                        else if (t.max !== undefined) label = `< ${t.max}`;
-                    }
-
-                    div.innerHTML += `
-                        <div style="display:flex; align-items:center; margin-bottom:4px;">
-                            <span style="background:${t.color}; width:15px; height:15px; display:inline-block; margin-right:8px; border-radius:3px;"></span>
-                            <span>${label}</span>
-                        </div>
-                   `;
-                });
-
-                return div;
-            }
-        });
-
-        legendControl = new LegendCtor();
-        legendControl.addTo(window.map);
-    }
-
+        legendControl = { remove: () => container.remove(), addTo: () => { } };
+    };
     // Hook updateLegend into UI actions
     // Initial Load (delayed to ensure map exists)
     setTimeout(window.updateLegend, 2000);
@@ -2845,6 +2866,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // Global Listener for Custom Legend Color Changes
+    window.addEventListener('metric-color-changed', (e) => {
+        const { id, color } = e.detail;
+        console.log(`[App] Color overridden for ${id} -> ${color}`);
+
+        // Re-render ALL logs currently showing Discrete Metrics (CellId or CID)
+        loadedLogs.forEach(log => {
+            if (log.currentParam === 'cellId' || log.currentParam === 'cid') {
+                window.mapRenderer.addLogLayer(log.id, log.points, log.currentParam);
+            }
+        });
+    });
+
     // Global Sync Listener (Legacy Adapatation)
     window.addEventListener('map-point-clicked', (e) => {
         const { logId, point, source } = e.detail;
@@ -3078,7 +3112,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     tech: technology,
                     customMetrics: customMetrics,
                     color: getRandomColor(),
-                    visible: true
+                    visible: true,
+                    currentParam: 'level'
                 });
 
                 // Update UI
@@ -3235,147 +3270,180 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         closeSettings.onclick = () => settingsPanel.style.display = 'none';
 
-        // Wire up Color By
-        if (siteColorBy) {
-            siteColorBy.onchange = (e) => {
-                if (window.map) {
-                    window.map.updateSiteSettings({ colorBy: e.target.value });
-                }
-            };
-        }
+        const updateSiteStyles = () => {
+            const range = document.getElementById('rangeSiteDist').value;
+            const beam = document.getElementById('rangeIconBeam').value;
+            const opacity = document.getElementById('rangeSiteOpacity').value;
+            const color = document.getElementById('pickerSiteColor').value;
+            const useOverride = document.getElementById('checkSiteColorOverride').checked;
+            const showSiteNames = document.getElementById('checkShowSiteNames').checked;
+            const showCellNames = document.getElementById('checkShowCellNames').checked;
+            const colorBy = siteColorBy ? siteColorBy.value : 'tech';
 
-        // Generic Modal Close
-        window.onclick = (event) => {
-            if (event.target == document.getElementById('gridModal')) {
-                document.getElementById('gridModal').style.display = "none";
-            }
-            if (event.target == document.getElementById('chartModal')) {
-                document.getElementById('chartModal').style.display = "none";
-            }
-            if (event.target == document.getElementById('signalingModal')) {
-                document.getElementById('signalingModal').style.display = "none";
-            }
-        }
+            document.getElementById('valRange').textContent = range;
+            document.getElementById('valBeam').textContent = beam;
+            document.getElementById('valOpacity').textContent = opacity;
 
-
-        window.closeSignalingModal = () => {
-            document.getElementById('signalingModal').style.display = 'none';
+            if (map) {
+                map.updateSiteSettings({
+                    range: range,
+                    beamwidth: beam,
+                    opacity: opacity,
+                    color: color,
+                    useOverride: useOverride,
+                    showSiteNames: showSiteNames,
+                    showCellNames: showCellNames,
+                    colorBy: colorBy
+                });
+            }
         };
 
+        // Listeners for Site Settings
+        document.getElementById('rangeSiteDist').addEventListener('input', updateSiteStyles);
+        document.getElementById('rangeIconBeam').addEventListener('input', updateSiteStyles);
+        document.getElementById('rangeSiteOpacity').addEventListener('input', updateSiteStyles);
+        document.getElementById('pickerSiteColor').addEventListener('input', updateSiteStyles);
+        document.getElementById('checkSiteColorOverride').addEventListener('change', updateSiteStyles);
+        document.getElementById('checkShowSiteNames').addEventListener('change', updateSiteStyles);
+        document.getElementById('checkShowCellNames').addEventListener('change', updateSiteStyles);
+        if (siteColorBy) siteColorBy.addEventListener('change', updateSiteStyles);
+
+        // Initial sync
+        setTimeout(updateSiteStyles, 100);
+    }
+
+    // Generic Modal Close
+    window.onclick = (event) => {
+        if (event.target == document.getElementById('gridModal')) {
+            document.getElementById('gridModal').style.display = "none";
+        }
+        if (event.target == document.getElementById('chartModal')) {
+            document.getElementById('chartModal').style.display = "none";
+        }
+        if (event.target == document.getElementById('signalingModal')) {
+            document.getElementById('signalingModal').style.display = "none";
+        }
+    }
 
 
-        // Apply to Signaling Modal
-        const sigModal = document.getElementById('signalingModal');
-        const sigContent = sigModal.querySelector('.modal-content');
-        const sigHeader = sigModal.querySelector('.modal-header'); // We need to ensure header exists
+    window.closeSignalingModal = () => {
+        document.getElementById('signalingModal').style.display = 'none';
+    };
 
-        if (sigContent && sigHeader) {
-            makeElementDraggable(sigHeader, sigContent);
+
+
+    // Apply to Signaling Modal
+    const sigModal = document.getElementById('signalingModal');
+    const sigContent = sigModal.querySelector('.modal-content');
+    const sigHeader = sigModal.querySelector('.modal-header'); // We need to ensure header exists
+
+    if (sigContent && sigHeader) {
+        makeElementDraggable(sigHeader, sigContent);
+    }
+
+    window.showSignalingModal = (logId) => {
+        console.log('Opening Signaling Modal for Log ID:', logId);
+        const log = loadedLogs.find(l => l.id.toString() === logId.toString()); // Ensure string comparison
+
+        if (!log) {
+            console.error('Log not found for ID:', logId);
+            return;
         }
 
-        window.showSignalingModal = (logId) => {
-            console.log('Opening Signaling Modal for Log ID:', logId);
-            const log = loadedLogs.find(l => l.id.toString() === logId.toString()); // Ensure string comparison
+        currentSignalingLogId = log.id;
+        renderSignalingTable();
 
-            if (!log) {
-                console.error('Log not found for ID:', logId);
-                return;
+        // Show modal
+        document.getElementById('signalingModal').style.display = 'block';
+
+        // Ensure visibility if it was closed or moved off screen?
+        // Reset position if first open? optional.
+    };
+
+    window.filterSignaling = () => {
+        renderSignalingTable();
+    };
+
+    function renderSignalingTable() {
+        if (!currentSignalingLogId) return;
+        const log = loadedLogs.find(l => l.id.toString() === currentSignalingLogId.toString());
+        if (!log) return;
+
+        const filterElement = document.getElementById('signalingFilter');
+        const filter = filterElement ? filterElement.value : 'ALL';
+        if (!filterElement) console.warn('Signaling Filter Dropdown not found in DOM!');
+
+        const tbody = document.getElementById('signalingTableBody');
+        const title = document.getElementById('signalingModalTitle');
+
+        tbody.innerHTML = '';
+        title.textContent = `Signaling Data - ${log.name}`; // Changed visual to verify update
+
+        // Filter Data
+        let sigPoints = log.signaling || [];
+        if (filter !== 'ALL') {
+            sigPoints = sigPoints.filter(p => p.category === filter);
+        }
+
+        if (sigPoints.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px;">No messages found matching filter.</td></tr>';
+        } else {
+            const limit = 2000;
+            const displayPoints = sigPoints.slice(0, limit);
+
+            if (sigPoints.length > limit) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td colspan="5" style="background:#552200; color:#fff; text-align:center;">Showing first ${limit} of ${sigPoints.length} messages.</td>`;
+                tbody.appendChild(tr);
             }
 
-            currentSignalingLogId = log.id;
-            renderSignalingTable();
+            displayPoints.forEach((p, index) => {
+                const tr = document.createElement('tr');
+                tr.id = `sig-row-${p.time.replace(/[:.]/g, '')}-${index}`; // Unique ID for scrolling
+                tr.className = 'signaling-row'; // Add class for selection
+                tr.style.cursor = 'pointer';
 
-            // Show modal
-            document.getElementById('signalingModal').style.display = 'block';
+                // Row Click = Sync (Map + Chart)
+                tr.onclick = (e) => {
+                    // Ignore clicks on buttons
+                    if (e.target.tagName === 'BUTTON') return;
 
-            // Ensure visibility if it was closed or moved off screen?
-            // Reset position if first open? optional.
-        };
+                    // 1. Sync Map
+                    if (p.lat && p.lng) {
+                        window.map.setView([p.lat, p.lng], 16);
 
-        window.filterSignaling = () => {
-            renderSignalingTable();
-        };
+                        // Dispatch event for Chart Sync
+                        const event = new CustomEvent('map-point-clicked', {
+                            detail: { logId: currentSignalingLogId, point: p, source: 'signaling' }
+                        });
+                        window.dispatchEvent(event);
+                    } else {
+                        // Try to find closest GPS point by time? 
+                        // For now, just try chart sync via time
+                        const event = new CustomEvent('map-point-clicked', {
+                            detail: { logId: currentSignalingLogId, point: p, source: 'signaling' }
+                        });
+                        window.dispatchEvent(event);
+                    }
 
-        function renderSignalingTable() {
-            if (!currentSignalingLogId) return;
-            const log = loadedLogs.find(l => l.id.toString() === currentSignalingLogId.toString());
-            if (!log) return;
+                    // Low-level Visual Highlight (Overridden by highlightPoint later)
+                    // But good for immediate feedback
+                    document.querySelectorAll('.signaling-row').forEach(r => r.classList.remove('selected-row'));
+                    tr.classList.add('selected-row');
+                };
 
-            const filterElement = document.getElementById('signalingFilter');
-            const filter = filterElement ? filterElement.value : 'ALL';
-            if (!filterElement) console.warn('Signaling Filter Dropdown not found in DOM!');
+                const mapBtn = (p.lat && p.lng)
+                    ? `<button onclick="window.map.setView([${p.lat}, ${p.lng}], 16); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#3b82f6;">Map</button>`
+                    : '<span style="color:#666; font-size:10px;">No GPS</span>';
 
-            const tbody = document.getElementById('signalingTableBody');
-            const title = document.getElementById('signalingModalTitle');
+                // Store point data for the info button handler (simulated via dataset or just passing object index if we could, but stringifying is easier for this hack)
+                // Better: attach object to DOM element directly
+                tr.pointData = p;
 
-            tbody.innerHTML = '';
-            title.textContent = `Signaling Data - ${log.name}`; // Changed visual to verify update
+                let typeClass = 'badge-rrc';
+                if (p.category === 'L3') typeClass = 'badge-l3';
 
-            // Filter Data
-            let sigPoints = log.signaling || [];
-            if (filter !== 'ALL') {
-                sigPoints = sigPoints.filter(p => p.category === filter);
-            }
-
-            if (sigPoints.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px;">No messages found matching filter.</td></tr>';
-            } else {
-                const limit = 2000;
-                const displayPoints = sigPoints.slice(0, limit);
-
-                if (sigPoints.length > limit) {
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `<td colspan="5" style="background:#552200; color:#fff; text-align:center;">Showing first ${limit} of ${sigPoints.length} messages.</td>`;
-                    tbody.appendChild(tr);
-                }
-
-                displayPoints.forEach((p, index) => {
-                    const tr = document.createElement('tr');
-                    tr.id = `sig-row-${p.time.replace(/[:.]/g, '')}-${index}`; // Unique ID for scrolling
-                    tr.className = 'signaling-row'; // Add class for selection
-                    tr.style.cursor = 'pointer';
-
-                    // Row Click = Sync (Map + Chart)
-                    tr.onclick = (e) => {
-                        // Ignore clicks on buttons
-                        if (e.target.tagName === 'BUTTON') return;
-
-                        // 1. Sync Map
-                        if (p.lat && p.lng) {
-                            window.map.setView([p.lat, p.lng], 16);
-
-                            // Dispatch event for Chart Sync
-                            const event = new CustomEvent('map-point-clicked', {
-                                detail: { logId: currentSignalingLogId, point: p, source: 'signaling' }
-                            });
-                            window.dispatchEvent(event);
-                        } else {
-                            // Try to find closest GPS point by time? 
-                            // For now, just try chart sync via time
-                            const event = new CustomEvent('map-point-clicked', {
-                                detail: { logId: currentSignalingLogId, point: p, source: 'signaling' }
-                            });
-                            window.dispatchEvent(event);
-                        }
-
-                        // Low-level Visual Highlight (Overridden by highlightPoint later)
-                        // But good for immediate feedback
-                        document.querySelectorAll('.signaling-row').forEach(r => r.classList.remove('selected-row'));
-                        tr.classList.add('selected-row');
-                    };
-
-                    const mapBtn = (p.lat && p.lng)
-                        ? `<button onclick="window.map.setView([${p.lat}, ${p.lng}], 16); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#3b82f6;">Map</button>`
-                        : '<span style="color:#666; font-size:10px;">No GPS</span>';
-
-                    // Store point data for the info button handler (simulated via dataset or just passing object index if we could, but stringifying is easier for this hack)
-                    // Better: attach object to DOM element directly
-                    tr.pointData = p;
-
-                    let typeClass = 'badge-rrc';
-                    if (p.category === 'L3') typeClass = 'badge-l3';
-
-                    tr.innerHTML = `
+                tr.innerHTML = `
                         <td>${p.time}</td>
                         <td><span class="${typeClass}">${p.category}</span></td>
                         <td>${p.direction}</td>
@@ -3385,57 +3453,24 @@ document.addEventListener('DOMContentLoaded', () => {
                             <button onclick="const p = this.parentElement.parentElement.pointData; showSignalingPayload(p); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#475569;">Info</button>
                         </td>
                     `;
-                    tbody.appendChild(tr);
-                });
-            }
-        }
-
-        // Payload Viewer
-        function showSignalingPayload(point) {
-            const payload = point.payload || 'No Hex Payload Extracted';
-            // Simple alert for now, or we can make a nicer modal if requested
-            // Let's us a simple custom modal or re-use existing one structure? 
-            // Alert is ugly. Let's create a quick "payloadModal" dynamically or just use alert for speed first, then upgrade?
-            // User wants "show its RRC data".
-            // Let's try to format it nicely.
-
-            alert(`Message: ${point.message}\nTime: ${point.time}\n\nRRC Payload (Hex):\n${payload}\n\nFull Raw Line:\n${point.details}`);
-        }
-        window.showSignalingPayload = showSignalingPayload;
-
-        const updateSiteStyles = () => {
-            const range = document.getElementById('rangeSiteDist').value;
-            const beam = document.getElementById('rangeIconBeam').value;
-            const opacity = document.getElementById('rangeSiteOpacity').value;
-            const color = document.getElementById('pickerSiteColor').value;
-            const useOverride = document.getElementById('checkSiteColorOverride').checked;
-            const showSiteNames = document.getElementById('checkShowSiteNames').checked;
-            const showCellNames = document.getElementById('checkShowCellNames').checked;
-
-            document.getElementById('valRange').textContent = range;
-            document.getElementById('valBeam').textContent = beam;
-            document.getElementById('valOpacity').textContent = opacity;
-
-            map.updateSiteSettings({
-                range: range,
-                beamwidth: beam,
-                opacity: opacity,
-                color: color,
-                useOverride: useOverride,
-                showSiteNames: showSiteNames,
-                showCellNames: showCellNames
+                tbody.appendChild(tr);
             });
-        };
-
-        // Listeners
-        document.getElementById('rangeSiteDist').addEventListener('input', updateSiteStyles);
-        document.getElementById('rangeIconBeam').addEventListener('input', updateSiteStyles);
-        document.getElementById('rangeSiteOpacity').addEventListener('input', updateSiteStyles);
-        document.getElementById('pickerSiteColor').addEventListener('input', updateSiteStyles);
-        document.getElementById('checkSiteColorOverride').addEventListener('change', updateSiteStyles);
-        document.getElementById('checkShowSiteNames').addEventListener('change', updateSiteStyles);
-        document.getElementById('checkShowCellNames').addEventListener('change', updateSiteStyles);
+        }
     }
+
+    // Payload Viewer
+    function showSignalingPayload(point) {
+        const payload = point.payload || 'No Hex Payload Extracted';
+        // Simple alert for now, or we can make a nicer modal if requested
+        // Let's us a simple custom modal or re-use existing one structure? 
+        // Alert is ugly. Let's create a quick "payloadModal" dynamically or just use alert for speed first, then upgrade?
+        // User wants "show its RRC data".
+        // Let's try to format it nicely.
+
+        alert(`Message: ${point.message}\nTime: ${point.time}\n\nRRC Payload (Hex):\n${payload}\n\nFull Raw Line:\n${point.details}`);
+    }
+    window.showSignalingPayload = showSignalingPayload;
+
     // ---------------------------------------------------------
     // ---------------------------------------------------------
     // DOCKING SYSTEM
@@ -4104,7 +4139,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // 3. Visualize
             if (window.mapRenderer) {
-                // console.log(`[Drop] Calling updateLayerMetric for log ${log.id}, param: ${data.param}`);
+                log.currentParam = data.param; // SYNC: Update active metric for this log
                 window.mapRenderer.updateLayerMetric(log.id, log.points, data.param);
 
                 // Ensure Legend is updated AGAIN after metric update (metrics might be calc'd inside renderer)

@@ -50,6 +50,7 @@ class MapRenderer {
         // Site Labels Layer (separate for performance)
         this.siteLabelsLayer = L.layerGroup();
         this.connectionsLayer = L.layerGroup().addTo(this.map); // Layer for lines
+        this.customDiscreteColors = {}; // User-overridden colors (ID -> Color)
 
         // Optim: Only show labels on high zoom
         this.map.on('zoomend', () => this.updateLabelVisibility());
@@ -116,8 +117,14 @@ class MapRenderer {
     getDiscreteColor(val) {
         if (val === undefined || val === null || val === '' || val === 'N/A') return '#ff0000'; // RED for Invalid (Debug)
 
+        // Check for Custom Overrides first
+        const sVal = String(val);
+        if (this.customDiscreteColors && this.customDiscreteColors[sVal]) {
+            return this.customDiscreteColors[sVal];
+        }
+
         // Normalize: Remove whitespace to match Index keys
-        const str = String(val).replace(/\s/g, '');
+        const str = sVal.replace(/\s/g, '');
 
         // Custom 12-color palette from user image
         const palette = [
@@ -230,7 +237,8 @@ class MapRenderer {
         const totalPoints = points.length;
         let pIdx = 0;
         const validLocations = [];
-        const idsCollection = new Set(); // Accumulate IDs for Legend here
+        const idsCollection = new Map(); // Accumulate IDs for Legend here
+        let totalValidsForMetric = 0;
 
         const processChunk = () => {
             const end = Math.min(pIdx + CHUNK_SIZE, totalPoints);
@@ -270,8 +278,12 @@ class MapRenderer {
                         });
                     }
 
-                    // Collect ID for Legend (Async Accumulation)
-                    if (val) idsCollection.add(String(val));
+                    // Collect ID for Legend (Async Accumulation with Counts)
+                    if (val !== undefined && val !== null) {
+                        const sVal = String(val);
+                        idsCollection.set(sVal, (idsCollection.get(sVal) || 0) + 1);
+                        totalValidsForMetric++;
+                    }
                 }
 
                 // Special Metric Handling
@@ -287,6 +299,27 @@ class MapRenderer {
                 if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving[metric];
 
                 const color = this.getColor(val, metric);
+
+                // Collect Stats for Thematic Metrics (RSRP, RSRQ, etc.)
+                // If it's not cellId/cid, it might be a thematic metric mapping to level or quality
+                if (metric !== 'cellId' && metric !== 'cid' && window.getThresholdKey) {
+                    const rangeKey = window.getThresholdKey(metric);
+                    if (rangeKey && window.themeConfig) {
+                        const thresholds = window.themeConfig.thresholds[rangeKey];
+                        if (thresholds && val !== undefined && val !== null) {
+                            // Find matching label
+                            let matched = false;
+                            for (const t of thresholds) {
+                                if (t.min !== undefined && val <= t.min) continue;
+                                if (t.max !== undefined && val > t.max) continue;
+                                idsCollection.set(t.label, (idsCollection.get(t.label) || 0) + 1);
+                                matched = true;
+                                break;
+                            }
+                            if (matched) totalValidsForMetric++;
+                        }
+                    }
+                }
 
                 if (p.lat !== undefined && p.lat !== null && p.lng !== undefined && p.lng !== null) {
                     validLocations.push([p.lat, p.lng]);
@@ -320,9 +353,16 @@ class MapRenderer {
 
                 // Finalize Legend IDs if applicable
                 if (metric === 'cellId' || metric === 'cid') {
-                    this.activeMetricIds = Array.from(idsCollection).sort();
+                    this.activeMetricIds = Array.from(idsCollection.keys()).sort();
+                    this.activeMetricStats = idsCollection; // Map of ID -> Count
+                    this.totalActiveSamples = totalValidsForMetric;
                     // Re-render sites to match colors if needed
                     this.renderSites(false);
+                } else {
+                    // For thematic metrics (level, quality), we also expose stats
+                    this.activeMetricStats = idsCollection; // Map of Label -> Count
+                    this.totalActiveSamples = totalValidsForMetric;
+                    this.activeMetricIds = null; // Signal this is thematic
                 }
 
                 // Signal that rendering and ID collection is complete
@@ -561,9 +601,9 @@ class MapRenderer {
         }
 
         const settings = this.siteSettings || {};
-        const range = parseInt(settings.siteRange) || 300;
-        const opacity = parseFloat(settings.siteOpacity) || 0.6;
-        const beam = parseInt(settings.iconBeam) || 60;
+        const range = parseInt(settings.range) || 200;
+        const opacity = parseFloat(settings.opacity) || 0.6;
+        const beam = parseInt(settings.beamwidth) || 60;
         const overrideColor = settings.useOverride ? settings.color : null;
 
         const renderedSiteLabels = new Set();
@@ -702,6 +742,14 @@ class MapRenderer {
         } else {
             console.warn(`Cell ID ${cellId} not found in site polygons.`);
         }
+    }
+
+    setCustomColor(id, color) {
+        this.customDiscreteColors[id] = color;
+        // Optimization: We could surgically update just those points/polygons, 
+        // but re-rendering is much safer to ensure consistency with current metric.
+        // Firing global events to trigger re-rendering of active log/theme
+        window.dispatchEvent(new CustomEvent('metric-color-changed', { detail: { id, color } }));
     }
 
     drawConnections(startPt, targets) {
