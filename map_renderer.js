@@ -77,8 +77,7 @@ class MapRenderer {
     }
 
     getColor(val, metric = 'level') {
-        if (val === undefined) return '#888';
-        // Removed isNaN(val) check because CellID is a string "RNC/CID" and isNaN returns true!
+        if (val === undefined || val === null || val === 'N/A' || val === '') return '#888';
 
         if (window.getThresholdKey && window.themeConfig) {
             const rangeKey = window.getThresholdKey(metric);
@@ -86,32 +85,59 @@ class MapRenderer {
                 const thresholds = window.themeConfig.thresholds[rangeKey];
                 if (thresholds) {
                     for (const t of thresholds) {
-                        // Check Min
                         if (t.min !== undefined && val <= t.min) continue;
-                        // Check Max
                         if (t.max !== undefined && val > t.max) continue;
-
-                        // If we are here, it matches
                         return t.color;
                     }
-                    // Fallback if no match found (should be caught by last rule usually)
                     return '#888';
                 }
             }
         }
 
-        // Default / Frequency / Count
-        // Use discrete coloring for IDs
-        if (['cellId', 'pci', 'sc', 'lac', 'serving_cell_name'].includes(metric)) {
-            if (metric === 'cellId' || metric === 'cid') {
-                // ALWAYS use discrete coloring for Cell ID metric
-                // This prevents falling back to "Tech Coloring" (Grey) when siteSettings is unset
-                return this.getDiscreteColor(val);
-            }
+        if (['cellId', 'cid', 'pci', 'sc', 'lac', 'serving_cell_name'].includes(metric)) {
             return this.getDiscreteColor(val);
         }
 
         return '#3b82f6';
+    }
+
+    getMetricValue(p, metric) {
+        if (!p) return undefined;
+        let val = p[metric];
+
+        // 1. Serving Cell Name Resolution
+        if (metric === 'serving_cell_name') {
+            return this.resolveServingName(p) || 'Unknown';
+        }
+
+        // 2. Identity Resolution (Smart ID)
+        if (metric === 'cellId' || metric === 'cid') {
+            if (window.resolveSmartSite) {
+                const resolved = window.resolveSmartSite(p);
+                if (resolved && resolved.id) return resolved.id;
+            }
+            if (p.rnc !== undefined && p.cid !== undefined) {
+                return `${p.rnc}/${p.cid}`;
+            }
+            return p.cellId || p.cid;
+        }
+
+        // 3. Radio Metrics Fallbacks
+        if (metric === 'rscp_not_combined' || metric === 'rscp') {
+            if (val === undefined) val = p.level || p.rscp;
+            if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving.level || p.parsed.serving.rscp;
+        }
+        if (metric.startsWith('active_set_')) {
+            const sub = metric.replace('active_set_', '').toLowerCase();
+            val = p[sub];
+        }
+
+        // 4. Serving Struct Fallback
+        if (val === undefined && p.parsed && p.parsed.serving) {
+            val = p.parsed.serving[metric];
+        }
+
+        return val;
     }
 
     getDiscreteColor(val) {
@@ -142,13 +168,23 @@ class MapRenderer {
             '#8B4513'  // brown
         ];
 
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            hash = str.charCodeAt(i) + ((hash << 5) - hash);
-        }
+        // Robust 53-bit hash for better dispersion of similar strings (like RNC/CID)
+        const cyrb53 = (str, seed = 0) => {
+            let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+            for (let i = 0, ch; i < str.length; i++) {
+                ch = str.charCodeAt(i);
+                h1 = Math.imul(h1 ^ ch, 2654435761);
+                h2 = Math.imul(h2 ^ ch, 1597334677);
+            }
+            h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+            h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+            h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+            h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+            return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+        };
 
-        // Map hash to palette index
-        const index = Math.abs(hash) % palette.length;
+        const hash = cyrb53(str);
+        const index = hash % palette.length;
         return palette[index];
     }
 
@@ -188,6 +224,8 @@ class MapRenderer {
     }
 
     addLogLayer(id, points, metric = 'level') {
+        this.activeLogId = id;
+        this.activeMetric = metric;
         // Create a new layer group for this log
         const layerGroup = L.layerGroup();
 
@@ -201,24 +239,7 @@ class MapRenderer {
         let firstValid = null;
 
         points.forEach((p, idx) => {
-            let val = p[metric];
-            // Normalize CellID for check
-            if (metric === 'cellId' || metric === 'cid') {
-                // SMART COLORING: If metric is 'cellId' (default identity), try to use the Smart Resolved ID
-                // This covers cases where Log has Stale/Missing ID but 'p.sc' + 'p.freq' allows us to find the real Cell ID.
-                if (metric === 'cellId' && window.resolveSmartSite) {
-                    const resolved = window.resolveSmartSite(p);
-                    if (resolved && resolved.id) {
-                        val = resolved.id;
-                    } else if (p.rnc !== undefined && p.rnc !== null && p.cid !== undefined && p.cid !== null) {
-                        // Fallback to Raw RNC/CID if Smart Resolve failed
-                        val = `${p.rnc}/${p.cid}`;
-                    }
-                } else if (p.rnc !== undefined && p.rnc !== null && p.cid !== undefined && p.cid !== null) {
-                    val = `${p.rnc}/${p.cid}`;
-                }
-            }
-
+            let val = this.getMetricValue(p, metric);
             if (val === undefined || val === null || val === 'N/A' || val === '') {
                 naCount++;
             } else {
@@ -244,41 +265,10 @@ class MapRenderer {
             const end = Math.min(pIdx + CHUNK_SIZE, totalPoints);
             for (let i = pIdx; i < end; i++) {
                 const p = points[i];
-                let val = p[metric];
+                const val = this.getMetricValue(p, metric);
 
-                // Special handling for Serving Cell Name
-                if (metric === 'serving_cell_name') {
-                    val = this.resolveServingName(p) || 'Unknown';
-                }
-
-                // Normalize CellID for color matching with Sites
+                // Handle Identity Metrics Collection for Legend
                 if (metric === 'cellId' || metric === 'cid') {
-                    // Smart Resolve logic already likely applied in First Pass? 
-                    // No, "First Pass" above only Calc'd stats (validCount).
-                    // We need to re-apply Smart Logic here or cache it.
-                    // Caching would be better but let's re-run (it's O(1) now).
-
-                    if (window.resolveSmartSite) {
-                        const resolved = window.resolveSmartSite(p);
-                        if (resolved && resolved.id) {
-                            val = resolved.id;
-                        } else if (p.rnc !== undefined && p.cid !== undefined) {
-                            val = `${p.rnc}/${p.cid}`;
-                        }
-                    } else if (p.rnc !== undefined && p.cid !== undefined) {
-                        val = `${p.rnc}/${p.cid}`;
-                    }
-
-                    if (pIdx === 0 && i < 3) {
-                        console.log(`[MapRenderer] Point ${i} Debug:`, {
-                            hasResolve: !!window.resolveSmartSite,
-                            resolved: window.resolveSmartSite ? window.resolveSmartSite(p) : 'N/A',
-                            pRnc: p.rnc, pCid: p.cid, pCellId: p.cellId,
-                            FINAL_VAL: val
-                        });
-                    }
-
-                    // Collect ID for Legend (Async Accumulation with Counts)
                     if (val !== undefined && val !== null) {
                         const sVal = String(val);
                         idsCollection.set(sVal, (idsCollection.get(sVal) || 0) + 1);
@@ -286,19 +276,6 @@ class MapRenderer {
                     }
                 }
 
-                // Special Metric Handling
-                if (metric === 'rscp_not_combined' || metric === 'rscp') {
-                    if (val === undefined) val = p.level;
-                    if (val === undefined) val = p.rscp;
-                    if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving.level;
-                }
-                if (metric.startsWith('active_set_')) {
-                    const sub = metric.replace('active_set_', '').toLowerCase();
-                    val = p[sub];
-                }
-                if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving[metric];
-
-                const color = this.getColor(val, metric);
 
                 // Collect Stats for Thematic Metrics (RSRP, RSRQ, etc.)
                 // If it's not cellId/cid, it might be a thematic metric mapping to level or quality
@@ -320,6 +297,8 @@ class MapRenderer {
                         }
                     }
                 }
+
+                const color = this.getColor(val, metric);
 
                 if (p.lat !== undefined && p.lat !== null && p.lng !== undefined && p.lng !== null) {
                     validLocations.push([p.lat, p.lng]);
@@ -530,7 +509,8 @@ class MapRenderer {
         // Build Index for Performance
         this.siteIndex = {
             byId: new Map(),
-            bySc: new Map()
+            bySc: new Map(),
+            all: sectors
         };
 
         sectors.forEach(s => {
@@ -809,5 +789,263 @@ class MapRenderer {
     }
 
 
+    exportToKML(logId, logPoints, metricName) {
+        if (!logPoints || logPoints.length === 0) return null;
+
+        const isDiscrete = (metricName === 'cellId' || metricName === 'cid');
+
+        let kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${metricName.toUpperCase()} Analysis - ${new Date().toLocaleTimeString()}</name>
+    <open>1</open>
+`;
+
+        // Helper to convert #RRGGBB to aabbggrr
+        const hexToKmlColor = (hex) => {
+            if (!hex || hex[0] !== '#') return 'ffcccccc';
+            const r = hex.substring(1, 3);
+            const g = hex.substring(3, 5);
+            const b = hex.substring(5, 7);
+            return 'ff' + b + g + r; // Fully opaque
+        };
+
+        // Collect Unique Styles
+        const styles = new Set();
+        const placemarks = [];
+
+        logPoints.forEach((p, idx) => {
+            if (p.lat === undefined || p.lng === undefined) return;
+
+            const val = this.getMetricValue(p, metricName);
+            const color = this.getColor(val, metricName);
+
+            const styleId = 's_' + color.replace('#', '');
+            styles.add({ id: styleId, color: hexToKmlColor(color) });
+
+            // Customized Description content
+            const servingName = this.resolveServingName(p) || '';
+            const rncCid = (p.rnc !== undefined && p.cid !== undefined) ? `${p.rnc}/${p.cid}` : '';
+            const rscp = p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : '');
+            const ecno = p.ecno !== undefined ? p.ecno : (p.quality !== undefined ? p.quality : '');
+
+            let desc = '';
+            if (servingName) desc += `<b>Serving:</b> ${servingName}<br/>`;
+            if (rncCid) desc += `<b>RNC/CID:</b> ${rncCid}<br/>`;
+            if (rscp !== '') desc += `<b>RSCP:</b> ${rscp}<br/>`;
+            if (ecno !== '') desc += `<b>EcNo:</b> ${ecno}<br/>`;
+
+            // Add time and coords as secondary info
+            desc += `<br/>Time: ${p.time || 'N/A'}<br/>Lat: ${p.lat}<br/>Lng: ${p.lng}`;
+
+            placemarks.push(`    <Placemark>
+      <name></name>
+      <description><![CDATA[${desc}]]></description>
+      <styleUrl>#${styleId}</styleUrl>
+      <Point>
+        <coordinates>${p.lng},${p.lat},0</coordinates>
+      </Point>
+    </Placemark>`);
+        });
+
+        // Add Style Definitions
+        styles.forEach(s => {
+            kml += `    <Style id="${s.id}">
+      <IconStyle>
+        <color>${s.color}</color>
+        <scale>1.2</scale>
+        <Icon>
+          <href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href>
+        </Icon>
+      </IconStyle>
+      <LabelStyle>
+        <scale>0</scale>
+      </LabelStyle>
+    </Style>\n`;
+        });
+
+        kml += placemarks.join('\n');
+        kml += '\n  </Document>\n</kml>';
+
+        return kml;
+    }
+    exportSitesToKML(activePoints = null) {
+        if (!this.siteIndex || !this.siteIndex.all) return null;
+
+        let kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Sites Export - ${new Date().toLocaleTimeString()}</name>
+    <open>1</open>
+`;
+
+        const hexToKmlColor = (hex) => {
+            if (!hex || hex[0] !== '#') return '99cccccc';
+            const r = hex.substring(1, 3);
+            const g = hex.substring(3, 5);
+            const b = hex.substring(5, 7);
+            // Sites look better with some transparency in KML
+            return 'cc' + b + g + r;
+        };
+
+        const settings = this.siteSettings || {};
+        const range = parseInt(settings.range) || 100;
+        const beam = parseInt(settings.beamwidth) || 35;
+        const rad = Math.PI / 180;
+
+        const styles = new Set();
+        const placemarks = [];
+
+        // Build a Set of Active IDs from the Map Analysis for fast lookup
+        const activeIds = new Set(this.activeMetricStats ? this.activeMetricStats.keys() : []);
+
+        // FILTERING LOGIC: If points are provided, filter database to only included sites
+        // Identify "Serving" Site IDs from the points
+        const relevantSiteIds = new Set();
+        if (activePoints) {
+            activePoints.forEach(p => {
+                // Check multiple ID strategies to ensure we catch the serving site
+                if (p.cellId) relevantSiteIds.add(String(p.cellId));
+                if (window.resolveSmartSite) {
+                    const res = window.resolveSmartSite(p);
+                    if (res && res.id) relevantSiteIds.add(String(res.id));
+                }
+                if (p.rnc !== undefined && p.cid !== undefined) relevantSiteIds.add(`${p.rnc}/${p.cid}`);
+            });
+        }
+
+        const labeledSites = new Set();
+
+        this.siteIndex.all.forEach(s => {
+            if (s.lat === undefined || s.lng === undefined) return;
+
+            // FILTER: If relevantSiteIds are populated, strict check
+            if (relevantSiteIds.size > 0) {
+                const sIdFull = String(s.cellId);
+                const sIdRncCid = (s.rnc !== undefined && s.cid !== undefined) ? `${s.rnc}/${s.cid}` : null;
+                const sIdCid = String(s.cid);
+
+                const isRelevant = relevantSiteIds.has(sIdFull) || (sIdRncCid && relevantSiteIds.has(sIdRncCid)) || relevantSiteIds.has(sIdCid);
+                if (!isRelevant) return;
+            }
+
+            const azimuth = parseFloat(s.beam) || parseFloat(s.azimuth) || 0;
+            const startAngle = (azimuth - beam / 2) * rad;
+            const endAngle = (azimuth + beam / 2) * rad;
+            const latRad = s.lat * rad;
+
+            // Generate Wedge Points (10 steps)
+            const coords = [];
+            coords.push(`${s.lng},${s.lat},0`); // Center
+
+            for (let i = 0; i <= 10; i++) {
+                const angle = startAngle + (endAngle - startAngle) * (i / 10);
+                const dy = Math.cos(angle) * range;
+                const dx = Math.sin(angle) * range;
+                const dLat = dy / 111111;
+                const dLng = dx / (111111 * Math.cos(latRad));
+                coords.push(`${s.lng + dLng},${s.lat + dLat},0`);
+            }
+            coords.push(`${s.lng},${s.lat},0`); // Close loop
+
+            // COLOR SYNC LOGIC:
+            // Match the ID format used in the Active Legend/Map
+            let id = s.cellId; // Default to Full ID
+
+            // If we have active stats, try to match the format used there
+            if (activeIds.size > 0) {
+                const candFull = String(s.cellId);
+                const candRncCid = (s.rnc !== undefined && s.cid !== undefined) ? `${s.rnc}/${s.cid}` : null;
+                const candCid = String(s.cid);
+
+                if (activeIds.has(candCid)) {
+                    // User is analyzing Short CID
+                    id = s.cid;
+                } else if (candRncCid && activeIds.has(candRncCid)) {
+                    // User is analyzing RNC/CID
+                    id = candRncCid;
+                } else if (activeIds.has(candFull)) {
+                    // User is analyzing Full CellID
+                    id = s.cellId;
+                }
+                // Else fall through to default
+            }
+
+            // Fallback if ID is still missing
+            if (!id && s.rnc !== undefined && s.cid !== undefined) {
+                id = `${s.rnc}/${s.cid}`;
+            }
+
+            const color = this.getDiscreteColor(id);
+            const styleId = 'site_s_' + color.replace('#', '');
+            styles.add({ id: styleId, color: hexToKmlColor(color) });
+
+            const siteName = s.cellName || s.name || s.siteName || s.siteId || '';
+            const siteUniqueKey = `${s.lat}_${s.lng}_${siteName}`;
+
+            // Logic: Only add a Point Label for the FIRST sector of a site to avoid stacking labels
+            let geometryXml = '';
+
+            if (!labeledSites.has(siteUniqueKey)) {
+                labeledSites.add(siteUniqueKey);
+                // First sector: MultiGeometry with Point (for Label) and Polygon
+                geometryXml = `
+        <MultiGeometry>
+          <Point>
+            <coordinates>${s.lng},${s.lat},0</coordinates>
+          </Point>
+          <Polygon>
+            <outerBoundaryIs>
+              <LinearRing>
+                <coordinates>${coords.join(' ')}</coordinates>
+              </LinearRing>
+            </outerBoundaryIs>
+          </Polygon>
+        </MultiGeometry>`;
+            } else {
+                // Subsequent sectors: Only Polygon (No label)
+                geometryXml = `
+        <Polygon>
+          <outerBoundaryIs>
+            <LinearRing>
+              <coordinates>${coords.join(' ')}</coordinates>
+            </LinearRing>
+          </outerBoundaryIs>
+        </Polygon>`;
+            }
+
+            placemarks.push(`    <Placemark>
+      <name>${siteName}</name>
+      <styleUrl>#${styleId}</styleUrl>
+${geometryXml}
+    </Placemark>`);
+        });
+
+        // Add Style Definitions
+        styles.forEach(s => {
+            kml += `    <Style id="${s.id}">
+      <LineStyle>
+        <color>ff000000</color>
+        <width>1</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>${s.color}</color>
+        <fill>1</fill>
+        <outline>1</outline>
+      </PolyStyle>
+      <IconStyle>
+        <scale>0</scale>
+      </IconStyle>
+      <LabelStyle>
+        <scale>1.1</scale>
+      </LabelStyle>
+    </Style>\n`;
+        });
+
+        kml += placemarks.join('\n');
+        kml += '\n  </Document>\n</kml>';
+
+        return kml;
+    }
 
 }

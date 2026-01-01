@@ -1562,10 +1562,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 return countB - countA;
             });
 
+            const title = `Serving Cells (${ids.length})`;
+            const summary = `Total: ${total}`;
+
             header.innerHTML = `
-                <span>Serving Cells (${ids.length})</span>
-                <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">Total: ${total}</span>
-                <span onclick="this.parentElement.parentElement.remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; margin-left:auto;">&times;</span>
+                <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+                    <div>
+                        <span>${title}</span>
+                        <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">${summary}</span>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button id="kmlExportBtn" title="Export dots to KML" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
+                        <button id="siteKmlExportBtn" title="Export sites (sectors) to KML" style="background:#10b981; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">📡 Sites KML</button>
+                        <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
+                    </div>
+                </div>
             `;
 
             const formatId = (id) => {
@@ -1615,9 +1626,16 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!thresholds) return;
 
             header.innerHTML = `
-                <span>${theme.toUpperCase()} Analysis</span>
-                <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">Sum: ${total}</span>
-                <span onclick="this.parentElement.parentElement.remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; margin-left:auto;">&times;</span>
+                <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+                    <div>
+                        <span>${theme.toUpperCase()} Analysis</span>
+                        <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">Sum: ${total}</span>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button id="kmlExportBtn" title="Export to KML" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
+                        <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
+                    </div>
+                </div>
             `;
 
             let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
@@ -1640,6 +1658,77 @@ document.addEventListener('DOMContentLoaded', () => {
         container.appendChild(header);
         container.appendChild(body);
         document.body.appendChild(container);
+
+        // KML Export Logic
+        const kmlBtn = header.querySelector('#kmlExportBtn');
+        if (kmlBtn) {
+            kmlBtn.onclick = (e) => {
+                e.stopPropagation();
+                const renderer = window.mapRenderer;
+                if (!renderer || !renderer.activeLogId || !renderer.activeMetric) {
+                    alert("No active data to export.");
+                    return;
+                }
+                const log = loadedLogs.find(l => l.id === renderer.activeLogId);
+                if (!log) {
+                    alert("Log data not found.");
+                    return;
+                }
+                const kml = renderer.exportToKML(renderer.activeLogId, log.points, renderer.activeMetric);
+                if (!kml) {
+                    alert("Failed to generate KML.");
+                    return;
+                }
+                const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${log.name}_${renderer.activeMetric}.kml`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+        }
+
+        // Sites KML Export Logic
+        const siteKmlBtn = header.querySelector('#siteKmlExportBtn');
+        if (siteKmlBtn) {
+            siteKmlBtn.onclick = (e) => {
+                e.stopPropagation();
+                const renderer = window.mapRenderer;
+                if (!renderer || !renderer.siteIndex || !renderer.siteIndex.all) {
+                    alert("No site database loaded.");
+                    return;
+                }
+
+                // Get Active Points to Filter Sites (Requested Feature: "Export only serving sites")
+                let activePoints = null;
+                if (renderer.activeLogId && window.loadedLogs) {
+                    const activeLog = window.loadedLogs.find(l => l.id === renderer.activeLogId);
+                    if (activeLog && activeLog.points) {
+                        activePoints = activeLog.points;
+                    }
+                }
+
+                const kml = renderer.exportSitesToKML(activePoints);
+                if (!kml) {
+                    alert("Failed to generate Sites KML.");
+                    return;
+                }
+                const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Sites_Database_${new Date().getTime()}.kml`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+        }
+
+
 
         if (typeof makeElementDraggable === 'function') {
             makeElementDraggable(header, container);
