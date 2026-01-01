@@ -814,6 +814,10 @@ class MapRenderer {
         const styles = new Set();
         const placemarks = [];
 
+        const settings = this.siteSettings || {};
+        const range = parseInt(settings.range) || 100;
+        const rad = Math.PI / 180;
+
         logPoints.forEach((p, idx) => {
             if (p.lat === undefined || p.lng === undefined) return;
 
@@ -838,19 +842,52 @@ class MapRenderer {
             // Add time and coords as secondary info
             desc += `<br/>Time: ${p.time || 'N/A'}<br/>Lat: ${p.lat}<br/>Lng: ${p.lng}`;
 
+
+            // Resolve Smart Site for Spider Line
+            let geometry = `<Point><coordinates>${p.lng},${p.lat},0</coordinates></Point>`;
+            if (window.resolveSmartSite) {
+                const res = window.resolveSmartSite(p);
+                // Check if resolved site has valid coordinates and is different from point (avoid self-loops)
+                if (res && res.lat && res.lng && res.site) {
+                    // Calculate Tip Top Center (Edge of the wedge)
+                    const s = res.site;
+                    const azimuth = parseFloat(s.beam) || parseFloat(s.azimuth) || 0;
+                    const angle = azimuth * rad;
+                    const dy = Math.cos(angle) * range;
+                    const dx = Math.sin(angle) * range;
+                    const latRad = s.lat * rad;
+
+                    // Convert meters to lat/lng degrees approx
+                    const dLat = dy / 111111;
+                    const dLng = dx / (111111 * Math.cos(latRad));
+
+                    const tipLat = s.lat + dLat;
+                    const tipLng = s.lng + dLng;
+
+                    geometry = `
+        <MultiGeometry>
+          <Point>
+            <coordinates>${p.lng},${p.lat},0</coordinates>
+          </Point>
+          <LineString>
+            <coordinates>${p.lng},${p.lat},0 ${tipLng},${tipLat},0</coordinates>
+          </LineString>
+        </MultiGeometry>`;
+                }
+            }
+
             placemarks.push(`    <Placemark>
       <name></name>
       <description><![CDATA[${desc}]]></description>
-      <styleUrl>#${styleId}</styleUrl>
-      <Point>
-        <coordinates>${p.lng},${p.lat},0</coordinates>
-      </Point>
+      <styleUrl>#sm_${styleId}</styleUrl>
+${geometry}
     </Placemark>`);
         });
 
-        // Add Style Definitions
+        // Add Style Definitions with StyleMap for Interactive Hover
         styles.forEach(s => {
-            kml += `    <Style id="${s.id}">
+            // Normal Style: Icon Fixed, Line Hidden
+            kml += `    <Style id="${s.id}_normal">
       <IconStyle>
         <color>${s.color}</color>
         <scale>1.2</scale>
@@ -858,10 +895,40 @@ class MapRenderer {
           <href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href>
         </Icon>
       </IconStyle>
-      <LabelStyle>
-        <scale>0</scale>
-      </LabelStyle>
+      <LabelStyle><scale>0</scale></LabelStyle>
+      <LineStyle>
+        <color>${s.color}</color>
+        <width>0</width>
+      </LineStyle>
     </Style>\n`;
+
+            // Highlight Style: Icon Fixed, Line Visible (Width 4.0)
+            kml += `    <Style id="${s.id}_highlight">
+      <IconStyle>
+        <color>${s.color}</color>
+        <scale>1.2</scale>
+        <Icon>
+          <href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href>
+        </Icon>
+      </IconStyle>
+      <LabelStyle><scale>0</scale></LabelStyle>
+      <LineStyle>
+        <color>${s.color}</color>
+        <width>4</width>
+      </LineStyle>
+    </Style>\n`;
+
+            // StyleMap linking the two
+            kml += `    <StyleMap id="sm_${s.id}">
+      <Pair>
+        <key>normal</key>
+        <styleUrl>#${s.id}_normal</styleUrl>
+      </Pair>
+      <Pair>
+        <key>highlight</key>
+        <styleUrl>#${s.id}_highlight</styleUrl>
+      </Pair>
+    </StyleMap>\n`;
         });
 
         kml += placemarks.join('\n');
