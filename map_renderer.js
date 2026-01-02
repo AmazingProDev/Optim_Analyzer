@@ -1071,6 +1071,20 @@ ${geometry}
         // Build a Set of Active IDs from the Map Analysis for fast lookup
         const activeIds = new Set(this.activeMetricStats ? this.activeMetricStats.keys() : []);
 
+        // Index points by Serving ID if activePoints provided (for Spider Lines)
+        const siteToPoints = new Map();
+        if (activePoints && window.resolveSmartSite) {
+            activePoints.forEach(p => {
+                const res = window.resolveSmartSite(p);
+                if (res && res.id) {
+                    // Normalize ID to string for map key
+                    const paramId = String(res.id);
+                    if (!siteToPoints.has(paramId)) siteToPoints.set(paramId, []);
+                    siteToPoints.get(paramId).push(p);
+                }
+            });
+        }
+
         // FILTERING LOGIC: If points are provided, filter database to only included sites
         // Identify "Serving" Site IDs from the points
         const relevantSiteIds = new Set();
@@ -1158,10 +1172,52 @@ ${geometry}
             // Logic: Only add a Point Label for the FIRST sector of a site to avoid stacking labels
             let geometryXml = '';
 
+            // Spider Lines Generation
+            let connectionLines = '';
+            // Try matching by multiple IDs (CellID, RNC/CID, CID)
+            const tryIds = [String(s.cellId)];
+            if (s.rnc !== undefined && s.cid !== undefined) tryIds.push(`${s.rnc}/${s.cid}`);
+            if (s.cid !== undefined) tryIds.push(String(s.cid));
+
+            let servedPoints = [];
+            for (const tid of tryIds) {
+                if (siteToPoints && siteToPoints.has(tid)) {
+                    servedPoints = siteToPoints.get(tid);
+                    break;
+                }
+            }
+
+            if (servedPoints.length > 0) {
+                servedPoints.forEach(sp => {
+                    if (sp.lat && sp.lng) {
+                        connectionLines += `
+          <LineString>
+            <coordinates>${s.lng},${s.lat},0 ${sp.lng},${sp.lat},0</coordinates>
+          </LineString>`;
+                    }
+                });
+            }
+
             if (!labeledSites.has(siteUniqueKey)) {
                 labeledSites.add(siteUniqueKey);
-                // First sector: MultiGeometry with Point (for Label) and Polygon
-                geometryXml = `
+                // First sector: Point (Label) + Wedge + Spider Lines
+                if (connectionLines) {
+                    geometryXml = `
+        <MultiGeometry>
+          <Point>
+            <coordinates>${s.lng},${s.lat},0</coordinates>
+          </Point>
+          ${connectionLines}
+          <Polygon>
+            <outerBoundaryIs>
+              <LinearRing>
+                <coordinates>${coords.join(' ')}</coordinates>
+              </LinearRing>
+            </outerBoundaryIs>
+          </Polygon>
+        </MultiGeometry>`;
+                } else {
+                    geometryXml = `
         <MultiGeometry>
           <Point>
             <coordinates>${s.lng},${s.lat},0</coordinates>
@@ -1174,9 +1230,23 @@ ${geometry}
             </outerBoundaryIs>
           </Polygon>
         </MultiGeometry>`;
+                }
             } else {
-                // Subsequent sectors: Only Polygon (No label)
-                geometryXml = `
+                // Subsequent sectors: No Point (Label), just Wedge + Spider Lines
+                if (connectionLines) {
+                    geometryXml = `
+        <MultiGeometry>
+          ${connectionLines}
+          <Polygon>
+            <outerBoundaryIs>
+              <LinearRing>
+                <coordinates>${coords.join(' ')}</coordinates>
+              </LinearRing>
+            </outerBoundaryIs>
+          </Polygon>
+        </MultiGeometry>`;
+                } else {
+                    geometryXml = `
         <Polygon>
           <outerBoundaryIs>
             <LinearRing>
@@ -1184,18 +1254,19 @@ ${geometry}
             </LinearRing>
           </outerBoundaryIs>
         </Polygon>`;
+                }
             }
 
-            placemarks.push(`    <Placemark>
+            placemarks.push(`    < Placemark >
       <name>${siteName}</name>
       <styleUrl>#${styleId}</styleUrl>
 ${geometryXml}
-    </Placemark>`);
+    </Placemark > `);
         });
 
         // Add Style Definitions
         styles.forEach(s => {
-            kml += `    <Style id="${s.id}">
+            kml += `    < Style id = "${s.id}" >
       <LineStyle>
         <color>ff000000</color>
         <width>1</width>
@@ -1211,7 +1282,7 @@ ${geometryXml}
       <LabelStyle>
         <scale>1.1</scale>
       </LabelStyle>
-    </Style>\n`;
+    </Style >\n`;
         });
 
         kml += placemarks.join('\n');

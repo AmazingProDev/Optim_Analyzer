@@ -123,8 +123,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Default behavior: Export ALL sites with uniform Grey color
-            const kmlContent = mapRenderer.exportSitesToKML(null, '#aaaaaa');
+            // NEW: Pass active log points if available to enable "Spider Lines"
+            let activePoints = null;
+            if (mapRenderer.activeLogId) {
+                const log = loadedLogs.find(l => l.id === mapRenderer.activeLogId);
+                if (log) activePoints = log.points;
+            }
+
+            // Default behavior: Export ALL sites with uniform Grey color, plus spider lines if points exist
+            const kmlContent = mapRenderer.exportSitesToKML(activePoints, '#aaaaaa');
 
             if (!kmlContent) {
                 alert('Failed to generate Sites KML.');
