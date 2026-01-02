@@ -827,20 +827,125 @@ class MapRenderer {
             const styleId = 's_' + color.replace('#', '');
             styles.add({ id: styleId, color: hexToKmlColor(color) });
 
-            // Customized Description content
-            const servingName = this.resolveServingName(p) || '';
-            const rncCid = (p.rnc !== undefined && p.cid !== undefined) ? `${p.rnc}/${p.cid}` : '';
-            const rscp = p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : '');
-            const ecno = p.ecno !== undefined ? p.ecno : (p.quality !== undefined ? p.quality : '');
+            // Detailed Description Generation (Replicating app.js Point Details)
+            const safeVal = (v) => (v !== undefined && v !== '-' && !isNaN(v) ? Number(v).toFixed(1) : '-');
+            const formatId = (id) => {
+                if (!id || id === 'N/A') return id;
+                const strId = String(id);
+                if (strId.includes('/')) return id;
+                const num = Number(strId.replace(/[^\d]/g, ''));
+                if (!isNaN(num) && num > 65535) return `${num >> 16}/${num & 0xFFFF}`;
+                return id;
+            };
 
-            let desc = '';
-            if (servingName) desc += `<b>Serving:</b> ${servingName}<br/>`;
-            if (rncCid) desc += `<b>RNC/CID:</b> ${rncCid}<br/>`;
-            if (rscp !== '') desc += `<b>RSCP:</b> ${rscp}<br/>`;
-            if (ecno !== '') desc += `<b>EcNo:</b> ${ecno}<br/>`;
+            const s = (p.parsed && p.parsed.serving) ? p.parsed.serving : {};
+            const sFreq = s.freq;
+            const sLac = s.lac; // Needed for neighbor resolution context
 
-            // Add time and coords as secondary info
-            desc += `<br/>Time: ${p.time || 'N/A'}<br/>Lat: ${p.lat}<br/>Lng: ${p.lng}`;
+            const servingRes = window.resolveSmartSite ? window.resolveSmartSite(p) : { name: 'Unknown', id: p.cellId };
+
+            const servingData = {
+                type: 'Serving',
+                name: servingRes.name || 'Unknown',
+                cellId: servingRes.id || p.cellId,
+                displayId: formatId(servingRes.id || p.cellId),
+                sc: p.sc,
+                rscp: p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : (s.level !== undefined ? s.level : '-')),
+                ecno: p.ecno !== undefined ? p.ecno : (s.ecno !== undefined ? s.ecno : '-'),
+                freq: sFreq || '-'
+            };
+
+            const resolveNeighbor = (pci, cellId, freq) => {
+                if (!window.resolveSmartSite) return { name: 'Unknown', id: cellId || pci };
+                return window.resolveSmartSite({
+                    sc: pci,
+                    cellId: cellId,
+                    lac: sLac,
+                    freq: freq || sFreq,
+                    lat: p.lat,
+                    lng: p.lng
+                });
+            };
+
+            let activeRows = [];
+            if (p.a2_sc !== undefined && p.a2_sc !== null) {
+                const a2Res = resolveNeighbor(p.a2_sc, null, sFreq);
+                const nA2 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a2_sc) : null;
+                activeRows.push({
+                    type: '2nd Active', name: a2Res.name || 'Unknown', cellId: a2Res.id, displayId: formatId(a2Res.id || p.a2_cellid), sc: p.a2_sc,
+                    rscp: p.a2_rscp || (nA2 ? nA2.rscp : '-'), ecno: nA2 ? nA2.ecno : '-', freq: sFreq || '-'
+                });
+            }
+            if (p.a3_sc !== undefined && p.a3_sc !== null) {
+                const a3Res = resolveNeighbor(p.a3_sc, null, sFreq);
+                const nA3 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a3_sc) : null;
+                activeRows.push({
+                    type: '3rd Active', name: a3Res.name || 'Unknown', cellId: a3Res.id, displayId: formatId(a3Res.id || p.a3_cellid), sc: p.a3_sc,
+                    rscp: p.a3_rscp || (nA3 ? nA3.rscp : '-'), ecno: nA3 ? nA3.ecno : '-', freq: sFreq || '-'
+                });
+            }
+
+            let neighborRows = [];
+            let detectedRows = [];
+
+            if (p.parsed && p.parsed.neighbors) {
+                const activeSCs = [p.sc, p.a2_sc, p.a3_sc].filter(x => x !== undefined && x !== null);
+                p.parsed.neighbors.forEach((n, idx) => {
+                    if (n.type === 'detected') {
+                        const nRes = resolveNeighbor(n.pci, n.cellId, n.freq);
+                        detectedRows.push({
+                            type: `D${n.idx || (idx + 1)}`, name: nRes.name || 'Unknown', cellId: nRes.id, displayId: formatId(nRes.id || n.cellId), sc: n.pci,
+                            rscp: n.rscp, ecno: n.ecno, freq: n.freq
+                        });
+                    } else if (!activeSCs.includes(n.pci)) {
+                        const nRes = resolveNeighbor(n.pci, n.cellId, n.freq);
+                        neighborRows.push({
+                            type: `N${idx + 1}`, name: nRes.name || 'Unknown', cellId: nRes.id, displayId: formatId(nRes.id || n.cellId), sc: n.pci,
+                            rscp: n.rscp, ecno: n.ecno, freq: n.freq
+                        });
+                    }
+                });
+            }
+
+            const renderRow = (d, isBold = false) => {
+                const hasId = d.cellId !== undefined && d.cellId !== null;
+                const displayId = d.displayId || d.cellId;
+                const nameContent = hasId ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${displayId})</span>` : d.name;
+                return `
+                    <tr style="border-bottom: 1px solid #ccc; ${isBold ? 'font-weight:bold;' : ''}">
+                        <td style="padding:2px;">${d.type}</td>
+                        <td style="padding:2px;">${nameContent}</td>
+                        <td style="padding:2px; text-align:right;">${d.sc !== undefined ? d.sc : ''}</td>
+                        <td style="padding:2px; text-align:right;">${safeVal(d.rscp)}</td>
+                        <td style="padding:2px; text-align:right;">${safeVal(d.ecno)}</td>
+                        <td style="padding:2px; text-align:right;">${d.freq}</td>
+                    </tr>`;
+            };
+
+            let tableRows = renderRow(servingData, true);
+            activeRows.forEach(r => tableRows += renderRow(r));
+            neighborRows.forEach(r => tableRows += renderRow(r));
+            detectedRows.forEach(r => tableRows += renderRow(r));
+
+            const desc = `
+                <div style="font-family:sans-serif; width:400px; font-size:12px;">
+                    <div style="font-weight:bold; font-size:14px; margin-bottom:5px; color:#22c55e;">${servingData.name}</div>
+                    <div style="margin-bottom:8px; color:#555;">
+                        Time: ${p.time || 'N/A'} <span style="margin-left:10px;">Lat: ${Number(p.lat).toFixed(5)}, Lng: ${Number(p.lng).toFixed(5)}</span>
+                    </div>
+                    <table style="width:100%; border-collapse:collapse; font-size:11px; border:1px solid #ddd;">
+                        <tr style="background:#f3f4f6; text-align:left;">
+                            <th style="padding:3px;">Type</th>
+                            <th style="padding:3px;">Cell</th>
+                            <th style="padding:3px; text-align:right;">SC</th>
+                            <th style="padding:3px; text-align:right;">RSCP</th>
+                            <th style="padding:3px; text-align:right;">EcNo</th>
+                            <th style="padding:3px; text-align:right;">Freq</th>
+                        </tr>
+                        ${tableRows}
+                    </table>
+                </div>
+            `;
 
 
             // Resolve Smart Site for Spider Line
@@ -936,7 +1041,7 @@ ${geometry}
 
         return kml;
     }
-    exportSitesToKML(activePoints = null) {
+    exportSitesToKML(activePoints = null, forceColor = null) {
         if (!this.siteIndex || !this.siteIndex.all) return null;
 
         let kml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -1020,7 +1125,7 @@ ${geometry}
             let id = s.cellId; // Default to Full ID
 
             // If we have active stats, try to match the format used there
-            if (activeIds.size > 0) {
+            if (activeIds.size > 0 && !forceColor) {
                 const candFull = String(s.cellId);
                 const candRncCid = (s.rnc !== undefined && s.cid !== undefined) ? `${s.rnc}/${s.cid}` : null;
                 const candCid = String(s.cid);
@@ -1043,8 +1148,8 @@ ${geometry}
                 id = `${s.rnc}/${s.cid}`;
             }
 
-            const color = this.getDiscreteColor(id);
-            const styleId = 'site_s_' + color.replace('#', '');
+            const color = forceColor ? forceColor : this.getDiscreteColor(id);
+            const styleId = (forceColor ? 'forced_' + color.replace('#', '') : 'site_s_' + color.replace('#', ''));
             styles.add({ id: styleId, color: hexToKmlColor(color) });
 
             const siteName = s.cellName || s.name || s.siteName || s.siteId || '';

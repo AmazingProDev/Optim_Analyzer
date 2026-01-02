@@ -76,6 +76,73 @@ document.addEventListener('DOMContentLoaded', () => {
         aiBtn.onclick = window.openAIAnalysis;
     }
 
+    // Export KML Logic
+    const exportKmlBtn = document.getElementById('exportKmlBtn');
+    if (exportKmlBtn) {
+        exportKmlBtn.onclick = () => {
+            if (!mapRenderer || !mapRenderer.activeLogId) {
+                alert('No active log/layer to export. Please load a log and display a metric first.');
+                return;
+            }
+
+            // Find valid log
+            const logId = mapRenderer.activeLogId;
+            const log = loadedLogs.find(l => l.id === logId);
+
+            if (!log) {
+                alert('Active log data not found.');
+                return;
+            }
+
+            const metric = mapRenderer.activeMetric || 'level';
+            const kmlContent = mapRenderer.exportToKML(log.id, log.points, metric);
+
+            if (!kmlContent) {
+                alert('Failed to generate KML.');
+                return;
+            }
+
+            // Trigger Download
+            const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${log.name}_${metric}.kml`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+    }
+
+    const exportSitesKmlBtn = document.getElementById('exportSitesKmlBtn');
+    if (exportSitesKmlBtn) {
+        exportSitesKmlBtn.onclick = () => {
+            if (!mapRenderer || !mapRenderer.siteData || mapRenderer.siteData.length === 0) {
+                alert('No sites imported. Please import sites first.');
+                return;
+            }
+
+            // Default behavior: Export ALL sites with uniform Grey color
+            const kmlContent = mapRenderer.exportSitesToKML(null, '#aaaaaa');
+
+            if (!kmlContent) {
+                alert('Failed to generate Sites KML.');
+                return;
+            }
+
+            const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `All_Sites_${new Date().toLocaleTimeString().replace(/:/g, '')}.kml`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+    }
+
     window.checkGeminiModels = async function () {
         const key = geminiApiKeyInput.value.trim();
         const debugLog = document.getElementById('aiModelDebugLog');
