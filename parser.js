@@ -600,20 +600,52 @@ const ExcelParser = {
             return null;
         };
 
-        const scCol = detectBestColumn(['servingcellsc', 'servingsc', 'primarysc', 'primarypci', 'dl_pci', 'dl_sc', 'bestsc', 'bestpci', 'sc', 'pci', 'psc', 'scramblingcode'], ['active', 'set', 'neighbor', 'target', 'candidate']);
+        const scCol = detectBestColumn(['servingcellsc', 'servingsc', 'primarysc', 'primarypci', 'dl_pci', 'dl_sc', 'bestsc', 'bestpci', 'sc', 'pci', 'psc', 'scramblingcode', 'physicalcellid', 'physicalcellidentity', 'phycellid'], ['active', 'set', 'neighbor', 'target', 'candidate']);
         const levelCol = detectBestColumn(['servingcellrsrp', 'servingrsrp', 'rsrp', 'rscp', 'level'], ['active', 'set', 'neighbor']);
         const ecnoCol = detectBestColumn(['servingcellrsrq', 'servingrsrq', 'rsrq', 'ecno', 'sinr'], ['active', 'set', 'neighbor']);
         const freqCol = detectBestColumn(['servingcelldlearfcn', 'earfcn', 'uarfcn', 'freq', 'channel'], ['active', 'set', 'neighbor']);
         const bandCol = detectBestColumn(['band'], ['active', 'set', 'neighbor']);
         const cellIdCol = detectBestColumn(['cellid', 'ci', 'cid', 'cell_id', 'identity'], ['active', 'set', 'neighbor', 'target']); // Add CellID detection
 
+        // Number Parsing Helper (handles comma decimals)
+        const parseNumber = (val) => {
+            if (typeof val === 'number') return val;
+            if (typeof val === 'string') {
+                const clean = val.trim().replace(',', '.');
+                const f = parseFloat(clean);
+                return isNaN(f) ? NaN : f;
+            }
+            return NaN;
+        };
+
         const points = [];
         const len = json.length;
 
+        // HEURISTIC: Check if detected CellID column is actually PCI (Small Integers)
+        // If we found a CellID column but NO SC Column, and values are small (< 1000), swap it.
+        if (cellIdCol && !scCol && len > 0) {
+            let smallCount = 0;
+            let checkLimit = Math.min(len, 20);
+            for (let i = 0; i < checkLimit; i++) {
+                const val = json[i][cellIdCol];
+                const num = parseNumber(val);
+                if (!isNaN(num) && num >= 0 && num < 1000) {
+                    smallCount++;
+                }
+            }
+            // If majority look like PCIs, treat as PCI
+            if (smallCount > (checkLimit * 0.8)) {
+                // console.log('[Parser] Swapping CellID column to SC column based on value range.');
+                // We treat this column as SC. We can also keep it as ID if we have nothing else? 
+                // Using valid PCI as ID isn't great for uniqueness, but better than nothing.
+                // Actually, let's just assign it to scCol variable context for the loop
+            }
+        }
+
         for (let i = 0; i < len; i++) {
             const row = json[i];
-            const lat = typeof row[latKey] === 'number' ? row[latKey] : parseFloat(row[latKey]);
-            const lng = typeof row[lngKey] === 'number' ? row[lngKey] : parseFloat(row[lngKey]);
+            const lat = parseNumber(row[latKey]);
+            const lng = parseNumber(row[lngKey]);
             const time = row[timeKey];
 
             if (!isNaN(lat) && !isNaN(lng)) {
@@ -629,13 +661,21 @@ const ExcelParser = {
                     rnc: null, // Init RNC
                     cid: null, // Init CID
                     // Use resolved columns directly
-                    level: (levelCol && row[levelCol] !== undefined) ? parseFloat(row[levelCol]) : -999,
-                    ecno: (ecnoCol && row[ecnoCol] !== undefined) ? parseFloat(row[ecnoCol]) : 0,
-                    sc: (scCol && row[scCol] !== undefined) ? parseInt(row[scCol]) : 0,
-                    freq: (freqCol && row[freqCol] !== undefined) ? parseFloat(row[freqCol]) : undefined,
+                    level: (levelCol && row[levelCol] !== undefined) ? parseNumber(row[levelCol]) : -999,
+                    ecno: (ecnoCol && row[ecnoCol] !== undefined) ? parseNumber(row[ecnoCol]) : 0,
+                    sc: (scCol && row[scCol] !== undefined) ? parseInt(parseNumber(row[scCol])) : 0,
+                    freq: (freqCol && row[freqCol] !== undefined) ? parseNumber(row[freqCol]) : undefined,
                     band: (bandCol && row[bandCol] !== undefined) ? row[bandCol] : undefined,
                     cellId: (cellIdCol && row[cellIdCol] !== undefined) ? row[cellIdCol] : undefined
                 };
+
+                // Fallback: If SC is 0 and CellID looks like PCI (and no explicit SC col), try to recover
+                if (point.sc === 0 && !scCol && point.cellId) {
+                    const maybePci = parseNumber(point.cellId);
+                    if (!isNaN(maybePci) && maybePci < 1000) {
+                        point.sc = parseInt(maybePci);
+                    }
+                }
 
                 // Parse RNC/CID from CellID if format is "RNC/CID" (e.g., "871/7588")
                 if (point.cellId) {
@@ -679,24 +719,29 @@ const ExcelParser = {
                         return matcha ? parseInt(matcha[1]) : null;
                     };
 
-                    // Neighbors N1..N8
-                    if (normM.includes('n') && (normM.includes('sc') || normM.includes('pci') || normM.includes('rscp') || normM.includes('rsrp') || normM.includes('ecno') || normM.includes('rsrq'))) {
+                    // Neighbors N1..N8 (Extizing to N32 support)
+                    // Matches: "neighborcelldlearfcnn1", "neighborcellidentityn1", "n1_sc" etc.
+                    if (normM.includes('n') && (normM.includes('sc') || normM.includes('pci') || normM.includes('identity') || normM.includes('rscp') || normM.includes('rsrp') || normM.includes('ecno') || normM.includes('rsrq') || normM.includes('freq') || normM.includes('earfcn'))) {
                         // Exclude if it looks like primary SC (though mapped above, safe to skip)
                         if (m === scCol) continue;
 
-                        const nIdx = extractIdx(normM, 'n'); // generic extractor needs refinement for "n1" string
-                        // Simpler check
+                        // Flexible Digit Extractor: Matches "n1", "neighbor...n1", "n_1"
+                        // Specifically targets the user's "Nx" format at the end of string
                         const digitMatch = normM.match(/n(\d+)/);
+
                         if (digitMatch) {
                             const idx = parseInt(digitMatch[1]);
                             if (idx >= 1 && idx <= 32) {
                                 if (!point._neighborsHelper) point._neighborsHelper = {};
                                 if (!point._neighborsHelper[idx]) point._neighborsHelper[idx] = {};
 
-                                if (normM.includes('sc') || normM.includes('pci')) point._neighborsHelper[idx].pci = val;
-                                if (normM.includes('rscp') || normM.includes('rsrp')) point._neighborsHelper[idx].rscp = val;
-                                if (normM.includes('ecno') || normM.includes('rsrq')) point._neighborsHelper[idx].ecno = val;
-                                if (normM.includes('freq') || normM.includes('earfcn')) point._neighborsHelper[idx].freq = val;
+                                // Use parseNumber to handle strings/commas
+                                const numVal = parseNumber(val);
+
+                                if (normM.includes('sc') || normM.includes('pci') || normM.includes('identity')) point._neighborsHelper[idx].pci = parseInt(numVal);
+                                if (normM.includes('rscp') || normM.includes('rsrp')) point._neighborsHelper[idx].rscp = numVal;
+                                if (normM.includes('ecno') || normM.includes('rsrq')) point._neighborsHelper[idx].ecno = numVal;
+                                if (normM.includes('freq') || normM.includes('earfcn')) point._neighborsHelper[idx].freq = numVal;
                             }
                         }
                     }
@@ -711,9 +756,11 @@ const ExcelParser = {
                                 const key = 100 + idx;
                                 if (!point._neighborsHelper[key]) point._neighborsHelper[key] = { type: 'detected' };
 
-                                if (normM.includes('sc') || normM.includes('pci')) point._neighborsHelper[key].pci = val;
-                                if (normM.includes('rscp') || normM.includes('rsrp')) point._neighborsHelper[key].rscp = val;
-                                if (normM.includes('ecno') || normM.includes('rsrq')) point._neighborsHelper[key].ecno = val;
+                                const numVal = parseNumber(val);
+
+                                if (normM.includes('sc') || normM.includes('pci')) point._neighborsHelper[key].pci = parseInt(numVal);
+                                if (normM.includes('rscp') || normM.includes('rsrp')) point._neighborsHelper[key].rscp = numVal;
+                                if (normM.includes('ecno') || normM.includes('rsrq')) point._neighborsHelper[key].ecno = numVal;
                             }
                         }
                     }
