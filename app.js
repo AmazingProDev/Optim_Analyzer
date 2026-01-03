@@ -95,7 +95,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const metric = mapRenderer.activeMetric || 'level';
-            const kmlContent = mapRenderer.exportToKML(log.id, log.points, metric);
+
+            // USE UNIFIED EXPORT: Includes Points (Colored by Metric) + Relevant Sites (Colored matching Points if Discrete)
+            // This satisfies the user requirement: "export also serving sectors with thematic colors"
+            const kmlContent = mapRenderer.exportUnifiedKML(log.id, log.points, metric);
 
             if (!kmlContent) {
                 alert('Failed to generate KML.');
@@ -2757,7 +2760,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            if (panel.style.display === 'none') {
+            // Show panel if hidden (Fix: checking inline style 'none' is insufficient if hidden by CSS class)
+            if (panel.style.display !== 'block') {
                 panel.style.display = 'block';
             }
 
@@ -4307,6 +4311,108 @@ document.addEventListener('DOMContentLoaded', () => {
             alert("Drop failed: " + e.message);
         }
     };
+
+    // ----------------------------------------------------
+    // USER POINT MANUAL ENTRY
+    // ----------------------------------------------------
+    const addPointBtn = document.getElementById('addPointBtn');
+    const userPointModal = document.getElementById('userPointModal');
+    const submitUserPoint = document.getElementById('submitUserPoint');
+
+    if (addPointBtn && userPointModal) {
+        addPointBtn.onclick = () => {
+            userPointModal.style.display = 'block';
+
+            // Make Draggable
+            const upContent = userPointModal.querySelector('.modal-content');
+            const upHeader = userPointModal.querySelector('.modal-header');
+            if (typeof makeElementDraggable === 'function' && upContent && upHeader) {
+                makeElementDraggable(upHeader, upContent);
+            }
+
+            // Optional: Auto-fill from Search Input if it looks like coords
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput && searchInput.value) {
+                const parts = searchInput.value.split(',');
+                if (parts.length === 2) {
+                    const lat = parseFloat(parts[0].trim());
+                    const lng = parseFloat(parts[1].trim());
+                    if (!isNaN(lat) && !isNaN(lng)) {
+                        document.getElementById('upLat').value = lat;
+                        document.getElementById('upLng').value = lng;
+                    }
+                }
+            }
+        };
+    }
+
+    if (submitUserPoint) {
+        submitUserPoint.onclick = () => {
+            const nameInput = document.getElementById('upName');
+            const latInput = document.getElementById('upLat');
+            const lngInput = document.getElementById('upLng');
+
+            const name = nameInput.value.trim() || 'User Point';
+            const lat = parseFloat(latInput.value);
+            const lng = parseFloat(lngInput.value);
+
+            if (isNaN(lat) || isNaN(lng)) {
+                alert('Invalid Coordinates. Please enter valid numbers.');
+                return;
+            }
+
+            if (!window.map) {
+                alert('Map not initialized.');
+                return;
+            }
+
+            // Add Marker via Leaflet
+            // Using a distinct icon color or style could be nice, but default blue is fine for now.
+            const marker = L.marker([lat, lng]).addTo(window.map);
+
+            // Assign a unique ID to the marker for removal
+            const markerId = 'user_point_' + Date.now();
+            marker._pointId = markerId;
+
+            // Store marker in a global map if not exists
+            if (!window.userMarkers) window.userMarkers = {};
+            window.userMarkers[markerId] = marker;
+
+            // Define global remover if not exists
+            if (!window.removeUserPoint) {
+                window.removeUserPoint = (id) => {
+                    const m = window.userMarkers[id];
+                    if (m) {
+                        m.remove();
+                        delete window.userMarkers[id];
+                    }
+                };
+            }
+
+            const popupContent = `
+                <div style="font-size:13px; min-width:150px;">
+                    <b>${name}</b><br>
+                    <div style="color:#888; font-size:11px; margin-top:4px;">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
+                    <button onclick="window.removeUserPoint('${markerId}')" style="margin-top:8px; background:#ef4444; color:white; border:none; padding:2px 5px; border-radius:3px; cursor:pointer; font-size:10px;">Remove</button>
+                </div>
+             `;
+
+            marker.bindPopup(popupContent).openPopup();
+
+            // Close Modal
+            userPointModal.style.display = 'none';
+
+            // Pan to location
+            window.map.panTo([lat, lng]);
+
+            // Clear Inputs (Optional, or keep for repeated entry?)
+            // Let's keep name but clear coords or clear all? 
+            // Clearing all is standard.
+            nameInput.value = '';
+            latInput.value = '';
+            lngInput.value = '';
+        };
+    }
 
 });
 

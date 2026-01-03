@@ -54,25 +54,23 @@
                 <input type="file" id="fileInput" accept=".nmf, .nmfs, .csv, .txt, .xlsx, .xls">
                 <label for="fileInput" class="btn">Load Log (NMF/CSV)</label>
 
-                <input type="file" id="siteInput" accept=".xlsx, .xls, .csv" style="display:none;">
-                <label for="siteInput" class="btn" style="background:#2563eb;">Import Sites</label>
+                <input type="file" id="siteInput" accept=".xlsx, .xls, .csv">
+                <label for="siteInput" class="btn btn-blue">Import Sites</label>
 
-                <button id="siteSettingsBtn" class="btn" style="background:#4b5563;">⚙️ Sites</button>
-                <button id="exportKmlBtn" class="btn" style="background:#059669;" title="Export current view to KML">🌍
+                <button id="siteSettingsBtn" class="btn btn-gray">⚙️ Sites</button>
+                <button id="exportKmlBtn" class="btn btn-green" title="Export current view to KML">🌍
                     KML</button>
-                <button id="exportSitesKmlBtn" class="btn" style="background:#059669; margin-left:2px;"
+                <button id="exportSitesKmlBtn" class="btn btn-green ml-2"
                     title="Export all sites to KML (Uniform Color)">📡 KML</button>
-                <button id="themeSettingsBtn" class="btn" style="background:#4b5563;">🎨 Theme</button>
-                <button id="aiAnalyzeBtn" class="btn"
-                    style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); color: white; border: none; display: flex; align-items: center; gap: 5px;">
+                <button id="themeSettingsBtn" class="btn btn-gray">🎨 Theme</button>
+                <button id="aiAnalyzeBtn" class="btn btn-gradient">
                     <span>✨</span> AI Analyze
                 </button>
 
-                <div
-                    style="display:flex; align-items:center; background:#333; padding:2px 5px; border-radius:4px; border:1px solid #555;">
-                    <input type="text" id="searchInput" placeholder="CGPS (Lat, Lng)"
-                        style="background:none; border:none; color:#ddd; width:120px; font-size:12px; outline:none;">
-                    <button id="searchBtn" style="background:none; border:none; cursor:pointer;">🔍</button>
+                <div class="search-container">
+                    <input type="text" id="searchInput" placeholder="CGPS (Lat, Lng)" class="search-input">
+                    <button id="searchBtn" class="search-btn-icon">🔍</button>
+                    <button id="addPointBtn" class="search-btn-icon add-point-btn" title="Add User Point">📍</button>
                 </div>
 
                 <span id="fileStatus">No file loaded</span>
@@ -102,8 +100,7 @@
 
                 <div class="setting-item">
                     <label class="setting-label">Color By</label>
-                    <select id="siteColorBy" class="setting-input"
-                        style="background:#333; color:#fff; border:1px solid #555;">
+                    <select id="siteColorBy" class="setting-input site-color-mode" aria-label="Site Color Mode">
                         <option value="tech">Technology</option>
                         <option value="identity">Cell Identity (RNC/CID)</option>
                     </select>
@@ -111,54 +108,50 @@
 
                 <div class="setting-item">
                     <label class="setting-label">Color Override</label>
-                    <div style="display:flex; gap:10px; align-items:center;">
-                        <input type="color" id="pickerSiteColor" value="#3b82f6"
-                            style="border:none; width:30px; height:30px; cursor:pointer;"
+                    <div class="site-color-picker-container">
+                        <input type="color" id="pickerSiteColor" value="#3b82f6" class="site-color-picker"
                             aria-label="Site Color Picker">
-                        <label style="font-size:11px; color:#888;"><input type="checkbox" id="checkSiteColorOverride">
+                        <label class="site-checkbox-label"><input type="checkbox" id="checkSiteColorOverride">
                             Apply</label>
                     </div>
                 </div>
 
                 <div class="setting-item">
                     <label class="setting-label">Labels</label>
-                    <div style="display:flex; flex-direction:column; gap:5px;">
-                        <label style="font-size:11px; color:#888;"><input type="checkbox" id="checkShowSiteNames"> Show
+                    <div class="site-names-container">
+                        <label class="site-checkbox-label"><input type="checkbox" id="checkShowSiteNames"> Show
                             Site Names</label>
-                        <label style="font-size:11px; color:#888;"><input type="checkbox" id="checkShowCellNames"> Show
+                        <label class="site-checkbox-label"><input type="checkbox" id="checkShowCellNames"> Show
                             Cell Names</label>
                     </div>
                 </div>
 
-                <div style="text-align:right;">
-                    <button id="closeSiteSettings"
-                        style="background:#555; color:white; border:none; padding:4px 10px; cursor:pointer; font-size:11px; border-radius:3px;">Close</button>
+                <div class="settings-footer-right">
+                    <button id="closeSiteSettings" class="close-settings-btn">Close</button>
                 </div>
             </div>
 
             <!-- Theme Settings Panel -->
-            <div id="themeSettingsPanel" class="settings-panel" style="display:none; right:150px;">
+            <div id="themeSettingsPanel" class="settings-panel theme-settings-panel-custom">
                 <h4 class="settings-header">Thematic Analysis</h4>
 
                 <div class="setting-item">
                     <label class="setting-label">Active Theme</label>
-                    <select id="themeSelect" class="setting-input" style="color:#333;">
+                    <select id="themeSelect" class="setting-input theme-select" aria-label="Active Theme">
                         <option value="level">Coverage (RSCP/RSRP)</option>
                         <option value="quality">Quality (EcNo/RSRQ)</option>
                     </select>
                 </div>
 
-                <div id="thresholdsContainer" style="margin-top:10px; max-height:300px; overflow-y:auto;">
+                <div id="thresholdsContainer" class="thresholds-container">
                     <!-- Thresholds injected here by JS -->
                 </div>
 
-                <div style="margin-top:10px; display:flex; justify-content:space-between;">
-                    <button id="resetThemeBtn" class="btn" style="background:#ef4444; font-size:11px;">Reset</button>
-                    <div style="gap:5px; display:flex;">
-                        <button id="applyThemeBtn" class="btn"
-                            style="background:#22c55e; font-size:11px;">Apply</button>
-                        <button id="closeThemeSettings" class="btn"
-                            style="background:#555; font-size:11px;">Close</button>
+                <div class="theme-footer">
+                    <button id="resetThemeBtn" class="btn theme-btn-reset">Reset</button>
+                    <div class="theme-footer-actions">
+                        <button id="applyThemeBtn" class="btn theme-btn-apply">Apply</button>
+                        <button id="closeThemeSettings" class="btn theme-btn-close">Close</button>
                     </div>
                 </div>
             </div>
@@ -169,42 +162,37 @@
         </header>
 
         <main>
-            <div id="logs-sidebar" style="display:flex; flex-direction:column;">
+            <div id="logs-sidebar" class="logs-sidebar-flex">
                 <h3>Loaded Logs</h3>
-                <div id="logsList" style="flex:1; overflow-y:auto; margin-bottom:10px;">
+                <div id="logsList" class="logs-list-container">
                     <div class="empty-state">No logs loaded</div>
                 </div>
 
                 <!-- Docked Views Container REMOVED -->
             </div>
 
-            <div id="center-pane"
-                style="flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden;">
-                <div id="map" style="flex: 1;" ondrop="window.drop(event)" ondragover="window.allowDrop(event)"></div>
+            <div id="center-pane" class="center-pane">
+                <div id="map" class="map-container" ondrop="window.drop(event)" ondragover="window.allowDrop(event)">
+                </div>
 
                 <!-- Bottom Panel for Docked Views (Legacy/Bottom) -->
-                <div id="bottomPanel"
-                    style="height: 0; display: none; flex-direction: column; background: #1e1e1e; border-top: 1px solid #444;">
-                    <div id="bottomResizer"
-                        style="height: 5px; background: #333; cursor: ns-resize; flex-shrink: 0; display: flex; justify-content: center; align-items: center;">
-                        <div style="width: 30px; height: 2px; background: #555; border-radius: 1px;"></div>
+                <!-- Bottom Panel for Docked Views (Legacy/Bottom) -->
+                <div id="bottomPanel" class="bottom-panel">
+                    <div id="bottomResizer" class="bottom-resizer">
+                        <div class="bottom-resizer-handle"></div>
                     </div>
-                    <div id="bottomContent" style="flex: 1; display: flex; overflow: hidden;">
+                    <div id="bottomContent" class="bottom-content">
                         <!-- Docked Content Will Go Here -->
-                        <div id="dockedChart"
-                            style="flex: 1; display: none; border-right: 1px solid #333; position: relative; flex-direction: column;">
+                        <div id="dockedChart" class="docked-pane-hidden">
                         </div>
-                        <div id="dockedSignaling"
-                            style="flex: 1; display: none; border-right: 1px solid #333; position: relative; flex-direction: column;">
+                        <div id="dockedSignaling" class="docked-pane-hidden">
                         </div>
-                        <div id="dockedGrid"
-                            style="flex: 1; display: none; position: relative; flex-direction: column;">
-                            <div class="docked-item-header"
-                                style="display:none; /* Dynamic Header usually handled by moving modal header */">
+                        <div id="dockedGrid" class="docked-grid-container">
+                            <div class="docked-item-header docked-grid-header-placeholder">
                                 <!-- Placeholders if needed -->
                             </div>
                             <!-- Helper Container for body -->
-                            <div id="dockedGridBody" style="flex:1; overflow:auto;"></div>
+                            <div id="dockedGridBody" class="docked-grid-body"></div>
                         </div>
                     </div>
                 </div>
@@ -220,37 +208,34 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <!-- Signaling Modal -->
+    <!-- Signaling Modal -->
     <div id="signalingModal" class="modal">
-        <div class="modal-content"
-            style="width:80%; max-width:900px; background:#1e1e1e; border:1px solid #444; height:80vh; display:flex; flex-direction:column; padding:0;">
-            <div class="modal-header"
-                style="padding:15px; border-bottom:1px solid #333; display:flex; justify-content:space-between; align-items:center;">
-                <div style="display:flex; align-items:center; gap:15px;">
-                    <h3 id="signalingModalTitle" style="margin:0; color:#ddd;">Signaling Data</h3>
-                    <select id="signalingFilter" onchange="filterSignaling()"
-                        style="background:#333; color:#eee; border:1px solid #555; padding:4px 8px; border-radius:4px; font-size:12px;"
+        <div class="modal-content signaling-modal-content">
+            <div class="modal-header signaling-modal-header">
+                <div class="signaling-header-left">
+                    <h3 id="signalingModalTitle" class="signaling-modal-title">Signaling Data</h3>
+                    <select id="signalingFilter" onchange="filterSignaling()" class="signaling-filter"
                         aria-label="Signaling Type Filter">
                         <option value="ALL">All Types</option>
                         <option value="RRC">RRC Only</option>
                         <option value="L3">L3 Only</option>
                     </select>
                 </div>
-                <span class="close" onclick="closeSignalingModal()"
-                    style="color:#aaa; cursor:pointer; font-size:24px;">&times;</span>
+                <span class="close signaling-close" onclick="closeSignalingModal()">&times;</span>
             </div>
-            <div class="modal-body" style="flex:1; overflow-y:auto; padding:0;">
-                <table class="data-table" style="width:100%; border-collapse:collapse; font-size:12px;">
-                    <thead style="position:sticky; top:0; background:#252525; z-index:10;">
+            <div class="modal-body signaling-modal-body">
+                <table class="data-table signaling-table">
+                    <thead class="signaling-thead">
                         <tr>
-                            <th style="text-align:left; padding:8px;">Time
+                            <th class="th-padding">Time
                             </th>
-                            <th style="text-align:left; padding:8px;">Type
+                            <th class="th-padding">Type
                             </th>
-                            <th style="text-align:left; padding:8px;">
+                            <th class="th-padding">
                                 Direction</th>
-                            <th style="text-align:left; padding:8px;">Message
+                            <th class="th-padding">Message
                             </th>
-                            <th style="text-align:left; padding:8px;">Details
+                            <th class="th-padding">Details
                             </th>
                         </tr>
                     </thead>
@@ -263,32 +248,28 @@
     </div>
 
     <!-- Grid Modal -->
-    <div id="gridModal" class="modal"
-        style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.4);">
-        <div class="modal-content"
-            style="background-color: #1e1e1e; margin: 5% auto; padding: 0; border: 1px solid #444; width: 80%; height: 70%; display: flex; flex-direction: column; resize: both; overflow: hidden; position: relative;">
+    <!-- Grid Modal -->
+    <div id="gridModal" class="modal grid-modal-overlay">
+        <div class="modal-content grid-modal-content">
 
             <!-- Header (Draggable) -->
-            <div class="modal-header grid-modal-header"
-                style="padding: 10px; background: #252525; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; cursor: move; flex-shrink: 0;">
-                <h3 class="grid-title" style="margin: 0; font-size: 14px; color: #eee; pointer-events: none;">Grid View
+            <div class="modal-header grid-modal-header grid-modal-header-custom">
+                <h3 class="grid-title">Grid View
                 </h3>
-                <div class="grid-controls" style="display: flex; gap: 8px; pointer-events: auto;">
+                <div class="grid-controls">
                     <button class="btn btn-sm btn-secondary" onclick="sortGrid()">Sort</button>
                     <button class="btn btn-sm btn-secondary" onclick="window.exportGridToCSV()">Export CSV</button>
                     <!-- Dock Button -->
-                    <button class="dock-btn" onclick="toggleGridDock()" title="Dock"
-                        style="background:#3b82f6; color:white; border:none; padding:4px 10px; cursor:pointer; font-size:14px; border-radius:3px;">&#8595;</button>
-                    <span class="close" onclick="document.getElementById('gridModal').style.display='none'"
-                        style="color: #aaa; font-size: 24px; font-weight: bold; cursor: pointer; line-height: 16px;">&times;</span>
+                    <button class="dock-btn" onclick="toggleGridDock()" title="Dock">&#8595;</button>
+                    <span class="close grid-close"
+                        onclick="document.getElementById('gridModal').style.display='none'">&times;</span>
                 </div>
             </div>
 
             <!-- Body -->
-            <div id="gridBody" class="modal-body grid-body"
-                style="flex: 1; padding: 10px; overflow: auto; color: #ddd; position: relative;">
+            <div id="gridBody" class="modal-body grid-body grid-modal-body-custom">
                 <!-- Grid Table Generated via JS -->
-                <div style="text-align:center; color:#666; padding:20px;">
+                <div class="grid-placeholder">
                     Drag metrics from the sidebar here to add columns.<br>
                     (e.g. Serving RSCP, EcNo, SC, etc.)
                 </div>
@@ -297,67 +278,58 @@
     </div>
 
     <!-- Chart Modal -->
+    <!-- Chart Modal -->
     <div id="chartModal" class="modal">
-        <div class="modal-content"
-            style="width:90%; height:90%; background:#1e1e1e; border:1px solid #444; display:flex; flex-direction:column; padding:0;">
-            <div class="modal-header"
-                style="padding:10px; background:#252525; border-bottom:1px solid #333; display:flex; justify-content:space-between; align-items:center;">
-                <h3 id="chartTitle" style="margin:0; font-size:16px; color:#ddd;">Chart</h3>
-                <span class="close" onclick="closeChartModal()"
-                    style="color:#aaa; cursor:pointer; font-size:24px;">&times;</span>
+        <div class="modal-content chart-modal-content">
+            <div class="modal-header chart-modal-header">
+                <h3 id="chartTitle" class="chart-title">Chart</h3>
+                <span class="close chart-close" onclick="closeChartModal()">&times;</span>
             </div>
-            <div style="flex:1; position:relative; padding:10px; min-height:0;">
+            <div class="chart-container">
                 <canvas id="chartCanvas"></canvas>
             </div>
         </div>
     </div>
 
     <!-- AI Analysis Modal -->
+    <!-- AI Analysis Modal -->
     <div id="aiModal" class="modal">
-        <div class="modal-content"
-            style="width: 80%; max-width: 800px; height: 80vh; background: #1e1e1e; border: 1px solid #444; display: flex; flex-direction: column; padding: 0;">
-            <div class="modal-header"
-                style="padding: 15px; background: #252525; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center;">
-                <h3 style="margin: 0; display: flex; align-items: center; gap: 8px; color: #e2e8f0;">
-                    <span style="font-size: 20px;">✨</span> AI Drive Test Analyst
+        <div class="modal-content ai-modal-content">
+            <div class="modal-header ai-modal-header">
+                <h3 class="ai-modal-title">
+                    <span class="ai-icon-large">✨</span> AI Drive Test Analyst
                 </h3>
-                <span class="close" onclick="closeAIModal()"
-                    style="color: #aaa; cursor: pointer; font-size: 24px;">&times;</span>
+                <span class="close ai-close" onclick="closeAIModal()">&times;</span>
             </div>
 
-            <div class="modal-body"
-                style="flex: 1; padding: 20px; overflow-y: auto; color: #e2e8f0; font-family: 'Inter', sans-serif;">
+            <div class="modal-body ai-modal-body">
 
                 <!-- API Key Section -->
-                <div id="aiApiKeySection"
-                    style="margin-bottom: 20px; padding: 15px; background: #2d2d2d; border-radius: 8px; border: 1px solid #3f3f46;">
+                <div id="aiApiKeySection" class="ai-section">
 
                     <!-- Provider Selector -->
-                    <div
-                        style="margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
-                        <label style="font-size: 13px; color: #ccc;">AI Provider:</label>
-                        <div style="display: flex; gap: 15px;">
-                            <label style="display: flex; align-items: center; cursor: pointer;">
+                    <div class="ai-provider-row">
+                        <label class="ai-label-small">AI Provider:</label>
+                        <div class="ai-provider-options">
+                            <label class="ai-radio-label">
                                 <input type="radio" name="aiProvider" value="gemini" checked
-                                    onchange="toggleAIProvider()" style="margin-right: 6px;">
-                                <span style="color: #e2e8f0; font-size: 13px;">Google Gemini</span>
+                                    onchange="toggleAIProvider()" class="ai-radio-input">
+                                <span class="ai-radio-text">Google Gemini</span>
                             </label>
-                            <label style="display: flex; align-items: center; cursor: pointer;">
+                            <label class="ai-radio-label">
                                 <input type="radio" name="aiProvider" value="openai" onchange="toggleAIProvider()"
-                                    style="margin-right: 6px;">
-                                <span style="color: #e2e8f0; font-size: 13px;">OpenAI ChatGPT</span>
+                                    class="ai-radio-input">
+                                <span class="ai-radio-text">OpenAI ChatGPT</span>
                             </label>
                         </div>
                     </div>
 
-                    <p style="margin: 0 0 10px 0; font-size: 14px; color: #94a3b8;">Enter your API Key to enable
+                    <p class="ai-subtext">Enter your API Key to enable
                         analysis. Keys are stored locally.</p>
 
-                    <div style="margin-bottom: 10px;">
-                        <label for="geminiModelSelect"
-                            style="font-size: 12px; color: #ccc; display: block; margin-bottom: 4px;">Model:</label>
-                        <select id="geminiModelSelect"
-                            style="width: 100%; padding: 8px; background: #18181b; color: white; border: 1px solid #4b5563; border-radius: 6px;">
+                    <div class="ai-model-select-wrapper">
+                        <label for="geminiModelSelect" class="ai-model-select-label">Model:</label>
+                        <select id="geminiModelSelect" class="ai-model-select">
                             <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (New)</option>
                             <option value="gemini-flash-latest">Gemini Flash Latest</option>
                             <option value="gemini-pro-latest">Gemini Pro Latest</option>
@@ -369,37 +341,33 @@
                     </div>
 
                     <!-- Gemini Key Input -->
-                    <div id="geminiKeyContainer" style="display: flex; gap: 10px; align-items:center;">
+                    <div id="geminiKeyContainer" class="ai-key-container">
                         <input type="password" id="geminiApiKey" placeholder="Paste Gemini API Key (AIza...)"
-                            style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #4b5563; background: #18181b; color: white;">
-                        <button onclick="window.checkGeminiModels()"
-                            style="padding: 8px 12px; border-radius: 6px; border: 1px solid #4b5563; background: #333; color: white; white-space: nowrap; cursor: pointer;">Check
+                            class="ai-key-input">
+                        <button onclick="window.checkGeminiModels()" class="ai-check-btn">Check
                             Models</button>
                     </div>
 
                     <!-- OpenAI Key Input (Hidden by default) -->
-                    <div id="openaiKeyContainer" style="display: none; gap: 10px; align-items:center;">
+                    <div id="openaiKeyContainer" class="ai-key-container-hidden">
                         <input type="password" id="openaiApiKey" placeholder="Paste OpenAI API Key (sk-...)"
-                            style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #4b5563; background: #18181b; color: white;">
+                            class="ai-key-input">
                     </div>
-                    <div id="aiModelDebugLog"
-                        style="margin-top: 10px; font-size: 11px; color: #888; font-family: monospace; white-space: pre-wrap; display:none; background: #111; padding: 10px; border-radius: 4px;">
+                    <div id="aiModelDebugLog" class="ai-debug-log">
                     </div>
                 </div>
 
                 <!-- Loading State -->
-                <div id="aiLoading"
-                    style="display: none; flex-direction: column; align-items: center; justify-content: center; padding: 40px;">
+                <div id="aiLoading" class="ai-loading">
                     <div class="ai-spinner"></div>
-                    <p style="margin-top: 15px; color: #94a3b8;">Analyzing log data...</p>
+                    <p class="ai-loading-text">Analyzing log data...</p>
                 </div>
 
                 <!-- Result Content -->
-                <div id="aiContent" style="line-height: 1.6;">
-                    <div style="text-align: center; color: #64748b; margin-top: 40px;">
+                <div id="aiContent" class="ai-content-wrapper">
+                    <div class="ai-placeholder-wrapper">
                         <p>Click "Analyze" to generate insights from the current log.</p>
-                        <button onclick="window.runAIAnalysis()" id="runAnalysisBtn"
-                            style="margin-top: 10px; padding: 10px 20px; background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
+                        <button onclick="window.runAIAnalysis()" id="runAnalysisBtn" class="ai-analyze-btn">
                             Generate Analysis
                         </button>
                     </div>
@@ -411,32 +379,27 @@
 
     <!-- Context Menu -->
     <!-- Context Menu -->
-    <div id="metricContextMenu" class="context-menu"
-        style="display: none; position: absolute; z-index: 10000; background: #2d2d2d; border: 1px solid #444; border-radius: 4px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5); padding: 5px 0; min-width: 150px;">
-        <div class="menu-item" onclick="window.handleContextAction('map')"
-            style="padding: 8px 15px; cursor: pointer; color: #e0e0e0;">Open in Map</div>
-        <div class="menu-item" onclick="window.handleContextAction('chart')"
-            style="padding: 8px 15px; cursor: pointer; color: #e0e0e0;">Open in Chart</div>
-        <div class="menu-item" onclick="window.handleContextAction('grid')"
-            style="padding: 8px 15px; cursor: pointer; color: #e0e0e0;">Open in Grid</div>
+    <!-- Context Menu -->
+    <div id="metricContextMenu" class="metric-context-menu">
+        <div class="menu-item" onclick="window.handleContextAction('map')">Open in Map</div>
+        <div class="menu-item" onclick="window.handleContextAction('chart')">Open in Chart</div>
+        <div class="menu-item" onclick="window.handleContextAction('grid')">Open in Grid</div>
     </div>
 
 
 
 
     <!-- Floating Info Panel (Draggable) -->
-    <div id="floatingInfoPanel"
-        style="display:none; position:fixed; top:80px; right:20px; width:auto; min-width:280px; max-width:500px; background:rgba(30, 30, 30, 0.95); backdrop-filter:blur(5px); border:1px solid #444; border-radius:8px; z-index:3000; box-shadow:0 8px 30px rgba(0,0,0,0.5); font-family: 'Inter', sans-serif;">
+    <div id="floatingInfoPanel" class="floating-info-panel">
         <!-- Header (Drag Handle) -->
-        <div id="infoPanelHeader"
-            style="padding:10px; background:#252525; border-bottom:1px solid #333; border-radius:8px 8px 0 0; cursor:move; display:flex; justify-content:space-between; align-items:center;">
-            <span style="font-size:12px; font-weight:600; color:#ddd;">Point Details</span>
+        <div id="infoPanelHeader" class="infoPanelHeader info-panel-header">
+            <span class="info-panel-title">Point Details</span>
             <span onclick="document.getElementById('floatingInfoPanel').style.display='none'"
-                style="cursor:pointer; color:#888; font-size:16px;">&times;</span>
+                class="info-panel-close">&times;</span>
         </div>
         <!-- Content -->
-        <div id="infoPanelContent" style="padding:10px; color:#eee; max-height:400px; overflow-y:auto;">
-            <div style="font-size:12px; color:#888; text-align:center;">Select a point to view details</div>
+        <div id="infoPanelContent" class="info-panel-content">
+            <div class="info-panel-placeholder">Select a point to view details</div>
         </div>
     </div>
 
@@ -444,6 +407,35 @@
     <script src="parser.js?v=43"></script>
     <script src="theme_config.js?v=2"></script>
     <script src="app.js?v=v113"></script>
+    <!-- User Point Modal -->
+    <div id="userPointModal" class="modal">
+        <div class="modal-content user-point-modal-content">
+            <div class="modal-header user-point-modal-header">
+                <h3>Add User Point</h3>
+                <span class="close"
+                    onclick="document.getElementById('userPointModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body user-point-modal-body">
+                <div class="up-input-group">
+                    <label class="up-label">Name</label>
+                    <input type="text" id="upName" placeholder="Point Name" class="up-input">
+                </div>
+                <div class="up-input-row">
+                    <div class="up-input-item">
+                        <label class="up-label">Latitude</label>
+                        <input type="number" id="upLat" placeholder="33.xxx" step="any" class="up-input">
+                    </div>
+                    <div class="up-input-item">
+                        <label class="up-label">Longitude</label>
+                        <input type="number" id="upLng" placeholder="-7.xxx" step="any" class="up-input">
+                    </div>
+                </div>
+                <div class="up-footer">
+                    <button id="submitUserPoint" class="btn up-submit-btn">Add to Map</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>
