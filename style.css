@@ -81,6 +81,10 @@ input[type="file"] {
     background-color: #059669;
 }
 
+.btn-purple {
+    background-color: #8b5cf6;
+}
+
 .btn-red {
     background-color: #ef4444;
 }

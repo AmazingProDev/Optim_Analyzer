@@ -2,6 +2,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileInput = document.getElementById('fileInput');
     const fileStatus = document.getElementById('fileStatus');
     const logsList = document.getElementById('logsList');
+    // define custom projection
+    if (window.proj4) {
+        window.proj4.defs("EPSG:32629", "+proj=utm +zone=29 +north +datum=WGS84 +units=m +no_defs");
+    }
+
+    const shpInput = document.getElementById('shpInput');
 
     // Initialize Map
     const map = new MapRenderer('map');
@@ -98,7 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // USE UNIFIED EXPORT: Includes Points (Colored by Metric) + Relevant Sites (Colored matching Points if Discrete)
             // This satisfies the user requirement: "export also serving sectors with thematic colors"
-            const kmlContent = mapRenderer.exportUnifiedKML(log.id, log.points, metric);
+            const kmlContent = mapRenderer.exportUnifiedKML(log.points, metric);
 
             if (!kmlContent) {
                 alert('Failed to generate KML.');
@@ -252,6 +258,314 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         alert('API Keys saved successfully!');
     };
+
+    // --- SmartCare SHP/Excel Import Logic ---
+    shpInput.onchange = async (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+
+        const excelFile = files.find(f => f.name.endsWith('.xlsx') || f.name.endsWith('.xls'));
+        if (excelFile) {
+            await handleExcelImport(excelFile);
+        } else {
+            await handleShpImport(files);
+        }
+        shpInput.value = ''; // Reset
+    };
+
+    async function handleExcelImport(file) {
+        fileStatus.textContent = `Parsing Excel: ${file.name}...`;
+        try {
+            const data = await file.arrayBuffer();
+            const workbook = XLSX.read(data);
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const json = XLSX.utils.sheet_to_json(sheet);
+
+            console.log("[Excel] Parsed rows:", json.length);
+
+            // UTM Zone 29N definition if needed (often standard in proj4 defs, but we define explicit if missing)
+            // EPSG:32629 is usually built-in or we can define it.
+            // Safe fallback:
+            if (!window.proj4.defs['EPSG:32629']) {
+                window.proj4.defs('EPSG:32629', '+proj=utm +zone=29 +datum=WGS84 +units=m +no_defs');
+            }
+
+            const fileName = file.name.split('.')[0];
+            const logId = `excel_${Date.now()}`;
+
+            const points = json.map((row, idx) => {
+                // Heuristic Column Mapping
+                const latKey = Object.keys(row).find(k => /lat/i.test(k));
+                const lngKey = Object.keys(row).find(k => /long|lng/i.test(k));
+
+                if (!latKey || !lngKey) return null;
+
+                const lat = parseFloat(row[latKey]);
+                const lng = parseFloat(row[lngKey]);
+
+                if (isNaN(lat) || isNaN(lng)) return null;
+
+                // --- 50m Grid Generation ---
+                // 1. Project to Meters (UTM 29N)
+                const [x, y] = window.proj4("EPSG:4326", "EPSG:32629", [lng, lat]);
+
+                // 2. Create Square (50m side = +/- 25m)
+                const r = 25;
+                const corners = [
+                    [x - r, y - r],
+                    [x + r, y - r],
+                    [x + r, y + r],
+                    [x - r, y + r],
+                    [x - r, y - r] // Close ring
+                ];
+
+                // 3. Project back to WGS84
+                const cornersWGS = corners.map(c => window.proj4("EPSG:32629", "EPSG:4326", c));
+
+                const geometry = {
+                    type: "Polygon",
+                    coordinates: [cornersWGS]
+                };
+
+                // Attribute Mapping
+                const rsrpKey = Object.keys(row).find(k => /rsrp|level|signal/i.test(k));
+                const cellKey = Object.keys(row).find(k => /cell_name|name|site/i.test(k));
+                const timeKey = Object.keys(row).find(k => /time/i.test(k));
+                const pciKey = Object.keys(row).find(k => /pci|sc/i.test(k));
+
+                return {
+                    id: idx,
+                    lat,
+                    lng,
+                    rsrp: rsrpKey ? parseFloat(row[rsrpKey]) : undefined,
+                    level: rsrpKey ? parseFloat(row[rsrpKey]) : undefined,
+                    cellName: cellKey ? row[cellKey] : undefined,
+                    sc: pciKey ? row[pciKey] : undefined,
+                    time: timeKey ? row[timeKey] : '00:00:00',
+                    geometry: geometry, // Key for rendering squares
+                    properties: row
+                };
+            }).filter(p => p !== null);
+
+            if (points.length === 0) {
+                alert("No valid points found in Excel.\nExpected columns: Lat, Long");
+                fileStatus.textContent = 'Error parsing Excel';
+                return;
+            }
+
+            const newLog = {
+                id: logId,
+                name: fileName,
+                points: points,
+                color: '#3b82f6',
+                visible: true,
+                type: 'excel'
+            };
+
+            loadedLogs.push(newLog);
+            updateLogsList();
+            fileStatus.textContent = `Loaded Excel: ${fileName}`;
+
+            // Auto-Zoom
+            const latLngs = points.map(p => [p.lat, p.lng]);
+            const bounds = L.latLngBounds(latLngs);
+            window.map.fitBounds(bounds);
+
+            // Auto-Render Level
+            if (window.mapRenderer) {
+                window.mapRenderer.updateLayerMetric(logId, points, 'level');
+            }
+
+        } catch (e) {
+            console.error("Excel Import Error:", e);
+            alert("Failed to import Excel file.\nSee console for details.");
+            fileStatus.textContent = 'Import Failed';
+        }
+    }
+
+    async function handleShpImport(files) {
+        fileStatus.textContent = 'Parsing SHP...';
+        try {
+            let geojson;
+            const zipFile = files.find(f => f.name.endsWith('.zip'));
+
+            if (zipFile) {
+                // Parse ZIP containing SHP/DBF
+                const buffer = await zipFile.arrayBuffer();
+                geojson = await shp(buffer);
+            } else {
+                // Parse individual SHP/DBF files
+                const shpFile = files.find(f => f.name.endsWith('.shp'));
+                const dbfFile = files.find(f => f.name.endsWith('.dbf'));
+                const prjFile = files.find(f => f.name.endsWith('.prj'));
+
+                if (!shpFile) {
+                    alert('Please select at least a .shp file (and ideally a .dbf file)');
+                    return;
+                }
+
+                const shpBuffer = await shpFile.arrayBuffer();
+                const dbfBuffer = dbfFile ? await dbfFile.arrayBuffer() : null;
+
+                // Read PRJ if available
+                if (prjFile) {
+                    const prjText = await prjFile.text();
+                    console.log("[SHP] Found .prj file:", prjText);
+                    if (window.proj4 && prjText.trim()) {
+                        try {
+                            window.proj4.defs("USER_PRJ", prjText);
+                            console.log("[SHP] Registered 'USER_PRJ' from file.");
+                        } catch (e) {
+                            console.error("[SHP] Failed to register .prj:", e);
+                        }
+                    }
+                }
+
+                console.log("[SHP] Parsing individual files...");
+                const geometries = shp.parseShp(shpBuffer);
+                const properties = dbfBuffer ? shp.parseDbf(dbfBuffer) : [];
+                geojson = shp.combine([geometries, properties]);
+            }
+
+            console.log("[SHP] Parsed GeoJSON:", geojson);
+
+            if (!geojson) throw new Error("Failed to parse Shapefile");
+
+            // Shapefiles can contain multiple layers if combined or passed as ZIP
+            const features = Array.isArray(geojson) ? geojson.flatMap(g => g.features) : geojson.features;
+
+            console.log("[SHP] Extracted Features Count:", features ? features.length : 0);
+
+            if (!features || features.length === 0) {
+                alert('No features found in Shapefile.');
+                return;
+            }
+
+            const fileName = files[0].name.split('.')[0];
+            const logId = `shp_${Date.now()}`;
+
+            // Convert GeoJSON Features to App Points
+            const points = features.map((f, idx) => {
+                const props = f.properties || {};
+                const coords = f.geometry.coordinates;
+
+                // Handle Point objects (Shapefiles can be points, lines, or polygons)
+                // For SmartCare, they are usually points or centroids
+                let lat, lng;
+                let rawGeometry = f.geometry; // Store raw geometry for rendering polygons
+
+                if (f.geometry.type === 'Point') {
+                    [lng, lat] = coords;
+                } else if (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') {
+                    // Use simple centroid for metadata but keep geometry for rendering
+                    const bounds = L.geoJSON(f).getBounds();
+                    const center = bounds.getCenter();
+                    lat = center.lat;
+                    lng = center.lng;
+                } else {
+                    return null; // Skip unsupported types (e.g. PolyLine for now)
+                }
+
+                // Field Mapping Logic
+                const findField = (regex) => {
+                    const key = Object.keys(props).find(k => regex.test(k));
+                    return key ? props[key] : undefined;
+                };
+
+                const rsrp = findField(/rsrp|level|signal/i);
+                const cellName = findField(/cell_name|name|site/i);
+                const rsrq = findField(/rsrq|quality/i);
+                const pci = findField(/pci|sc/i);
+
+                return {
+                    id: idx,
+                    lat,
+                    lng,
+                    rsrp: rsrp !== undefined ? parseFloat(rsrp) : undefined,
+                    level: rsrp !== undefined ? parseFloat(rsrp) : undefined,
+                    rsrq: rsrq !== undefined ? parseFloat(rsrq) : undefined,
+                    sc: pci,
+                    cellName: cellName,
+                    time: props.time || props.timestamp || '00:00:00',
+                    geometry: rawGeometry,
+                    properties: props // Keep EVERYTHING
+                };
+            }).filter(p => p !== null);
+
+            if (points.length === 0) {
+                alert('No valid points found in Shapefile.');
+                return;
+            }
+
+            const newLog = {
+                id: logId,
+                name: fileName,
+                points: points,
+                type: 'SHP',
+                tech: points[0].rsrp !== undefined ? '4G' : 'Unknown'
+            };
+
+            loadedLogs.push(newLog);
+            updateLogsList();
+            fileStatus.textContent = `Loaded SHP: ${fileName}`;
+
+            // Auto-render level on map
+            map.updateLayerMetric(logId, points, 'level');
+
+            // AUTO-ZOOM to Data
+            if (points.length > 0) {
+                const lats = points.map(p => p.lat);
+                const lngs = points.map(p => p.lng);
+                const minLat = Math.min(...lats);
+                const maxLat = Math.max(...lats);
+                const minLng = Math.min(...lngs);
+                const maxLng = Math.max(...lngs);
+
+                console.log("[SHP] Bounds:", { minLat, maxLat, minLng, maxLng });
+
+                // AUTOMATIC REPROJECTION (UTM Zone 29N -> WGS84)
+                // If coordinates look like meters (e.g. > 180 or < -180), reproject.
+                // Typical UTM Y is > 0, X can be large.
+                if (Math.abs(minLat) > 90 || Math.abs(minLng) > 180) {
+                    console.log("[SHP] Detected Projected Coordinates (likely UTM). Reprojecting from EPSG:32629...");
+
+                    if (window.proj4) {
+                        points.forEach(p => {
+                            // Proj4 takes [x, y] -> [lng, lat]
+                            const sourceProj = window.proj4.defs("USER_PRJ") ? "USER_PRJ" : "EPSG:32629";
+                            const reprojected = window.proj4(sourceProj, "EPSG:4326", [p.lng, p.lat]);
+                            p.lng = reprojected[0];
+                            p.lat = reprojected[1];
+                        });
+
+                        // Recalculate Bounds
+                        const newLats = points.map(p => p.lat);
+                        const newLngs = points.map(p => p.lng);
+                        const newMinLat = Math.min(...newLats);
+                        const newMaxLat = Math.max(...newLats);
+                        const newMinLng = Math.min(...newLngs);
+                        const newMaxLng = Math.max(...newLngs);
+
+                        console.log("[SHP] Reprojected Bounds:", { newMinLat, newMaxLat, newMinLng, newMaxLng });
+                        window.map.fitBounds([[newMinLat, newMinLng], [newMaxLat, newMaxLng]]);
+                    } else {
+                        alert("Coordinates appear to be projected (UTM), but proj4js library is missing. Cannot reproject.");
+                    }
+                } else {
+                    if (Math.abs(maxLat - minLat) < 0.0001 && Math.abs(maxLng - minLng) < 0.0001) {
+                        window.map.setView([minLat, minLng], 15);
+                    } else {
+                        window.map.fitBounds([[minLat, minLng], [maxLat, maxLng]]);
+                    }
+                }
+            }
+
+        } catch (err) {
+            console.error("SHP Import Error:", err);
+            alert("Failed to import SHP: " + err.message);
+            fileStatus.textContent = 'Import failed';
+        }
+    }
 
     async function callOpenAIAPI(key, model, prompt) {
         const url = 'https://api.openai.com/v1/chat/completions';
@@ -1492,49 +1806,83 @@ document.addEventListener('DOMContentLoaded', () => {
         const query = searchInput.value.trim();
         if (!query) return;
 
-        // Supported Formats:
-        // 33.58, -7.60 (Standard)
-        // 34,03360748	-6,7520895 (European/Tab)
-        // 33.58 -7.60 (Space)
-
-        // Robust Extraction: Find number-like patterns (integer or float with . or ,)
-        // Regex: Optional Sign + Digits + Optional (Dot/Comma + Digits)
+        // 1. Coordinate Search (Prioritized)
         const numberPattern = /[-+]?\d+([.,]\d+)?/g;
         const matches = query.match(numberPattern);
 
-        if (matches && matches.length >= 2) {
-            // Normalize: Replace ',' with '.' for JS parsing
+        // Check for specific Lat/Lng pattern (2 numbers, no text mixed in usually)
+        // If query looks like "Site A" or "123456", we shouldn't treat it as coords just because it has numbers.
+        const isCoordinateFormat = matches && matches.length >= 2 && matches.length <= 3 && !/[a-zA-Z]/.test(query);
+
+        if (isCoordinateFormat) {
             const lat = parseFloat(matches[0].replace(',', '.'));
             const lng = parseFloat(matches[1].replace(',', '.'));
 
-            if (!isNaN(lat) && !isNaN(lng)) {
-                // Validate Range
-                if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-                    alert(`Invalid Coordinates: Out of range (${lat}, ${lng}).`); // Added debug info
-                    return;
-                }
-
-                // Action
-                // 1. Zoom Map
+            if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                // ... Coordinate Found ...
                 window.map.flyTo([lat, lng], 18, { animate: true, duration: 1.5 });
-
-                // 2. Place Marker
                 if (window.searchMarker) window.map.removeLayer(window.searchMarker);
-
-                window.searchMarker = L.marker([lat, lng])
-                    .addTo(window.map)
-                    .bindPopup(`<b>Search Location</b><br>Lat: ${lat}<br>Lng: ${lng}`)
-                    .openPopup();
-
-                // 3. Update Status
+                window.searchMarker = L.marker([lat, lng]).addTo(window.map)
+                    .bindPopup(`<b>Search Location</b><br>Lat: ${lat}<br>Lng: ${lng}`).openPopup();
                 document.getElementById('fileStatus').textContent = `Zoomed to ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-
-            } else {
-                alert("Invalid Coordinates format. Could not parse numbers.");
+                return;
             }
-        } else {
-            alert("Could not find two coordinates in input. Please use 'Lat Lng' format.");
         }
+
+        // 2. Site / Cell Search
+        if (window.mapRenderer && window.mapRenderer.siteData) {
+            const qLower = query.toLowerCase();
+            const results = [];
+
+            // Helper to score matches
+            const scoreMatch = (s) => {
+                let score = 0;
+                const name = (s.cellName || s.name || s.siteName || '').toLowerCase();
+                const id = String(s.cellId || '').toLowerCase();
+                const cid = String(s.cid || '').toLowerCase();
+                const pci = String(s.sc || s.pci || '').toLowerCase();
+
+                // Exact Matches
+                if (name === qLower) score += 100;
+                if (id === qLower) score += 100;
+                if (cid === qLower) score += 90;
+
+                // Partial Matches
+                if (name.includes(qLower)) score += 50;
+                if (id.includes(qLower)) score += 40;
+
+                // PCI (Only if query is short number)
+                if (pci === qLower && qLower.length < 4) score += 20;
+
+                return score;
+            };
+
+            for (const s of window.mapRenderer.siteData) {
+                const score = scoreMatch(s);
+                if (score > 0) results.push({ s, score });
+            }
+
+            results.sort((a, b) => b.score - a.score);
+
+            if (results.length > 0) {
+                const best = results[0].s;
+                // Determine Zoom Level - if many matches, maybe fit bounds? For now, zoom to best.
+                const zoom = (best.lat && best.lng) ? 17 : window.map.getZoom();
+                if (best.lat && best.lng) {
+                    window.mapRenderer.setView(best.lat, best.lng);
+                    // Highlight
+                    if (best.cellId) window.mapRenderer.highlightCell(best.cellId);
+
+                    document.getElementById('fileStatus').textContent = `Found: ${best.cellName || best.name} (${best.cellId})`;
+                } else {
+                    alert(`Site found but has no coordinates: ${best.cellName || best.name}`);
+                }
+                return;
+            }
+        }
+
+        // 3. Fallback
+        alert("No location or site found for: " + query);
     };
 
     if (searchBtn) {
@@ -1585,8 +1933,8 @@ document.addEventListener('DOMContentLoaded', () => {
         container.id = 'draggable-legend';
         container.setAttribute('style', `
             position: absolute;
-            top: 80px; 
-            right: 20px;
+            top: 10px; 
+            right: 10px;
             width: 320px;
             min-width: 250px;
             max-width: 600px;
@@ -1646,7 +1994,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
                     <div>
                         <span>${title}</span>
-                        <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">${summary}</span>
                     </div>
                     <div style="display:flex; gap:8px; align-items:center;">
                         <button id="kmlExportBtn" title="Export dots to KML" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
@@ -1687,8 +2034,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             <input type="color" value="${color}" 
                                    style="width:16px; height:16px; padding:0; border:1px solid #555; background:none; cursor:pointer; flex-shrink:0;"
                                    onchange="window.mapRenderer.setCustomColor('${id}', this.value); document.dispatchEvent(new CustomEvent('metric-color-changed', { detail: { id: '${id}', color: this.value } }));" />
-                            <span style="font-size:11px; white-space:nowrap; font-family:sans-serif; overflow:hidden; text-overflow:ellipsis; flex-grow:1; margin-left:8px;" title="${name || id}">${label}</span>
-                            <span style="margin-left:auto; font-size:10px; color:#aaa; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
+                            <span style="font-size:11px; white-space:nowrap; font-family:sans-serif; overflow:hidden; text-overflow:ellipsis; flex-grow:1; margin-left:8px; color:#888;" title="${name || id}">${label}</span>
+                            <span style="margin-left:auto; font-size:10px; color:#888; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
                         </div>
                     `;
                 });
@@ -1706,7 +2053,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
                     <div>
                         <span>${theme.toUpperCase()} Analysis</span>
-                        <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">Sum: ${total}</span>
                     </div>
                     <div style="display:flex; gap:8px; align-items:center;">
                         <button id="kmlExportBtn" title="Export to KML" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
@@ -1723,8 +2069,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 html += `
                     <div style="display:flex; align-items:center; border-bottom:1px solid #333; padding-bottom:2px;">
                         <span style="background:${t.color}; width:16px; height:16px; min-width:16px; display:inline-block; margin-right:8px; border-radius:3px; border:1px solid #555;"></span>
-                        <span style="font-size:11px; font-family:sans-serif;">${t.label}</span>
-                        <span style="margin-left:auto; font-size:10px; color:#aaa; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
+                        <span style="font-size:11px; font-family:sans-serif; color:#888;">${t.label}</span>
+                        <span style="margin-left:auto; font-size:10px; color:#888; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
                     </div>
                 `;
             });
@@ -2240,6 +2586,12 @@ document.addEventListener('DOMContentLoaded', () => {
             initialLeft = rect.left;
             initialTop = rect.top;
 
+            // Lock position coordinates to allow smooth dragging even if right/bottom were used
+            containerEl.style.left = initialLeft + "px";
+            containerEl.style.top = initialTop + "px";
+            containerEl.style.right = "auto";
+            containerEl.style.bottom = "auto";
+
             document.onmouseup = closeDragElement;
             document.onmousemove = elementDrag;
 
@@ -2727,28 +3079,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Global function to update the Floating Info Panel
-    window.updateFloatingInfoPanel = (p) => {
-        try {
-            console.log("[InfoPanel] Updating for point:", p);
-            const panel = document.getElementById('floatingInfoPanel');
-            const content = document.getElementById('infoPanelContent');
-            if (!panel || !content) {
-                console.warn("[InfoPanel] Missing panel info elements");
-                return;
-            }
 
-            // Debug Log
-            console.log("DEBUG: updateFloatingInfoPanel called for point:", p);
-
-            // Show panel if hidden
-            if (panel.style.display === 'none') {
-                panel.style.display = 'block';
-            }
-        } catch (err) {
-            console.error("Error in resolveCellName:", err);
-        }
-        return NO_MATCH;
-    };
 
     // Global function to update the Floating Info Panel
     window.updateFloatingInfoPanel = (p) => {
@@ -2805,7 +3136,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const servingData = {
                 type: 'Serving',
-                name: servingRes.name || 'Unknown',
+                name: servingRes.name || p.cellName || 'Unknown',
                 cellId: servingRes.id || p.cellId,
                 displayId: formatId(servingRes.id || p.cellId),
                 sc: p.sc,
@@ -2905,7 +3236,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             content.innerHTML = `
-                        <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || 'Unknown Site'}</div>
+                        <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || p.cellName || 'Unknown Site'}</div>
                         <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
                             <span>Lat: ${Number(p.lat).toFixed(6)}</span>
                             <span>Lng: ${Number(p.lng).toFixed(6)}</span>
@@ -2922,6 +3253,23 @@ document.addEventListener('DOMContentLoaded', () => {
                             </tr>
                             ${tableRows}
                         </table>
+                        
+                        <!-- SHP Attributes Section (Dynamic) -->
+                        ${p.properties ? `
+                        <div style="margin-top: 15px; border-top: 1px solid #444; padding-top: 10px;">
+                            <div style="font-size: 10px; color: #888; margin-bottom: 5px; font-weight: 600; text-transform: uppercase;">SHP Attributes</div>
+                            <div style="max-height: 200px; overflow-y: auto; font-size: 10px; color: #aaa;">
+                                <table style="width: 100%; border-collapse: collapse;">
+                                    ${Object.entries(p.properties).map(([k, v]) => `
+                                        <tr style="border-bottom: 1px solid #2d2d2d;">
+                                            <td style="padding: 2px 0; font-weight: 600; width: 40%; color: #888;">${k}</td>
+                                            <td style="padding: 2px 0; color: #eee; word-break: break-all;">${v}</td>
+                                        </tr>
+                                    `).join('')}
+                                </table>
+                            </div>
+                        </div>
+                        ` : ''}
                     `;
 
         } catch (err) {
@@ -2963,7 +3311,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // View Navigation (Zoom/Pan) - User Request: Zoom in on click
         // UPDATED: Keep current zoom, just pan.
-        if (source !== 'chart_scrub') {
+        // AB: User requested to NOT move map when clicking ON the map.
+        if (source !== 'chart_scrub' && source !== 'map') {
             // const targetZoom = Math.max(window.map.getZoom(), 17); // Previous logic
             // window.map.flyTo([point.lat, point.lng], targetZoom, { animate: true, duration: 0.5 });
 
@@ -3051,7 +3400,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const { logId, point, source } = e.detail;
         const log = loadedLogs.find(l => l.id === logId);
         if (log) {
-            let index = log.points.findIndex(p => p.time === point.time);
+            // Prioritize ID match (for SHP/uniquely indexed points)
+            let index = -1;
+            if (point.id !== undefined) {
+                index = log.points.findIndex(p => p.id === point.id);
+            }
+            // Fallback to Time
+            if (index === -1) {
+                index = log.points.findIndex(p => p.time === point.time);
+            }
+            // Fallback to Coord
             if (index === -1) {
                 index = log.points.findIndex(p => Math.abs(p.lat - point.lat) < 1e-6 && Math.abs(p.lng - point.lng) < 1e-6);
             }
@@ -3613,14 +3971,66 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Payload Viewer
     function showSignalingPayload(point) {
-        const payload = point.payload || 'No Hex Payload Extracted';
-        // Simple alert for now, or we can make a nicer modal if requested
-        // Let's us a simple custom modal or re-use existing one structure? 
-        // Alert is ugly. Let's create a quick "payloadModal" dynamically or just use alert for speed first, then upgrade?
-        // User wants "show its RRC data".
-        // Let's try to format it nicely.
+        // Create Modal on the fly if not exists
+        let modal = document.getElementById('payloadModal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'payloadModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 600px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151;">
+                    <div class="modal-header" style="border-bottom: 1px solid #374151; padding: 10px 15px; display:flex; justify-content:space-between; align-items:center;">
+                        <h3 style="margin:0; font-size:16px;">Signaling Details</h3>
+                        <span class="close" onclick="document.getElementById('payloadModal').style.display='none'" style="color:#9ca3af; cursor:pointer; font-size:20px;">&times;</span>
+                    </div>
+                    <div class="modal-body" style="padding: 15px; max-height: 70vh; overflow-y: auto;">
+                        <div id="payloadContent"></div>
+                    </div>
+                    <div class="modal-footer" style="padding: 10px 15px; border-top: 1px solid #374151; text-align: right;">
+                         <button onclick="document.getElementById('payloadModal').style.display='none'" class="btn" style="background:#4b5563;">Close</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
 
-        alert(`Message: ${point.message}\nTime: ${point.time}\n\nRRC Payload (Hex):\n${payload}\n\nFull Raw Line:\n${point.details}`);
+        const content = document.getElementById('payloadContent');
+        const payloadRaw = point.payload || 'No Hex Payload Available';
+
+        // Format Hex (Group by 2 bytes / 4 chars)
+        const formatHex = (str) => {
+            if (!str || str.includes(' ')) return str;
+            return str.replace(/(.{4})/g, '$1 ').trim();
+        };
+
+        content.innerHTML = `
+            <div style="margin-bottom: 15px;">
+                <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Message Type</div>
+                <div style="font-size: 14px; color: #fff; font-weight: bold;">${point.message}</div>
+            </div>
+             <div style="display:flex; gap:20px; margin-bottom: 15px;">
+                <div>
+                     <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Time</div>
+                     <div style="color: #d1d5db;">${point.time}</div>
+                </div>
+                <div>
+                     <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Direction</div>
+                     <div style="color: #d1d5db;">${point.direction}</div>
+                </div>
+            </div>
+
+            <div style="background: #111827; padding: 10px; border-radius: 4px; border: 1px solid #374151; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;">
+                <div style="color: #6b7280; margin-bottom: 5px;">RRC Payload (Hex Stream):</div>
+                <div style="color: #10b981; word-break: break-all; white-space: pre-wrap;">${formatHex(payloadRaw)}</div>
+            </div>
+
+             <div style="margin-top: 15px;">
+                <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600; margin-bottom:5px;">Raw NMF Line</div>
+                <code style="display:block; background:#000; padding:8px; border-radius:4px; font-size:10px; color:#aaa; overflow-x:auto; white-space:nowrap;">${point.details}</code>
+            </div>
+        `;
+
+        modal.style.display = 'block';
     }
     window.showSignalingPayload = showSignalingPayload;
 

@@ -13,6 +13,9 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
     <link rel="stylesheet" href="style.css?v=31">
     <link rel="stylesheet" href="grid_styles.css?v=2">
     <link rel="stylesheet" href="additional_styles.css?v=2">
@@ -30,7 +33,7 @@
             min-height: 60px !important;
             background: #2d2d2d !important;
             z-index: 9999 !important;
-            border-bottom: 2px solid red !important;
+            /* border-bottom: 2px solid red !important; REMOVED DEBUG */
         }
 
         #logs-sidebar {
@@ -57,6 +60,10 @@
                 <input type="file" id="siteInput" accept=".xlsx, .xls, .csv">
                 <label for="siteInput" class="btn btn-blue">Import Sites</label>
 
+                <input type="file" id="shpInput" accept=".shp, .zip, .dbf, .shx, .prj, .xlsx, .xls" multiple
+                    style="display:none;">
+                <label for="shpInput" class="btn btn-purple">Import SmartCare (SHP/Excel)</label>
+
                 <button id="siteSettingsBtn" class="btn btn-gray">⚙️ Sites</button>
                 <button id="exportKmlBtn" class="btn btn-green" title="Export current view to KML">🌍
                     KML</button>
@@ -68,7 +75,8 @@
                 </button>
 
                 <div class="search-container">
-                    <input type="text" id="searchInput" placeholder="CGPS (Lat, Lng)" class="search-input">
+                    <input type="text" id="searchInput" placeholder="Search (Lat Lng, Site, CI, PCI)"
+                        class="search-input">
                     <button id="searchBtn" class="search-btn-icon">🔍</button>
                     <button id="addPointBtn" class="search-btn-icon add-point-btn" title="Add User Point">📍</button>
                 </div>
@@ -403,10 +411,10 @@
         </div>
     </div>
 
-    <script src="map_renderer.js?v=62"></script>
+    <script src="map_renderer.js?v=63"></script>
     <script src="parser.js?v=43"></script>
     <script src="theme_config.js?v=2"></script>
-    <script src="app.js?v=v113"></script>
+    <script src="app.js?v=v123"></script>
     <!-- User Point Modal -->
     <div id="userPointModal" class="modal">
         <div class="modal-content user-point-modal-content">

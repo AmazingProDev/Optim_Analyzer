@@ -137,6 +137,11 @@ class MapRenderer {
             val = p.parsed.serving[metric];
         }
 
+        // 5. Raw Properties Fallback (SHP etc.)
+        if (val === undefined && p.properties) {
+            val = p.properties[metric];
+        }
+
         return val;
     }
 
@@ -303,16 +308,32 @@ class MapRenderer {
                 if (p.lat !== undefined && p.lat !== null && p.lng !== undefined && p.lng !== null) {
                     validLocations.push([p.lat, p.lng]);
 
-                    const marker = L.circleMarker([p.lat, p.lng], {
-                        radius: 5,
-                        fillColor: color,
-                        color: "#000",
-                        weight: 1,
-                        opacity: 1,
-                        fillOpacity: 0.8
-                    }).addTo(layerGroup);
+                    let layer;
 
-                    marker.on('click', () => {
+                    // CHECK FOR POLYGON GEOMETRY (Imported SHP Grid)
+                    if (p.geometry && (p.geometry.type === 'Polygon' || p.geometry.type === 'MultiPolygon')) {
+                        layer = L.geoJSON(p.geometry, {
+                            style: {
+                                fillColor: color,
+                                color: "#000",
+                                weight: 1,
+                                opacity: 0.5,
+                                fillOpacity: 0.8
+                            }
+                        }).addTo(layerGroup);
+                    } else {
+                        // Default Point Rendering
+                        layer = L.circleMarker([p.lat, p.lng], {
+                            radius: 5,
+                            fillColor: color,
+                            color: "#000",
+                            weight: 1,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        }).addTo(layerGroup);
+                    }
+
+                    layer.on('click', () => {
                         window.dispatchEvent(new CustomEvent('map-point-clicked', {
                             detail: { logId: id, point: p }
                         }));
@@ -1012,26 +1033,18 @@ ${geometry}
         return kml;
     }
     // Unified Export: Points + Relevant Sites
-    exportUnifiedKML(logId, logPoints, metricName) {
-        if (!logPoints || logPoints.length === 0) return null;
-
-        // 1. Generate Points Content (Folders + Styles)
-        // We need to extract the "Inner" logic of exportToKML (styles, and folders)
-        // Since we can't easily decompose the existing opaque string methods without refactoring, 
-        // I will essentially merge the logic here for the unified view.
-
-        // OR: Parse the outputs? No, regex is messy.
-        // Best approach: Refactor exportToKML to be 'getPointsKMLParts' and 'getSitesKMLParts'.
-        // But for minimal disturbance, I will implement a composed internal generator.
-
-        const partsPoints = this._generatePointsKMLParts(logPoints, metricName);
-        const partsSites = this._generateSitesKMLParts(logPoints); // Auto-filters to relevant
+    exportUnifiedKML(logPoints, metricName) {
+        if (!logPoints || logPoints.length === 0) {
+            console.warn("No points to export.");
+            return;
+        }
 
         // XML Escaping Helper
         const escapeXml = (unsafe) => {
             if (unsafe === undefined || unsafe === null) return '';
-            const str = String(unsafe);
-            return str.replace(/[<>&'"]/g, (c) => {
+            // Strip control characters which are invalid in XML 1.0 (except \t, \n, \r)
+            const clean = String(unsafe).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+            return clean.replace(/[<>&'"]/g, (c) => {
                 switch (c) {
                     case '<': return '&lt;';
                     case '>': return '&gt;';
@@ -1042,33 +1055,104 @@ ${geometry}
             });
         };
 
+        // 1. Generate Points KML Parts (Now Returns Points & Lines Separately)
+        const pointData = this._generatePointsKMLParts(logPoints, metricName);
+
+        // 2. Generate Sites KML Parts
+        const siteData = this._generateSitesKMLParts(logPoints);
+
+        // 4. Construct KML
+        const timeStr = new Date().toLocaleTimeString();
+        let kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+  <Document>
+    <name>${escapeXml(metricName.toUpperCase())} Analysis (Unified) - ${timeStr}</name>
+    <open>1</open>
+
+    <Style id="poly_s"><LineStyle><color>ff000000</color><width>1</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle></Style>
+
+    <!-- STYLES -->
+    ${pointData.styles.map(s => s.xml).join('')}
+    ${siteData.styles.map(s => s.xml).join('')}
+
+    <!-- SITES FOLDER (Includes Interactive Spider Lines) -->
+    <Folder>
+      <name>Sites (Serving)</name>
+      ${siteData.placemarks.join('\n')}
+    </Folder>
+
+    <!-- LOG POINTS FOLDER -->
+    <Folder>
+      <name>Log Points</name>
+      ${pointData.pointFolders}
+    </Folder>
+
+    <!-- SPIDER LINES FOLDER (Persistent Visibility via Sidebar) -->
+    <Folder>
+      <name>Spider Lines Points</name>
+      <visibility>0</visibility>
+      <open>0</open>
+      ${pointData.lineFolders}
+    </Folder>
+  </Document>
+</kml>`;
+
+        //     <name>Spider Lines Points</name>
+        //     <visibility>0</visibility>
+        //     ${pointData.lineFolders}
+        //   </Folder>
+        // </Document>
+        // </kml>`;
+        //
+        // this.downloadFile(kml, `Data_Export_${metricName}.kml`);
+
+        // Return KML string so app.js can handle download with proper filename (log name)
+        return kml;
+    }
+
+    // Restored exportSitesToKML for the "Export Sites" button
+    exportSitesToKML(logPoints, defaultColor) {
+        // Reuse the unified generation logic for consistent styling/hierarchy
+        const siteData = this._generateSitesKMLParts(logPoints);
+
+        if (!siteData.placemarks || siteData.placemarks.length === 0) {
+            console.warn("No sites to export.");
+            return "";
+        }
+
+        const escapeXml = (unsafe) => {
+            if (unsafe === undefined || unsafe === null) return '';
+            const clean = String(unsafe).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+            return clean.replace(/[<>&'"]/g, (c) => {
+                switch (c) {
+                    case '<': return '&lt;';
+                    case '>': return '&gt;';
+                    case '&': return '&amp;';
+                    case '\'': return '&apos;';
+                    case '"': return '&quot;';
+                }
+            });
+        };
+
+        const timeStr = new Date().toLocaleTimeString();
         let kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
-    <name>${escapeXml(metricName.toUpperCase())} Analysis (Unified) - ${escapeXml(new Date().toLocaleTimeString())}</name>
+    <name>Sites Export - ${timeStr}</name>
     <open>1</open>
-`;
+    <Style id="folder_style_hidden"><ListStyle><listItemType>checkHideChildren</listItemType></ListStyle></Style>
 
-        // Merge Styles (Dedup by ID)
-        // Both parts return a Set of style strings.
-        const allStyles = new Map(); // id -> string definition
+    <!-- STYLES -->
+    ${siteData.styles.map(s => s.xml).join('')}
 
-        partsPoints.styles.forEach(s => allStyles.set(s.id, s.xml));
-        partsSites.styles.forEach(s => allStyles.set(s.id, s.xml)); // Sites might override if ID collision, but usually discrete colors match
+    <!-- SITES FOLDER -->
+    <Folder>
+      <name>Sites (Serving)</name>
+      ${siteData.placemarks.join('\n')}
+    </Folder>
+  </Document>
+</kml>`;
 
-        allStyles.forEach(xml => kml += xml);
-
-        // Add Points Folders
-        kml += partsPoints.folders;
-
-        // Add Sites Folder
-        if (partsSites.placemarks.length > 0) {
-            kml += `    <Folder>\n      <name>Serving Sites</name>\n`;
-            kml += partsSites.placemarks.join('\n');
-            kml += `\n    </Folder>\n`;
-        }
-
-        kml += '\n  </Document>\n</kml>';
         return kml;
     }
 
@@ -1080,13 +1164,16 @@ ${geometry}
         const settings = this.siteSettings || {};
         const range = parseInt(settings.range) || 100;
         const rad = Math.PI / 180;
-        const groups = new Map();
+        const pointGroups = new Map();
+        const lineGroups = new Map();
         const styles = new Set();
         const styleDefs = [];
 
         const escapeXml = (unsafe) => {
             if (typeof unsafe !== 'string') return unsafe;
-            return unsafe.replace(/[<>&'"]/g, (c) => {
+            // Strip control chars (0-31), allowing 9 (\t), 10 (\n), 13 (\r).
+            const clean = unsafe.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+            return clean.replace(/[<>&'"]/g, (c) => {
                 switch (c) {
                     case '<': return '&lt;'; case '>': return '&gt;'; case '&': return '&amp;'; case '\'': return '&apos;'; case '"': return '&quot;';
                 }
@@ -1108,15 +1195,16 @@ ${geometry}
             if (p.lat === undefined || p.lng === undefined) return;
             const val = this.getMetricValue(p, metricName);
             const color = this.getColor(val, metricName);
-            const styleId = 's_' + color.replace('#', '');
+            // Sanitize ID to ensure it's a valid XML Name (no parens, spaces, etc from rgb() strings)
+            const styleId = 's_' + color.replace(/[^a-zA-Z0-9]/g, '');
 
             if (!styles.has(styleId)) {
                 styles.add(styleId);
                 const kColor = hexToKmlColor(color);
                 styleDefs.push({
                     id: styleId, xml: `
-    <Style id="${styleId}_normal"><IconStyle><color>${kColor}</color><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle><LineStyle><color>${kColor}</color><width>0</width></LineStyle></Style>
-    <Style id="${styleId}_highlight"><IconStyle><color>${kColor}</color><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle><LineStyle><color>${kColor}</color><width>4</width></LineStyle></Style>
+    <Style id="${styleId}_normal"><BalloonStyle><bgColor>991a1a1a</bgColor><text><![CDATA[<font color="#ffffff">$[description]</font>]]></text></BalloonStyle><IconStyle><color>${kColor}</color><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle><LineStyle><color>${kColor}</color><width>0</width></LineStyle></Style>
+    <Style id="${styleId}_highlight"><BalloonStyle><bgColor>991a1a1a</bgColor><text><![CDATA[<font color="#ffffff">$[description]</font>]]></text></BalloonStyle><IconStyle><color>${kColor}</color><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle><LineStyle><color>${kColor}</color><width>4</width></LineStyle></Style>
     <StyleMap id="sm_${styleId}"><Pair><key>normal</key><styleUrl>#${styleId}_normal</styleUrl></Pair><Pair><key>highlight</key><styleUrl>#${styleId}_highlight</styleUrl></Pair></StyleMap>\n`
                 });
             }
@@ -1130,7 +1218,11 @@ ${geometry}
             } else if (val !== undefined && val !== null && val !== '') { groupName = String(val); }
 
             // Geometry logic
-            let geometry = `<Point><coordinates>${p.lng},${p.lat},0</coordinates></Point>`;
+            let geometryPoint = `<Point><coordinates>${p.lng},${p.lat},0</coordinates></Point>`;
+            let geometryLine = null;
+            let lineStyleId = null;
+            let sectorGroupName = null;
+
             if (window.resolveSmartSite) {
                 const res = window.resolveSmartSite(p);
                 if (res && res.lat && res.lng && res.site) {
@@ -1144,36 +1236,36 @@ ${geometry}
                     const tLat = s.lat + (tDy / 111111);
                     const tLng = s.lng + (tDx / (111111 * Math.cos(s.lat * rad)));
 
-                    geometry = `<MultiGeometry><Point><coordinates>${p.lng},${p.lat},0</coordinates></Point><LineString><coordinates>${p.lng},${p.lat},0 ${tLng.toFixed(6)},${tLat.toFixed(6)},0</coordinates></LineString></MultiGeometry>`;
+                    geometryLine = `<LineString><coordinates>${p.lng},${p.lat},0 ${tLng.toFixed(6)},${tLat.toFixed(6)},0</coordinates></LineString>`;
+                    sectorGroupName = s.cellName || s.name || s.siteName || `Sector ${s.cellId || s.cid || 'Unknown'}`;
+
+                    // COLOR SYNC: Use Serving Site Color for Spider Line
+                    let sId = s.cellId; // Or cid logic
+                    if (this.activeMetricStats) { // Quick check if we have active stats logic available
+                        const activeIds = new Set(this.activeMetricStats.keys());
+                        if (activeIds.has(String(s.cid))) sId = s.cid;
+                        else if (activeIds.has(String(s.cellId))) sId = s.cellId;
+                    }
+                    const siteColor = this.getDiscreteColor(sId);
+                    const safeLineColorSuffix = siteColor.replace(/[^a-zA-Z0-9]/g, '');
+                    lineStyleId = 'spider_s_' + safeLineColorSuffix;
+
+                    // Add Line Style if missing
+                    if (!styles.has(lineStyleId)) {
+                        styles.add(lineStyleId);
+                        const kLineColor = hexToKmlColor(siteColor);
+                        // Simple Line Style
+                        styleDefs.push({
+                            id: lineStyleId, xml: `
+        <Style id="${lineStyleId}"><LineStyle><color>${kLineColor}</color><width>2</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle></Style>\n`
+                        });
+                    }
                 }
             }
 
-            // RICH HTML DESCRIPTION GENERATOR
+            // RICH HTML DESCRIPTION GENERATOR (MATCHING WEB APP STYLE)
             const genDesc = () => {
-                let html = `<div style="font-family:Arial,sans-serif; font-size:12px; width:350px;">
-                    <div style="background:#333; color:#fff; padding:5px; font-weight:bold; border-radius:3px 3px 0 0;">
-                        ${metricName}: ${val} <span style="float:right; font-weight:normal; font-size:11px;">${p.time}</span>
-                    </div>
-                    <table style="width:100%; border-collapse:collapse; background:#fff; color:#333; font-size:11px; border:1px solid #ccc;">
-                        <tr style="background:#f3f4f6; border-bottom:1px solid #ddd;">
-                            <th style="text-align:left; padding:4px;">Type</th>
-                            <th style="padding:4px;">Cell/PCI</th>
-                            <th style="padding:4px;">RSCP</th>
-                            <th style="padding:4px;">EcNo</th>
-                            <th style="padding:4px;">Freq</th>
-                        </tr>`;
-
-                const row = (label, cell, rscp, ecno, freq, bg = '#fff', bold = false) => {
-                    const style = `padding:3px; border-bottom:1px solid #eee; background:${bg}; ${bold ? 'font-weight:bold;' : ''}`;
-                    return `<tr>
-                        <td style="${style}">${label}</td>
-                        <td style="${style}">${cell || '-'}</td>
-                        <td style="${style}; text-align:right;">${rscp || '-'}</td>
-                        <td style="${style}; text-align:right;">${ecno || '-'}</td>
-                        <td style="${style}; text-align:right;">${freq || '-'}</td>
-                    </tr>`;
-                };
-
+                // Resolved Serving Name for Header
                 const getName = (searchPci, searchId, searchFreq) => {
                     if (window.resolveSmartSite) {
                         const res = window.resolveSmartSite({
@@ -1186,11 +1278,10 @@ ${geometry}
                         return res.name;
                     }
                     return null;
-                }
+                };
 
-                // Serving
                 const s = p.parsed && p.parsed.serving ? p.parsed.serving : {};
-                const sId = p.cellId || s.cellId; // Prefer Top Level
+                const sId = p.cellId || s.cellId;
                 const sSc = p.sc ?? s.sc ?? s.pci;
                 const sRscp = p.level ?? p.rscp ?? s.level ?? s.rscp;
                 const sEcno = p.ecno ?? s.ecno;
@@ -1202,38 +1293,80 @@ ${geometry}
                     sIdStr = `${sId >> 16}/${sId & 0xFFFF}`;
                 }
 
-                const sName = getName(sSc, sId, sFreq);
-                const sLabel = sName ? `<b>${sName}</b><br/><span style="color:#666; font-size:9px;">${sSc || '-'} (${sIdStr || '-'})</span>` : `${sSc || '-'} <span style="color:#888">(${sIdStr || '-'})</span>`;
+                const sNameRes = getName(sSc, sId, sFreq);
+                const tableServingName = sNameRes ? `${sNameRes} <span style="color:#888; font-weight:normal;">(${sIdStr || '-'})</span>` : `Unknown <span style="color:#888; font-weight:normal;">(${sIdStr || '-'})</span>`;
+                // Header Serving Name (Plain text)
+                const headerServingName = sNameRes || `Unknown`;
 
-                html += row('Serving', sLabel, sRscp, sEcno, sFreq, '#eff6ff', true);
+                // Main Container (Dark Theme #1e1e1e)
+                // Use inline-block + min-width to allow expansion for long labels while ensuring base width
+                let html = `<div style="padding:2px; display:inline-block;"><div style="min-width:450px; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size:12px; background:#1e1e1e; color:#e5e5e5; padding:0; border-radius:6px; overflow:visible; box-shadow: 0 4px 12px rgba(0,0,0,0.3); text-align:left;">`;
 
-                // Active Set (A1..A3)
-                // A1 is implicitly Serving usually, checking A2/A3
+                // 1. "Window" Header
+                html += `<div style="padding:8px 12px; background:#2d2d2d; font-weight:bold; font-size:13px; border-bottom:1px solid #333;">Point Details</div>`;
+
+                // 2. Info Block (Serving Name Big + Meta)
+                html += `<div style="padding:12px;">
+                            <div style="font-size:16px; font-weight:bold; color:#22c55e; margin-bottom:4px;">${headerServingName}</div>
+                            <div style="display:flex; justify-content:space-between; color:#888; font-size:11px; margin-bottom:15px;">
+                                <span>Lat: ${p.lat.toFixed(6)} &nbsp; Lng: ${p.lng.toFixed(6)}</span>
+                                <span>${p.time}</span>
+                            </div>
+                `;
+
+                // 3. Table
+                html += `<table style="width:100%; border-collapse:collapse; font-size:11px; table-layout:auto;">
+                            <thead>
+                                <tr style="color:#888; border-bottom:1px solid #444;">
+                                    <th style="text-align:left; padding:6px; font-weight:600;">Type</th>
+                                    <th style="text-align:left; padding:6px; font-weight:600;">Cell Name</th>
+                                    <th style="text-align:right; padding:6px; font-weight:600;">SC</th>
+                                    <th style="text-align:right; padding:6px; font-weight:600;">RSCP</th>
+                                    <th style="text-align:right; padding:6px; font-weight:600;">EcNo</th>
+                                    <th style="text-align:right; padding:6px; font-weight:600;">Freq</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+
+                const row = (type, nameHtml, sc, rscp, ecno, freq, isBold = false) => {
+                    const rowStyle = `border-bottom:1px solid #333; ${isBold ? 'font-weight:bold; color:#fff;' : 'color:#ccc;'}`;
+                    return `<tr style="${rowStyle}">
+                                <td style="padding:6px; white-space:nowrap;">${type}</td>
+                                <td style="padding:6px; max-width:300px; overflow-wrap:anywhere;">${nameHtml}</td>
+                                <td style="padding:6px; text-align:right;">${sc || '-'}</td>
+                                <td style="padding:6px; text-align:right;">${rscp || '-'}</td>
+                                <td style="padding:6px; text-align:right;">${ecno || '-'}</td>
+                                <td style="padding:6px; text-align:right;">${freq || '-'}</td>
+                            </tr>`;
+                };
+
+                // Serving Row
+                html += row('Serving', tableServingName, sSc, sRscp, sEcno, sFreq, true);
+
+                // Active Set
                 if (p.a2_sc !== undefined && p.a2_sc !== null && p.a2_sc !== '') {
                     const name = getName(p.a2_sc, p.a2_cellid, sFreq);
-                    const label = name ? `<b>${name}</b><br/><span style="font-size:9px;">${p.a2_sc}</span>` : (p.a2_cellid || p.a2_sc);
-                    html += row('Active 2', label, p.a2_rscp, '-', sFreq);
+                    const label = name ? `${name} <span style="color:#888; font-weight:normal;">(${p.a2_cellid || '-'})</span>` : (p.a2_cellid || p.a2_sc);
+                    html += row('Active 2', label, p.a2_sc, p.a2_rscp, '-', sFreq);
                 }
                 if (p.a3_sc !== undefined && p.a3_sc !== null && p.a3_sc !== '') {
                     const name = getName(p.a3_sc, p.a3_cellid, sFreq);
-                    const label = name ? `<b>${name}</b><br/><span style="font-size:9px;">${p.a3_sc}</span>` : (p.a3_cellid || p.a3_sc);
-                    html += row('Active 3', label, p.a3_rscp, '-', sFreq);
+                    const label = name ? `${name} <span style="color:#888; font-weight:normal;">(${p.a3_cellid || '-'})</span>` : (p.a3_cellid || p.a3_sc);
+                    html += row('Active 3', label, p.a3_sc, p.a3_rscp, '-', sFreq);
                 }
 
-                // Parsed Neighbors
+                // Neighbors
                 if (p.parsed && p.parsed.neighbors && p.parsed.neighbors.length > 0) {
                     p.parsed.neighbors.forEach((n, i) => {
                         const name = getName(n.pci, null, n.freq);
-                        const label = name ? `<b>${name}</b><br/><span style="font-size:9px;">${n.pci}</span>` : n.pci;
-                        html += row(`N${i + 1}`, label, n.rscp, n.ecno, n.freq);
+                        const label = name || 'Unknown';
+                        html += row(`N${i + 1}`, label, n.pci, n.rscp, n.ecno, n.freq);
                     });
                 }
 
-                html += `</table>
-                    <div style="margin-top:5px; font-size:10px; color:#666;">
-                        Lat: ${p.lat}, Lng: ${p.lng}
-                    </div>
-                 </div>`;
+                html += `   </tbody>
+                        </table>
+                    </div></div>`; // Close Main Container and Wrapper
                 return html;
             };
 
@@ -1247,40 +1380,97 @@ ${geometry}
             // unless I refactor `renderRow` out. 
             // Let's stick to simple extraction for now.
 
-            if (!groups.has(groupName)) groups.set(groupName, []);
-            groups.get(groupName).push(`    <Placemark><name></name><description>${desc}</description><styleUrl>#sm_${styleId}</styleUrl>${geometry}</Placemark>`);
+            if (!pointGroups.has(groupName)) pointGroups.set(groupName, []);
+            // Point Placemark
+            if (geometryLine) {
+                // Hybrid Approach: Merge Point and Line into MultiGeometry for Hover Effect
+                // Note: LineStyle in Normal is width=0 (hidden), in Highlight is width=2 (visible).
+                const multiGeo = `<MultiGeometry>${geometryPoint}${geometryLine}</MultiGeometry>`;
+                pointGroups.get(groupName).push(`    <Placemark><name>Point ${p.id || ''}</name><description>${desc}</description><styleUrl>#sm_${styleId}</styleUrl>${multiGeo}</Placemark>`);
+            } else {
+                pointGroups.get(groupName).push(`    <Placemark><name>Point ${p.id || ''}</name><description>${desc}</description><styleUrl>#sm_${styleId}</styleUrl>${geometryPoint}</Placemark>`);
+            }
+
+            // Permanent Line Placemark (For persistent visibility via Sidebar)
+            if (geometryLine && lineStyleId) {
+                const lgName = sectorGroupName || 'Others';
+                // Create a deterministic unique ID for the Group Placemark (we need a way to target it)
+                // Since there can be multiple lines per group, we might need a Folder-level targeting or just the first line.
+                // KML links target IDs.
+                // Let's rely on the Folder structure or give lines specific IDs.
+                // Better strategy: The user wants to "check the visibility".
+                // We can't auto-check. But we can link to them.
+
+                if (!lineGroups.has(lgName)) lineGroups.set(lgName, []);
+
+                // Assign a unique ID to the FIRST line in this group so we can link to it.
+                // We check if the group is empty (this is the first push).
+                let placemarkIdAttr = '';
+                if (lineGroups.get(lgName).length === 0) {
+                    const safeTargetId = 'target_' + lgName.replace(/[^a-zA-Z0-9]/g, '');
+                    placemarkIdAttr = ` id = "${safeTargetId}"`;
+                }
+
+                // We'll give the ID to the Placemark of the line.
+                // Since a group has multiple lines, we can't link to "The Group" easily unless we define the Folder ID, which buildFolders generates dynamically.
+                // Simplified approach: Just ensure the lines have IDs if we want to link specific ones, but here we want the "Sector".
+                // Since we returned to "Grouped by Sector", the Folder is the container.
+                // We can't easily ID the generated Folder string.
+
+                // Let's stick to the limitation explanation first, but for now just restore the raw lines.
+                lineGroups.get(lgName).push(`    <Placemark${placemarkIdAttr}><name></name><description>${desc}</description><styleUrl>#${lineStyleId}</styleUrl>${geometryLine}</Placemark>`);
+            }
         });
 
-        // Build Folders String
-        let folders = '';
-        const sortedKeys = Array.from(groups.keys()).sort();
-        let orderedKeys = sortedKeys;
-        if (thresholds) {
-            const tLabels = thresholds.map(t => t.label);
-            const others = sortedKeys.filter(k => !tLabels.includes(k));
-            orderedKeys = [...tLabels.filter(k => groups.has(k)), ...others];
-        }
-        orderedKeys.forEach(k => {
-            folders += `    <Folder>\n      <name>${escapeXml(k)}</name>\n` + groups.get(k).join('\n') + `\n    </Folder>\n`;
-        });
+        const buildFolders = (groupMap) => {
+            let res = '';
+            const sortedKeys = Array.from(groupMap.keys()).sort();
+            let orderedKeys = sortedKeys;
+            if (thresholds) {
+                const tLabels = thresholds.map(t => t.label);
+                const others = sortedKeys.filter(k => !tLabels.includes(k));
+                orderedKeys = [...tLabels.filter(k => groupMap.has(k)), ...others];
+            }
+            orderedKeys.forEach(k => {
+                const safeId = 'folder_' + k.replace(/[^a-zA-Z0-9]/g, '');
+                // For Spider Lines Point folders, we want them unchecked by default too
+                const isSpiderLineFolder = (groupMap === lineGroups);
+                const visibilityTag = (isSpiderLineFolder || k.toString().trim() === 'Connection Lines') ? '<visibility>0</visibility><open>0</open><styleUrl>#folder_style_hidden</styleUrl>\n' : '';
+                res += `    <Folder id="${safeId}">\n      <name>${escapeXml(k)}</name>\n${visibilityTag}` + groupMap.get(k).join('\n') + `\n    </Folder>\n`;
+            });
+            return res;
+        };
 
-        return { styles: styleDefs, folders: folders };
+        return { styles: styleDefs, pointFolders: buildFolders(pointGroups), lineFolders: buildFolders(lineGroups) };
     }
 
     // internal helper for sites
-    _generateSitesKMLParts(activePoints) {
+    _generateSitesKMLParts(logPoints) {
         if (!this.siteIndex || !this.siteIndex.all) return { styles: [], placemarks: [] };
-        // ... (Logic from exportSitesToKML, filtering by activePoints) ...
-        // Returns { styles: [{id, xml}], placemarks: [string] }
 
         const settings = this.siteSettings || {};
         const range = parseInt(settings.range) || 100;
         const beam = parseInt(settings.beamwidth) || 35;
         const rad = Math.PI / 180;
 
+        // Thresholds reused for coloring logic if needed, but we used getDiscreteColor
+        // We need to know 'groupName' (Metric Label) for each point to group lines by ColorName
+        const metricName = this.activeMetric || 'RSCP';
+        const thresholds = (this.thresholds && this.thresholds[metricName]) || null;
+
+        const getGroupName = (val) => {
+            if (thresholds && val !== undefined && val !== null && val !== 'N/A') {
+                for (const t of thresholds) {
+                    if ((t.min === undefined || val > t.min) && (t.max === undefined || val <= t.max)) return t.label;
+                }
+            }
+            return 'Connection Lines';
+        };
+
         const escapeXml = (unsafe) => {
             if (unsafe === undefined) return '';
-            return String(unsafe).replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '\'': '&apos;', '"': '&quot;' }[c]));
+            const clean = String(unsafe).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+            return clean.replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '\'': '&apos;', '"': '&quot;' }[c]));
         };
         const hexToKmlColor = (hex) => {
             if (!hex || hex[0] !== '#') return '99cccccc';
@@ -1289,16 +1479,64 @@ ${geometry}
 
         const styles = new Set();
         const styleDefs = [];
-        const placemarks = [];
+        const placemarks = []; // Now returns Folders strings
 
-        // IDENTIFY RELEVANT SITES
+        // 1. Map Points to Sites and Groups
+        // Structure: siteUniqueKey -> Map(groupName -> [Line XML])
+        const siteLines = new Map();
         const relevantSiteIds = new Set();
-        if (activePoints) {
-            activePoints.forEach(p => {
-                if (p.cellId) relevantSiteIds.add(String(p.cellId));
-                if (window.resolveSmartSite) {
-                    const res = window.resolveSmartSite(p);
-                    if (res && res.id) relevantSiteIds.add(String(res.id));
+
+        if (logPoints && window.resolveSmartSite) {
+            logPoints.forEach(p => {
+                const res = window.resolveSmartSite(p);
+                if (res && res.id && res.site && res.lat && res.lng) {
+                    relevantSiteIds.add(String(res.id));
+                    if (p.lat !== undefined && p.lng !== undefined) {
+                        // Build Line Geometry
+                        const s = res.site;
+                        const sKey = `${s.lat}_${s.lng}_${s.cellName || s.name || s.siteName || `Sector ${s.cellId || s.cid || 'Unknown'}`} `; // Sync Key
+
+                        const az = parseFloat(s.beam || s.azimuth || 0);
+                        const aRad = az * rad;
+                        const tDy = Math.cos(aRad) * range;
+                        const tDx = Math.sin(aRad) * range;
+                        const tLat = s.lat + (tDy / 111111);
+                        const tLng = s.lng + (tDx / (111111 * Math.cos(s.lat * rad)));
+
+                        // Style for Line (Based on Serving Site Color, same as before)
+                        let sId = s.cellId;
+                        if (this.activeMetricStats) {
+                            const activeIds = new Set(this.activeMetricStats.keys());
+                            if (activeIds.has(String(s.cid))) sId = s.cid;
+                            else if (activeIds.has(String(s.cellId))) sId = s.cellId;
+                        }
+                        const siteColor = this.getDiscreteColor(sId);
+                        const safeLineColorSuffix = siteColor.replace(/[^a-zA-Z0-9]/g, '');
+                        const lineStyleId = 'spider_s_' + safeLineColorSuffix;
+
+                        if (!styles.has(lineStyleId)) {
+                            styles.add(lineStyleId);
+                            const kLineColor = hexToKmlColor(siteColor);
+                            styleDefs.push({ id: lineStyleId, xml: `<Style id="${lineStyleId}"><LineStyle><color>${kLineColor}</color><width>2</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle></Style>\n` });
+                        }
+
+                        // Add shared folder style for Connection Lines (checkHideChildren)
+                        if (!styles.has('folder_style_hidden')) {
+                            styles.add('folder_style_hidden');
+                            styleDefs.push({ id: 'folder_style_hidden', xml: `<Style id="folder_style_hidden"><ListStyle><listItemType>checkHideChildren</listItemType></ListStyle></Style>\n` });
+                        }
+
+                        // Determine Group for this specific point (for Line Grouping)
+                        let val = p[metricName];
+                        if (val === undefined && p.parsed && p.parsed.serving) val = p.parsed.serving[metricName.toLowerCase()];
+                        const gName = getGroupName(val);
+
+                        const lineXml = `<Placemark><name></name><styleUrl>#${lineStyleId}</styleUrl><LineString><coordinates>${p.lng},${p.lat},0 ${tLng.toFixed(6)},${tLat.toFixed(6)},0</coordinates></LineString></Placemark>`;
+
+                        if (!siteLines.has(sKey)) siteLines.set(sKey, new Map());
+                        if (!siteLines.get(sKey).has(gName)) siteLines.get(sKey).set(gName, []);
+                        siteLines.get(sKey).get(gName).push(lineXml);
+                    }
                 }
             });
         }
@@ -1336,31 +1574,44 @@ ${geometry}
             else if (activeIds.has(String(s.cellId))) id = s.cellId;
 
             const color = this.getDiscreteColor(id);
-            const safeColorSuffix = color.replace('#', '');
+            // Sanitize ID
+            const safeColorSuffix = color.replace(/[^a-zA-Z0-9]/g, '');
             const styleId = 'site_s_' + safeColorSuffix;
 
+            // Define StyleMap (Hover Effect)
             if (!styles.has(styleId)) {
                 styles.add(styleId);
                 const kColor = hexToKmlColor(color);
+                // Revert to simple style (No StyleMap needed for Folder grouping)
                 styleDefs.push({ id: styleId, xml: `<Style id="${styleId}"><LineStyle><color>ff000000</color><width>1</width></LineStyle><PolyStyle><color>${kColor}</color><fill>1</fill><outline>1</outline></PolyStyle><IconStyle><scale>0</scale></IconStyle><LabelStyle><scale>1.1</scale></LabelStyle></Style>\n` });
             }
 
-            const siteName = s.cellName || s.name || s.siteName || '';
-            const siteUniqueKey = `${s.lat}_${s.lng}_${siteName}`;
+            const siteName = s.cellName || s.name || s.siteName || `Sector ${s.cellId || s.cid || 'Unknown'} `;
+            const siteUniqueKey = `${s.lat}_${s.lng}_${siteName} `;
 
-            let geometryXml = '';
-            // Use simple polygon, skip spider lines here as points have them
-            if (!labeledSites.has(siteUniqueKey)) {
-                labeledSites.add(siteUniqueKey);
-                geometryXml = `<MultiGeometry><Point><coordinates>${s.lng},${s.lat},0</coordinates></Point><Polygon><outerBoundaryIs><LinearRing><coordinates>${coords.join(' ')}</coordinates></LinearRing></outerBoundaryIs></Polygon></MultiGeometry>`;
-            } else {
-                geometryXml = `<Polygon><outerBoundaryIs><LinearRing><coordinates>${coords.join(' ')}</coordinates></LinearRing></outerBoundaryIs></Polygon>`;
+            // Site Wedge Placemark
+            const wedgeXml = `<Placemark><name>${escapeXml(siteName)}</name><styleUrl>#${styleId}</styleUrl><Polygon><outerBoundaryIs><LinearRing><coordinates>${coords.join(' ')}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`;
+
+            // Generate Sector Folder
+            let sectorContent = wedgeXml + '\n';
+
+            // Add Line Groups if they exist
+            if (siteLines.has(siteUniqueKey)) {
+                const groups = siteLines.get(siteUniqueKey);
+                // Sort groups? or just iterate
+                groups.forEach((lines, gName) => {
+                    const isSpider = gName.toString().trim() === 'Connection Lines';
+                    // Applying styleUrl to folder for checkHideChildren behavior
+                    const visibilityXml = isSpider ? '<visibility>0</visibility><open>0</open><styleUrl>#folder_style_hidden</styleUrl>' : '';
+
+                    sectorContent += `      <Folder>\n        <name>${escapeXml(gName)}</name>\n${visibilityXml}` + lines.join('\n') + `\n      </Folder>\n`;
+                });
             }
 
-            placemarks.push(`    <Placemark><name>${escapeXml(siteName)}</name><styleUrl>#${styleId}</styleUrl>${geometryXml}</Placemark>`);
+            // Create Sector Folder
+            placemarks.push(`    <Folder>\n      <name>${escapeXml(siteName)}</name>\n${sectorContent}    </Folder>`);
         });
 
         return { styles: styleDefs, placemarks: placemarks };
     }
-
 }
