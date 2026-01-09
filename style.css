@@ -77,6 +77,69 @@ input[type="file"] {
     background-color: #4b5563;
 }
 
+/* Legend Visibility Enhancements */
+.legend-swatch {
+    width: 15px;
+    height: 15px;
+    margin-right: 8px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.legend-color-input {
+    width: 19px;
+    height: 19px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 0;
+    cursor: pointer;
+    background: none;
+    border-radius: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.legend-color-input::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+.legend-color-input::-webkit-color-swatch {
+    border: none;
+    border-radius: 0;
+}
+
+.legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+}
+
+.legend-label {
+    font-size: 11px;
+    color: #eee;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.legend-count {
+    font-size: 10px;
+    color: #888;
+    margin-left: auto;
+}
+
+.legend-input {
+    width: 42px;
+    background: #222;
+    border: 1px solid #444;
+    color: #eee;
+    font-size: 11px;
+    border-radius: 4px;
+    padding: 2px 4px;
+}
+
 .btn-green {
     background-color: #059669;
 }
@@ -319,6 +382,21 @@ main {
     flex-direction: column;
 }
 
+/* Helper for centered modals (like KML export choice) */
+.modal-centered .modal-content {
+    position: absolute;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    margin: 0 !important;
+    resize: none !important;
+    /* Usually don't want to resize choice modals */
+    height: auto !important;
+    /* Let content dictate height */
+    width: auto !important;
+    min-width: 400px;
+}
+
 /* Close Button */
 .close {
     color: #aaa;
@@ -494,6 +572,48 @@ main {
     flex-shrink: 0;
 }
 
+/* Premium Ruler Tool Styles */
+.ruler-btn.active {
+    background: linear-gradient(135, #ef4444, #dc2626) !important;
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.5), inset 0 0 5px rgba(255, 255, 255, 0.2);
+    border-color: #f87171 !important;
+}
+
+.ruler-tooltip {
+    background: rgba(15, 23, 42, 0.85) !important;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: #fff !important;
+    padding: 8px 12px !important;
+    border-radius: 8px !important;
+    font-size: 14px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+}
+
+.ruler-line-halo {
+    stroke: white;
+    stroke-width: 5;
+    stroke-opacity: 0.3;
+}
+
+.ruler-line {
+    stroke: #ef4444;
+    stroke-width: 2.5;
+    stroke-dasharray: 8, 8;
+    animation: ruler-dash 20s linear infinite;
+}
+
+@keyframes ruler-dash {
+    from {
+        stroke-dashoffset: 0;
+    }
+
+    to {
+        stroke-dashoffset: 500;
+    }
+}
+
 .docked-item-title {
     font-size: 12px;
     font-weight: bold;
@@ -579,51 +699,7 @@ body,
     color: #fff;
 }
 
-/* AI Spinner */
-.ai-spinner {
-    width: 50px;
-    height: 50px;
-    border: 3px solid rgba(255, 255, 255, 0.3);
-    border-radius: 50%;
-    border-top-color: #a855f7;
-    animation: spin 1s ease-in-out infinite;
-}
 
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-/* AI Markdown Styles */
-#aiContent h1,
-#aiContent h2,
-#aiContent h3 {
-    margin-top: 20px;
-    margin-bottom: 10px;
-    color: #f8fafc;
-}
-
-#aiContent ul,
-#aiContent ol {
-    margin-left: 20px;
-    margin-bottom: 15px;
-}
-
-#aiContent li {
-    margin-bottom: 5px;
-}
-
-#aiContent strong {
-    color: #a855f7;
-}
-
-#aiContent code {
-    background: #2d2d2d;
-    padding: 2px 4px;
-    border-radius: 4px;
-    font-family: monospace;
-}
 
 /* =========================================
    Refactored Inline Styles
@@ -1086,195 +1162,7 @@ body,
     min-height: 0;
 }
 
-/* AI Modal */
-.ai-modal-content {
-    width: 80%;
-    max-width: 800px;
-    height: 80vh;
-    background: #1e1e1e;
-    border: 1px solid #444;
-    display: flex;
-    flex-direction: column;
-    padding: 0;
-}
 
-.ai-modal-header {
-    padding: 15px;
-    background: #252525;
-    border-bottom: 1px solid #333;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.ai-modal-title {
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: #e2e8f0;
-}
-
-.ai-icon-large {
-    font-size: 20px;
-}
-
-.ai-close {
-    color: #aaa;
-    cursor: pointer;
-    font-size: 24px;
-}
-
-.ai-modal-body {
-    flex: 1;
-    padding: 20px;
-    overflow-y: auto;
-    color: #e2e8f0;
-    font-family: 'Inter', sans-serif;
-}
-
-.ai-section {
-    margin-bottom: 20px;
-    padding: 15px;
-    background: #2d2d2d;
-    border-radius: 8px;
-    border: 1px solid #3f3f46;
-}
-
-.ai-provider-row {
-    margin-bottom: 15px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.ai-label-small {
-    font-size: 13px;
-    color: #ccc;
-}
-
-.ai-provider-options {
-    display: flex;
-    gap: 15px;
-}
-
-.ai-radio-label {
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-}
-
-.ai-radio-input {
-    margin-right: 6px;
-}
-
-.ai-radio-text {
-    color: #e2e8f0;
-    font-size: 13px;
-}
-
-.ai-subtext {
-    margin: 0 0 10px 0;
-    font-size: 14px;
-    color: #94a3b8;
-}
-
-.ai-model-select-wrapper {
-    margin-bottom: 10px;
-}
-
-.ai-model-select-label {
-    font-size: 12px;
-    color: #ccc;
-    display: block;
-    margin-bottom: 4px;
-}
-
-.ai-model-select {
-    width: 100%;
-    padding: 8px;
-    background: #18181b;
-    color: white;
-    border: 1px solid #4b5563;
-    border-radius: 6px;
-}
-
-.ai-key-container {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-}
-
-.ai-key-input {
-    flex: 1;
-    padding: 8px 12px;
-    border-radius: 6px;
-    border: 1px solid #4b5563;
-    background: #18181b;
-    color: white;
-}
-
-.ai-check-btn {
-    padding: 8px 12px;
-    border-radius: 6px;
-    border: 1px solid #4b5563;
-    background: #333;
-    color: white;
-    white-space: nowrap;
-    cursor: pointer;
-}
-
-.ai-key-container-hidden {
-    display: none;
-    gap: 10px;
-    align-items: center;
-}
-
-.ai-debug-log {
-    margin-top: 10px;
-    font-size: 11px;
-    color: #888;
-    font-family: monospace;
-    white-space: pre-wrap;
-    display: none;
-    background: #111;
-    padding: 10px;
-    border-radius: 4px;
-}
-
-.ai-loading {
-    display: none;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 40px;
-}
-
-.ai-loading-text {
-    margin-top: 15px;
-    color: #94a3b8;
-}
-
-.ai-content-wrapper {
-    line-height: 1.6;
-}
-
-.ai-placeholder-wrapper {
-    text-align: center;
-    color: #64748b;
-    margin-top: 40px;
-}
-
-.ai-analyze-btn {
-    margin-top: 10px;
-    padding: 10px 20px;
-    background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
-    color: white;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: 500;
-}
 
 /* Context Menu */
 .metric-context-menu {
@@ -1342,4 +1230,217 @@ body,
     font-size: 12px;
     color: #888;
     text-align: center;
+}
+
+/* SmartCare Sidebar (Right) */
+#smartcare-sidebar {
+    display: none;
+    /* Hidden by default until items added or toggled? Or visible logic handled in JS */
+    position: fixed;
+    top: 60px;
+    /* Below Header */
+    right: 0;
+    width: 250px;
+    bottom: 0;
+    background: #1e1e1e;
+    border-left: 1px solid #333;
+    z-index: 1500;
+    /* Below Modals (2000), Above Map Controls */
+    flex-direction: column;
+}
+
+#smartcare-sidebar.visible {
+    display: flex;
+}
+
+#smartcare-layer-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.sidebar-header {
+    padding: 10px;
+    background: #252525;
+    border-bottom: 1px solid #333;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.sidebar-header h3 {
+    margin: 0;
+    font-size: 13px;
+    color: #eee;
+}
+
+.sidebar-toggle-btn {
+    background: none;
+    border: none;
+    color: #aaa;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+.sidebar-toggle-btn:hover {
+    color: white;
+}
+
+/* Layer List Item */
+.sc-layer-item {
+    background: #2a2a2a;
+    border: 1px solid #333;
+    margin-bottom: 8px;
+    padding: 8px;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.sc-layer-name {
+    font-size: 12px;
+    color: #ddd;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 130px;
+}
+
+.sc-layer-controls {
+    display: flex;
+    gap: 5px;
+}
+
+.sc-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.sc-btn:hover {
+    opacity: 1;
+}
+
+.sc-btn-remove {
+    color: #ef4444;
+    /* Red */
+}
+
+.sc-btn-toggle {
+    color: #3b82f6;
+    /* Blue */
+}
+
+.sc-btn-toggle.hidden-layer {
+    color: #666;
+    /* Grayed out */
+}
+
+/* SmartCare Sidebar Enhancements */
+.sc-layer-item {
+    padding: 12px;
+    border-bottom: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.sc-layer-header-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+}
+
+.sc-metric-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.sc-tech-tag {
+    background: #2563eb;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.sc-point-count {
+    font-size: 12px;
+    color: #888;
+    flex: 1;
+}
+
+.sc-layer-name-row {
+    font-size: 13px;
+    color: #ccc;
+    margin-top: -4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sc-metrics-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 5px;
+}
+
+.sc-metric-button {
+    background: #333;
+    color: #eee;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s;
+    border: 1px solid transparent;
+}
+
+.sc-metric-button:hover {
+    background: #444;
+}
+
+.sc-metric-button.active {
+    background: #3b82f6;
+    color: white;
+}
+
+/* Utility Classes for Refactoring */
+.hidden-input {
+    display: none !important;
+}
+
+.modal-small-centered {
+    max-width: 400px;
+    text-align: center;
+}
+
+.modal-subtext {
+    margin-bottom: 20px;
+    color: #ccc;
+}
+
+.modal-btn-group {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.btn-flex-1 {
+    flex: 1;
+}
+
+.btn-dark-gray {
+    background-color: #4b5563;
 }

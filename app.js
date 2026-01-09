@@ -22,6 +22,103 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Handle Map Point Clicks (Draw Line to Serving Cell)
+    window.addEventListener('map-point-clicked', (e) => {
+        const { point } = e.detail;
+        if (!point || !mapRenderer) return;
+
+        // Calculate Start Point: Prefer Polygon Centroid if available
+        let startPt = { lat: point.lat, lng: point.lng };
+
+        if (point.geometry && (point.geometry.type === 'Polygon' || point.geometry.type === 'MultiPolygon')) {
+            try {
+                // Simple Average of coordinates for Centroid (good enough for small 50m squares)
+                let coords = point.geometry.coordinates;
+                // Unwrap MultiPolygon outer
+                if (point.geometry.type === 'MultiPolygon') coords = coords[0];
+                // Unwrap Polygon outer ring
+                if (Array.isArray(coords[0])) coords = coords[0];
+
+                if (coords.length > 0) {
+                    let sumLat = 0, sumLng = 0, count = 0;
+                    coords.forEach(c => {
+                        // GeoJSON is [lng, lat]
+                        if (c.length >= 2) {
+                            sumLng += c[0];
+                            sumLat += c[1];
+                            count++;
+                        }
+                    });
+                    if (count > 0) {
+                        startPt = { lat: sumLat / count, lng: sumLng / count };
+                        // console.log("Calculated Centroid:", startPt);
+                    }
+                }
+            } catch (err) {
+                console.warn("Failed to calc centroid:", err);
+            }
+        }
+
+        // 1. Find Serving Cell
+        const servingCell = mapRenderer.getServingCell(point);
+
+        if (servingCell) {
+            // 2. Draw Connection Line
+            // Color can be static (e.g. green) or dynamic (based on point color)
+            const color = mapRenderer.getColor(mapRenderer.getMetricValue(point, mapRenderer.activeMetric), mapRenderer.activeMetric);
+
+            // Construct target object for drawConnections
+            const target = {
+                lat: servingCell.lat,
+                lng: servingCell.lng,
+                azimuth: servingCell.azimuth, // Pass Azimuth
+                range: 100, // Default range or get from settings if possible
+                color: color || '#3b82f6', // Default Blue
+                cellId: servingCell.cellId // For polygon centroid logic (legacy fallback)
+            };
+
+            // Use Best Available ID for Polygon Lookup
+            const bestId = servingCell.rawEnodebCellId || servingCell.calculatedEci || servingCell.cellId;
+            if (bestId) target.cellId = bestId;
+
+            mapRenderer.drawConnections(startPt, [target]);
+
+            // 3. Optional: Highlight Serving Cell (Visual Feedback)
+            mapRenderer.highlightCell(bestId);
+
+            // console.log(`[App] Drawn line to Serving Cell: ${servingCell.cellName || servingCell.cellId}`);
+        } else {
+            console.warn('[App] Serving Cell not found for clicked point.');
+            // Clear previous connections if any
+            mapRenderer.connectionsLayer.clearLayers();
+        }
+    });
+
+    // SPIDER SMARTCARE LOGIC
+    // SPIDER MODE TOGGLE
+    window.isSpiderMode = false; // Default OFF
+    const spiderBtn = document.getElementById('spiderSmartCareBtn');
+    if (spiderBtn) {
+        spiderBtn.onclick = () => {
+            window.isSpiderMode = !window.isSpiderMode;
+            if (window.isSpiderMode) {
+                spiderBtn.classList.remove('btn-red');
+                spiderBtn.classList.add('btn-green');
+                spiderBtn.innerHTML = '🕸️ Spider: ON';
+                // Optional: Clear any existing connections when turning ON? 
+                // Usually user wants to CLICK to see them.
+            } else {
+                spiderBtn.classList.remove('btn-green');
+                spiderBtn.classList.add('btn-red');
+                spiderBtn.innerHTML = '🕸️ Spider: OFF';
+                // Clear connections when turning OFF
+                if (window.mapRenderer) {
+                    window.mapRenderer.clearConnections();
+                }
+            }
+        };
+    }
+
     // Map Drop Zone Logic
     const mapContainer = document.getElementById('map');
     mapContainer.addEventListener('dragover', (e) => {
@@ -33,233 +130,256 @@ document.addEventListener('DOMContentLoaded', () => {
         mapContainer.style.boxShadow = 'none';
     });
 
-    // --- AI Integration Logic ---
 
-    const aiModal = document.getElementById('aiModal');
-    const geminiApiKeyInput = document.getElementById('geminiApiKey');
-    const aiContent = document.getElementById('aiContent');
-    const aiLoading = document.getElementById('aiLoading');
 
-    // Restore API Key if saved
-    const savedKey = localStorage.getItem('gemini_api_key');
-    if (savedKey) {
-        geminiApiKeyInput.value = savedKey;
-    }
 
-    window.openAIAnalysis = function () {
-        aiModal.style.display = 'block';
 
-        // Make Draggable
-        const aiModalContent = aiModal.querySelector('.modal-content');
-        const aiModalHeader = aiModal.querySelector('.modal-header');
-        if (aiModalContent && aiModalHeader) {
-            // Ensure function exists (it's defined below in this file or seemingly globally available in this scope)
-            if (typeof makeElementDraggable === 'function') {
-                makeElementDraggable(aiModalHeader, aiModalContent);
-            } else {
-                console.warn('makeElementDraggable function not found');
-            }
-        }
-    }
-
-    window.closeAIModal = function () {
-        aiModal.style.display = 'none';
-    }
-
-    window.saveApiKey = function () {
-        const key = geminiApiKeyInput.value.trim();
-        if (key) {
-            localStorage.setItem('gemini_api_key', key);
-            alert('API Key saved!');
-        } else {
-            alert('Please enter a valid API Key.');
-        }
-    }
-
-    // Attach Event Listener to Button
-    const aiBtn = document.getElementById('aiAnalyzeBtn');
-    if (aiBtn) {
-        aiBtn.onclick = window.openAIAnalysis;
-    }
-
-    // Export KML Logic
+    // --- CONSOLIDATED KML EXPORT (MODAL) ---
     const exportKmlBtn = document.getElementById('exportKmlBtn');
     if (exportKmlBtn) {
-        exportKmlBtn.onclick = () => {
-            if (!mapRenderer || !mapRenderer.activeLogId) {
-                alert('No active log/layer to export. Please load a log and display a metric first.');
+        exportKmlBtn.onclick = (e) => {
+            e.preventDefault();
+            const modal = document.getElementById('exportKmlModal');
+            if (modal) modal.style.display = 'block';
+        };
+    }
+
+    // Modal Action: Current View
+    const btnExportCurrentView = document.getElementById('btnExportCurrentView');
+    if (btnExportCurrentView) {
+        btnExportCurrentView.onclick = () => {
+            const renderer = window.mapRenderer;
+            if (!renderer || !renderer.activeLogId || !renderer.activeMetric) {
+                alert("No active data to export.");
                 return;
             }
-
-            // Find valid log
-            const logId = mapRenderer.activeLogId;
-            const log = loadedLogs.find(l => l.id === logId);
-
+            const log = loadedLogs.find(l => l.id === renderer.activeLogId);
             if (!log) {
-                alert('Active log data not found.');
+                alert("Log data not found.");
                 return;
             }
-
-            const metric = mapRenderer.activeMetric || 'level';
-
-            // USE UNIFIED EXPORT: Includes Points (Colored by Metric) + Relevant Sites (Colored matching Points if Discrete)
-            // This satisfies the user requirement: "export also serving sectors with thematic colors"
-            const kmlContent = mapRenderer.exportUnifiedKML(log.points, metric);
-
-            if (!kmlContent) {
-                alert('Failed to generate KML.');
+            const kml = renderer.exportToKML(renderer.activeLogId, log.points, renderer.activeMetric);
+            if (!kml) {
+                alert("Failed to generate KML.");
                 return;
             }
-
-            // Trigger Download
-            const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+            const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${log.name}_${metric}.kml`;
+            a.download = `${log.name}_${renderer.activeMetric}.kml`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+            document.getElementById('exportKmlModal').style.display = 'none'; // Close modal
         };
     }
 
-    const exportSitesKmlBtn = document.getElementById('exportSitesKmlBtn');
-    if (exportSitesKmlBtn) {
-        exportSitesKmlBtn.onclick = () => {
-            if (!mapRenderer || !mapRenderer.siteData || mapRenderer.siteData.length === 0) {
-                alert('No sites imported. Please import sites first.');
+    // Modal Action: All Sites
+    const btnExportAllSites = document.getElementById('btnExportAllSites');
+    if (btnExportAllSites) {
+        btnExportAllSites.onclick = () => {
+            const renderer = window.mapRenderer;
+            if (!renderer || !renderer.siteIndex || !renderer.siteIndex.all) {
+                alert("No site database loaded.");
                 return;
             }
 
-            // NEW: Pass active log points if available to enable "Spider Lines"
+            // Get Active Points to Filter Sites (Requested Feature: "Export only serving sites")
             let activePoints = null;
-            if (mapRenderer.activeLogId) {
-                const log = loadedLogs.find(l => l.id === mapRenderer.activeLogId);
-                if (log) activePoints = log.points;
+            if (renderer.activeLogId && window.loadedLogs) {
+                const activeLog = window.loadedLogs.find(l => l.id === renderer.activeLogId);
+                if (activeLog && activeLog.points) {
+                    activePoints = activeLog.points;
+                }
             }
 
-            // Default behavior: Export ALL sites with uniform Grey color, plus spider lines if points exist
-            const kmlContent = mapRenderer.exportSitesToKML(activePoints, '#aaaaaa');
-
-            if (!kmlContent) {
-                alert('Failed to generate Sites KML.');
+            const kml = renderer.exportSitesToKML(activePoints);
+            if (!kml) {
+                alert("Failed to generate Sites KML.");
                 return;
             }
-
-            const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+            const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `All_Sites_${new Date().toLocaleTimeString().replace(/:/g, '')}.kml`;
+            a.download = `Sites_Database_${new Date().getTime()}.kml`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+            document.getElementById('exportKmlModal').style.display = 'none'; // Close modal
         };
     }
 
-    window.checkGeminiModels = async function () {
-        const key = geminiApiKeyInput.value.trim();
-        const debugLog = document.getElementById('aiModelDebugLog');
-        if (!key) {
-            alert('Please enter an API Key first.');
-            return;
-        }
 
-        debugLog.style.display = 'block';
-        debugLog.textContent = 'Checking available models...';
 
-        try {
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
-            const data = await response.json();
+    // --- CONSOLIDATED IMPORT (MODAL) ---
+    const importBtn = document.getElementById('importBtn');
+    if (importBtn) {
+        importBtn.onclick = (e) => {
+            e.preventDefault();
+            const modal = document.getElementById('importModal');
+            if (modal) modal.style.display = 'block';
+        };
+    }
 
-            if (data.error) {
-                debugLog.style.color = '#ef4444';
-                debugLog.textContent = 'Error: ' + data.error.message;
-            } else if (data.models) {
-                debugLog.style.color = '#4ade80';
-                const names = data.models.map(m => m.name.replace('models/', '')).filter(n => n.includes('gemini'));
-                debugLog.textContent = 'Available Gemini Models:\n' + names.join('\n');
-            } else {
-                debugLog.textContent = 'No models found (Unknown response format).';
-            }
-        } catch (e) {
-            debugLog.style.color = '#ef4444';
-            debugLog.textContent = 'Network Error: ' + e.message;
-        }
-    };
+    const btnImportSites = document.getElementById('btnImportSites');
+    if (btnImportSites) {
+        btnImportSites.onclick = () => {
+            const siteInput = document.getElementById('siteInput');
+            if (siteInput) siteInput.click();
+            document.getElementById('importModal').style.display = 'none';
+        };
+    }
 
-    // AI Provider Logic
-    window.toggleAIProvider = function () {
-        const providerRadio = document.querySelector('input[name="aiProvider"]:checked');
-        const provider = providerRadio ? providerRadio.value : 'gemini';
+    const btnImportSmartCare = document.getElementById('btnImportSmartCare');
+    if (btnImportSmartCare) {
+        btnImportSmartCare.onclick = () => {
+            const shpInput = document.getElementById('shpInput');
+            if (shpInput) shpInput.click();
+            document.getElementById('importModal').style.display = 'none';
+        };
+    }
 
-        const geminiContainer = document.getElementById('geminiKeyContainer');
-        const openaiContainer = document.getElementById('openaiKeyContainer');
-        const modelSelect = document.getElementById('geminiModelSelect');
-        const debugLog = document.getElementById('aiModelDebugLog');
-
-        // Reset debug log
-        if (debugLog) debugLog.style.display = 'none';
-
-        if (provider === 'gemini') {
-            if (geminiContainer) geminiContainer.style.display = 'flex';
-            if (openaiContainer) openaiContainer.style.display = 'none';
-            // Populate Gemini Models
-            if (modelSelect) {
-                modelSelect.innerHTML = `
-                    <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (New)</option>
-                    <option value="gemini-flash-latest">Gemini Flash Latest</option>
-                    <option value="gemini-pro-latest">Gemini Pro Latest</option>
-                    <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash (Latest)</option>
-                    <option value="gemini-1.5-flash-001" selected>Gemini 1.5 Flash (v001)</option>
-                    <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro (Latest)</option>
-                    <option value="gemini-pro">Gemini 1.0 Pro</option>
-                `;
-            }
-        } else {
-            if (geminiContainer) geminiContainer.style.display = 'none';
-            if (openaiContainer) openaiContainer.style.display = 'flex';
-            // Populate OpenAI Models
-            if (modelSelect) {
-                modelSelect.innerHTML = `
-                    <option value="gpt-4o" selected>GPT-4o (Fast & Smart)</option>
-                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                    <option value="gpt-4">GPT-4</option>
-                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Fast)</option>
-                `;
-            }
-        }
-    };
-
-    // Load Saved Keys on Init
-    setTimeout(() => {
-        const savedGeminiKey = localStorage.getItem('gemini_api_key');
-        const savedOpenAIKey = localStorage.getItem('openai_api_key');
-        const geminiInput = document.getElementById('geminiApiKey');
-        const openaiInput = document.getElementById('openaiApiKey');
-
-        if (savedGeminiKey && geminiInput) geminiInput.value = savedGeminiKey;
-        if (savedOpenAIKey && openaiInput) openaiInput.value = savedOpenAIKey;
-    }, 1000);
-
-    // Update Save Key function (this was existing, we override or ensure it handles both if bound)
-    // Actually, saveApiKey logic needs to be robust, but simple existence check is good.
-    window.saveApiKey = function () {
-        const geminiInput = document.getElementById('geminiApiKey');
-        const openaiInput = document.getElementById('openaiApiKey');
-
-        if (geminiInput && geminiInput.value.trim()) {
-            localStorage.setItem('gemini_api_key', geminiInput.value.trim());
-        }
-        if (openaiInput && openaiInput.value.trim()) {
-            localStorage.setItem('openai_api_key', openaiInput.value.trim());
-        }
-        alert('API Keys saved successfully!');
-    };
+    const btnImportLog = document.getElementById('btnImportLog');
+    if (btnImportLog) {
+        btnImportLog.onclick = () => {
+            const fileInput = document.getElementById('fileInput');
+            if (fileInput) fileInput.click();
+            document.getElementById('importModal').style.display = 'none';
+        };
+    }
 
     // --- SmartCare SHP/Excel Import Logic ---
+    // Initialize Sidebar Logic
+    const scSidebar = document.getElementById('smartcare-sidebar');
+    const scToggleBtn = document.getElementById('toggleSmartCareSidebar');
+    const scLayerList = document.getElementById('smartcare-layer-list');
+
+    if (scToggleBtn) {
+        scToggleBtn.onclick = () => {
+            // Minimize/Expand logic could be just hiding the list or sliding
+            // For now, let's just slide it out completely or toggle visibility
+            // But the request said "hide/unhide it".
+            // Let's toggle a class 'minimized' or just hide.
+            scSidebar.style.display = 'none'; // Simple hide
+        };
+    }
+
+    // To show it again, we might need a button in the main header or it auto-shows on import.
+    // Let's add an "Show Sidebar" logic if it's hidden?
+    // Actually, user asked "possibility to hide/unhide it".
+    // Let's assume the button closes it. We might need a way to open it back.
+    // For now, let's ensure it opens on import.
+
+    function addSmartCareLayer(log) {
+        if (!scSidebar || !scLayerList) return;
+        const { name, id: layerId, customMetrics, type, points } = log;
+        const techLabel = type === 'excel' ? '4G (Excel)' : 'SHP';
+        const pointCount = points ? points.length : 0;
+
+        scSidebar.style.display = 'flex'; // Auto-show
+
+        const item = document.createElement('div');
+        item.className = 'sc-layer-item';
+        item.id = `sc-item-${layerId}`;
+
+        let metricsHtml = '';
+        if (customMetrics && customMetrics.length > 0) {
+            metricsHtml = `
+                <div class="sc-metrics-label">DETECTED METRICS</div>
+                <div class="sc-metric-container">
+                    ${customMetrics.map(m => `
+                        <div class="sc-metric-button ${log.currentParam === m ? 'active' : ''}" onclick="window.switchSmartCareMetric('${layerId}', '${m}')">${m}</div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        item.innerHTML = `
+            <div class="sc-layer-header-row">
+                <div class="sc-tech-tag">${techLabel}</div>
+                <div class="sc-point-count">${pointCount} pts</div>
+                <div class="sc-layer-controls">
+                    <button class="sc-btn sc-btn-toggle" onclick="toggleSmartCareLayer('${layerId}')" title="Toggle Visibility">👁️</button>
+                    <button class="sc-btn sc-btn-remove" onclick="removeSmartCareLayer('${layerId}')" title="Remove Layer">❌</button>
+                </div>
+            </div>
+            <div class="sc-layer-name-row" title="${name}">${name}</div>
+            ${metricsHtml}
+        `;
+
+        scLayerList.appendChild(item);
+    }
+
+    window.switchSmartCareMetric = (layerId, metric) => {
+        const log = window.loadedLogs.find(l => l.id === layerId);
+        if (log && window.mapRenderer) {
+            console.log(`[SmartCare] Switching metric for ${layerId} to ${metric}`);
+            log.currentParam = metric; // Track active metric for this layer
+            window.mapRenderer.updateLayerMetric(layerId, log.points, metric);
+
+            // Update UI active state
+            const container = document.querySelector(`#sc-item-${layerId} .sc-metric-container`);
+            if (container) {
+                container.querySelectorAll('.sc-metric-button').forEach(btn => {
+                    btn.classList.toggle('active', btn.textContent === metric);
+                });
+            }
+        }
+    };
+
+    window.toggleSmartCareLayer = (layerId) => {
+        const log = window.loadedLogs.find(l => l.id === layerId);
+        if (log) {
+            log.visible = !log.visible;
+            // Trigger redraw
+            if (window.mapRenderer) {
+                // If it's the active one, clear it? Or just re-render all?
+                // Our current renderer handles specific layers if update is called
+                // But simplified:
+                if (log.visible) {
+                    window.mapRenderer.renderLog(log, window.mapRenderer.currentMetric || 'level', true);
+                } else {
+                    window.mapRenderer.clearLayer(layerId);
+                }
+            }
+
+            // Update UI Icon
+            const btn = document.querySelector(`#sc-item-\${layerId} .sc-btn-toggle`);
+            if (btn) {
+                btn.textContent = log.visible ? '👁️' : '🚫';
+                btn.classList.toggle('hidden-layer', !log.visible);
+            }
+        }
+    };
+
+    window.removeSmartCareLayer = (layerId) => {
+        if (!confirm('Remove this SmartCare layer?')) return;
+
+        // Remove from data
+        const idx = window.loadedLogs.findIndex(l => l.id === layerId);
+        if (idx !== -1) {
+            window.loadedLogs.splice(idx, 1);
+        }
+
+        // Remove from map
+        if (window.mapRenderer) {
+            window.mapRenderer.clearLayer(layerId);
+        }
+
+        // Remove from Sidebar
+        const item = document.getElementById(`sc-item-\${layerId}`);
+        if (item) item.remove();
+
+        // Hide sidebar if empty
+        if (scLayerList.children.length === 0) {
+            scSidebar.style.display = 'none';
+        }
+    }
+
     shpInput.onchange = async (e) => {
         const files = Array.from(e.target.files);
         if (files.length === 0) return;
@@ -293,6 +413,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const fileName = file.name.split('.')[0];
             const logId = `excel_${Date.now()}`;
 
+            let gridAnchor = null;
+
+            // --- Auto-Detect Ideal Dimensions (Outer Scope) ---
+            let detectedRx = 20.8; // Default fallback (41.6m)
+            let detectedRy = 24.95; // Default fallback (49.9m)
+
+            if (json.length > 1) {
+                // Auto-detection DISABLED by user request.
+                // Using fixed dimensions: 41.6m (W) x 49.9m (H)
+                console.log(`[Grid] Using fixed dimensions: Width=${(detectedRx * 2).toFixed(1)}m, Height=${(detectedRy * 2).toFixed(1)}m`);
+            }
+
             const points = json.map((row, idx) => {
                 // Heuristic Column Mapping
                 const latKey = Object.keys(row).find(k => /lat/i.test(k));
@@ -307,16 +439,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // --- 50m Grid Generation ---
                 // 1. Project to Meters (UTM 29N)
-                const [x, y] = window.proj4("EPSG:4326", "EPSG:32629", [lng, lat]);
+                let [x, y] = window.proj4("EPSG:4326", "EPSG:32629", [lng, lat]);
 
-                // 2. Create Square (50m side = +/- 25m)
-                const r = 25;
+                // 1b. No Snapping (Center on Data Point)
+                // User requested to generate grids ONLY from the center data point.
+                let tx = x;
+                let ty = y;
+
+
+
+                // 2. Create Rectangle using DETECTED ideal dimensions
+                const rx = detectedRx;
+                const ry = detectedRy;
                 const corners = [
-                    [x - r, y - r],
-                    [x + r, y - r],
-                    [x + r, y + r],
-                    [x - r, y + r],
-                    [x - r, y - r] // Close ring
+                    [tx - rx, ty - ry],
+                    [tx + rx, ty - ry],
+                    [tx + rx, ty + ry],
+                    [tx - rx, ty + ry],
+                    [tx - rx, ty - ry] // Close ring
                 ];
 
                 // 3. Project back to WGS84
@@ -333,6 +473,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 const timeKey = Object.keys(row).find(k => /time/i.test(k));
                 const pciKey = Object.keys(row).find(k => /pci|sc/i.test(k));
 
+                // Specific Request: NodeB ID-Cell ID
+                const nodebCellIdKey = Object.keys(row).find(k => /nodeb id-cell id/i.test(k) || /enodeb id-cell id/i.test(k));
+                let foundCellId = nodebCellIdKey ? row[nodebCellIdKey] : undefined;
+
+                let calculatedEci = null;
+                if (foundCellId) {
+                    const parts = String(foundCellId).split('-');
+                    if (parts.length === 2) {
+                        const enb = parseInt(parts[0]);
+                        const cid = parseInt(parts[1]);
+                        if (!isNaN(enb) && !isNaN(cid)) {
+                            calculatedEci = (enb * 256) + cid;
+                        }
+                    }
+                }
+
                 return {
                     id: idx,
                     lat,
@@ -342,16 +498,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     cellName: cellKey ? row[cellKey] : undefined,
                     sc: pciKey ? row[pciKey] : undefined,
                     time: timeKey ? row[timeKey] : '00:00:00',
+                    cellId: foundCellId, // Store raw string as Primary ID reference
+                    calculatedEci: calculatedEci,
                     geometry: geometry, // Key for rendering squares
                     properties: row
                 };
             }).filter(p => p !== null);
 
-            if (points.length === 0) {
-                alert("No valid points found in Excel.\nExpected columns: Lat, Long");
-                fileStatus.textContent = 'Error parsing Excel';
-                return;
-            }
+            // Detect all possible metrics (numeric columns)
+            const firstRow = json[0];
+            const customMetrics = Object.keys(firstRow).filter(key => {
+                const val = firstRow[key];
+                return typeof val === 'number' || (!isNaN(parseFloat(val)) && isFinite(val));
+            });
+
+            console.log("[Excel] Detected metrics:", customMetrics);
 
             const newLog = {
                 id: logId,
@@ -359,11 +520,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 points: points,
                 color: '#3b82f6',
                 visible: true,
-                type: 'excel'
+                type: 'excel',
+                customMetrics: customMetrics,
+                currentParam: 'level'
             };
 
             loadedLogs.push(newLog);
-            updateLogsList();
+            updateLogsList(); // Keep default logs list updated too?
+            addSmartCareLayer(newLog); // Pass full log object
             fileStatus.textContent = `Loaded Excel: ${fileName}`;
 
             // Auto-Zoom
@@ -497,16 +661,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            // Detect all possible metrics from first feature properties
+            const firstProps = features[0].properties || {};
+            const customMetrics = Object.keys(firstProps).filter(key => {
+                const val = firstProps[key];
+                return typeof val === 'number' || (!isNaN(parseFloat(val)) && isFinite(val));
+            });
+            console.log("[SHP] Detected metrics:", customMetrics);
+
             const newLog = {
                 id: logId,
                 name: fileName,
                 points: points,
-                type: 'SHP',
-                tech: points[0].rsrp !== undefined ? '4G' : 'Unknown'
+                type: 'shp',
+                tech: points[0].rsrp !== undefined ? '4G' : 'Unknown',
+                customMetrics: customMetrics,
+                currentParam: 'level',
+                visible: true,
+                color: '#38bdf8'
             };
 
             loadedLogs.push(newLog);
             updateLogsList();
+            addSmartCareLayer(newLog); // Pass full log object
             fileStatus.textContent = `Loaded SHP: ${fileName}`;
 
             // Auto-render level on map
@@ -1889,6 +2066,13 @@ document.addEventListener('DOMContentLoaded', () => {
         searchBtn.onclick = window.handleSearch;
     }
 
+    const rulerBtn = document.getElementById('rulerBtn');
+    if (rulerBtn) {
+        rulerBtn.onclick = () => {
+            if (window.mapRenderer) window.mapRenderer.toggleRulerMode();
+        };
+    }
+
     if (searchInput) {
         searchInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') window.handleSearch();
@@ -1909,255 +2093,238 @@ document.addEventListener('DOMContentLoaded', () => {
     // Legend Elements
     let legendControl = null;
 
+    // Helper: Update Theme Color from Legend
+    window.handleLegendColorChange = (themeKey, idx, newColor) => {
+        if (!window.themeConfig || !window.themeConfig.thresholds[themeKey]) return;
+        window.themeConfig.thresholds[themeKey][idx].color = newColor;
+
+        // Trigger Update
+        refreshThemeLayers(themeKey);
+    };
+
+    // Helper: Update Theme Threshold from Legend
+    window.handleLegendThresholdChange = (themeKey, idx, type, newValue) => {
+        if (!window.themeConfig || !window.themeConfig.thresholds[themeKey]) return;
+        const t = window.themeConfig.thresholds[themeKey][idx];
+        const val = parseFloat(newValue);
+
+        if (isNaN(val)) return; // Validate
+
+        if (type === 'min') t.min = val;
+        if (type === 'max') t.max = val;
+
+        // Auto-update Label
+        if (t.min !== undefined && t.max !== undefined) t.label = `${t.min} to ${t.max}`;
+        else if (t.min !== undefined) t.label = `> ${t.min}`;
+        else if (t.max !== undefined) t.label = `< ${t.max}`;
+
+        // Trigger Update
+        refreshThemeLayers(themeKey);
+    };
+
+    // Helper: Refresh specific layers
+    function refreshThemeLayers(themeKey) {
+        // Re-render relevant layers
+        window.loadedLogs.forEach(log => {
+            // Check if log uses this theme
+            const currentMetric = log.currentParam || 'level';
+            const key = window.getThresholdKey ? window.getThresholdKey(currentMetric) : currentMetric;
+
+            if (key === themeKey) {
+                if (window.mapRenderer) {
+                    window.mapRenderer.updateLayerMetric(log.id, log.points, currentMetric);
+                }
+            }
+        });
+
+        // Update Legend UI to reflect new stats/labels
+        window.updateLegend();
+    }
+
     window.updateLegend = function () {
         if (!window.themeConfig || !window.map) return;
+        const renderer = window.mapRenderer;
 
-        // Remove existing legend (Legacy Leaflet Control cleanup)
-        if (legendControl) {
+        // Helper to check if legacy control exists and remove it
+        if (typeof legendControl !== 'undefined' && legendControl) {
             if (typeof legendControl.remove === 'function') legendControl.remove();
             legendControl = null;
         }
 
-        const theme = themeSelect ? themeSelect.value : 'level';
+        // Check if draggable legend already exists to preserve position
+        let container = document.getElementById('draggable-legend');
+        let scrollContent;
 
-        // Remove existing draggable legend if any
-        let existingLegend = document.getElementById('draggable-legend');
-        if (existingLegend) {
-            existingLegend.remove();
-        }
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'draggable-legend';
 
-        const stats = window.mapRenderer.activeMetricStats || new Map();
-        const total = window.mapRenderer.totalActiveSamples || 1;
-
-        const container = document.createElement('div');
-        container.id = 'draggable-legend';
-        container.setAttribute('style', `
-            position: absolute;
-            top: 10px; 
-            right: 10px;
-            width: 320px;
-            min-width: 250px;
-            max-width: 600px;
-            max-height: 480px;
-            background-color: rgba(30, 30, 30, 0.95);
-            border: 2px solid #555;
-            border-radius: 6px;
-            color: #fff;
-            z-index: 10001; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
-            display: flex;
-            flex-direction: column;
-            resize: both;
-            overflow: auto;
-        `);
-
-        // Header
-        const header = document.createElement('div');
-        header.setAttribute('style', `
-            padding: 8px 10px;
-            background-color: #252525;
-            font-weight: bold;
-            font-size: 13px;
-            border-bottom: 1px solid #444;
-            cursor: grab;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-radius: 6px 6px 0 0;
-            flex-shrink: 0;
-        `);
-
-        // Content Body
-        const body = document.createElement('div');
-        body.setAttribute('style', `
-            padding: 10px;
-            overflow-y: auto;
-            overflow-x: hidden;
-            flex: 1;
-        `);
-
-        // DISCRETE LEGEND (Cell ID / CID)
-        if (theme === 'cellId' || theme === 'cid') {
-            let ids = window.mapRenderer ? window.mapRenderer.activeMetricIds : [];
-            if (!ids) ids = [];
-
-            const sortedIds = (ids || []).slice().sort((a, b) => {
-                const countA = stats.get(a) || 0;
-                const countB = stats.get(b) || 0;
-                return countB - countA;
-            });
-
-            const title = `Serving Cells (${ids.length})`;
-            const summary = `Total: ${total}`;
-
-            header.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-                    <div>
-                        <span>${title}</span>
-                    </div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <button id="kmlExportBtn" title="Export dots to KML" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
-                        <button id="siteKmlExportBtn" title="Export sites (sectors) to KML" style="background:#10b981; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">📡 Sites KML</button>
-                        <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
-                    </div>
-                </div>
-            `;
-
-            const formatId = (id) => {
-                if (!id || id === 'N/A') return id;
-                const strId = String(id);
-                if (strId.includes('/')) return id;
-                const num = Number(strId.replace(/[^\d]/g, ''));
-                if (!isNaN(num) && num > 65535) return `${num >> 16}/${num & 0xFFFF}`;
-                return id;
-            };
-
-            const getSiteName = (id) => {
-                if (window.mapRenderer && window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                    const site = window.mapRenderer.siteIndex.byId.get(id);
-                    if (site) return site.cellName || site.name || site.siteName || '';
-                }
-                return '';
-            };
-
-            if (sortedIds.length > 0) {
-                let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
-                sortedIds.forEach(id => {
-                    const color = window.mapRenderer.getDiscreteColor(id);
-                    const name = getSiteName(id);
-                    const count = stats.get(id) || 0;
-                    const pct = ((count / total) * 100).toFixed(1);
-
-                    const label = name ? `<span>${name}</span> <span style="color:#888; font-size:9px;">(${formatId(id)})</span>` : `${formatId(id)}`;
-                    html += `
-                        <div style="display:flex; align-items:center; border-bottom:1px solid #333; padding-bottom:2px;">
-                            <input type="color" value="${color}" 
-                                   style="width:16px; height:16px; padding:0; border:1px solid #555; background:none; cursor:pointer; flex-shrink:0;"
-                                   onchange="window.mapRenderer.setCustomColor('${id}', this.value); document.dispatchEvent(new CustomEvent('metric-color-changed', { detail: { id: '${id}', color: this.value } }));" />
-                            <span style="font-size:11px; white-space:nowrap; font-family:sans-serif; overflow:hidden; text-overflow:ellipsis; flex-grow:1; margin-left:8px; color:#888;" title="${name || id}">${label}</span>
-                            <span style="margin-left:auto; font-size:10px; color:#888; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
-                        </div>
-                    `;
-                });
-                html += `</div>`;
-                body.innerHTML = html;
-            } else {
-                body.innerHTML = `<i style="font-size:11px; color:#f87171;">0 Cell IDs found.</i>`;
+            // Map Bounds for Initial Placement
+            let topPos = 80;
+            let rightPos = 20;
+            const mapEl = document.getElementById('map');
+            if (mapEl) {
+                const rect = mapEl.getBoundingClientRect();
+                topPos = rect.top + 10;
+                rightPos = (window.innerWidth - rect.right) + 10;
             }
-        } else {
-            // THEMATIC LEGEND (Coverage/Quality)
-            const thresholds = window.themeConfig.thresholds[theme];
-            if (!thresholds) return;
 
-            header.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-                    <div>
-                        <span>${theme.toUpperCase()} Analysis</span>
-                    </div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <button id="kmlExportBtn" title="Export to KML" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
-                        <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
-                    </div>
+            container.setAttribute('style', `
+                position: fixed;
+                top: ${topPos}px; 
+                right: ${rightPos}px;
+                width: 320px;
+                min-width: 250px;
+                max-width: 600px;
+                max-height: 80vh;
+                background-color: rgba(30, 30, 30, 0.95);
+                border: 2px solid #555;
+                border-radius: 6px;
+                color: #fff;
+                z-index: 10001; 
+                box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+                display: flex;
+                flex-direction: column;
+                resize: both;
+                overflow: hidden;
+            `);
+
+            // Disable Map Interactions passing through Legend
+            if (typeof L !== 'undefined' && L.DomEvent) {
+                L.DomEvent.disableClickPropagation(container);
+                L.DomEvent.disableScrollPropagation(container);
+            }
+
+            // Global Header (Drag Handle)
+            const mainHeader = document.createElement('div');
+            mainHeader.setAttribute('style', `
+                padding: 8px 10px;
+                background-color: #252525;
+                font-weight: bold;
+                font-size: 13px;
+                border-bottom: 1px solid #444;
+                cursor: grab;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-radius: 6px 6px 0 0;
+                flex-shrink: 0;
+            `);
+            mainHeader.innerHTML = `
+                <span>Legend</span>
+                <div style="display:flex; gap:8px; align-items:center;">
+                     <button id="btnLegacyExport" title="Export KML (Active)" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
+                     <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
                 </div>
             `;
+            container.appendChild(mainHeader);
 
-            let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
-            thresholds.forEach(t => {
-                const count = stats.get(t.label) || 0;
-                const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+            // Scrollable Content Area
+            scrollContent = document.createElement('div');
+            scrollContent.id = 'draggable-legend-content';
+            scrollContent.setAttribute('style', 'overflow-y: auto; flex: 1; padding: 5px;');
+            container.appendChild(scrollContent);
 
-                html += `
-                    <div style="display:flex; align-items:center; border-bottom:1px solid #333; padding-bottom:2px;">
-                        <span style="background:${t.color}; width:16px; height:16px; min-width:16px; display:inline-block; margin-right:8px; border-radius:3px; border:1px solid #555;"></span>
-                        <span style="font-size:11px; font-family:sans-serif; color:#888;">${t.label}</span>
-                        <span style="margin-left:auto; font-size:10px; color:#888; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
-                    </div>
-                `;
-            });
-            html += `</div>`;
-            body.innerHTML = html;
+            document.body.appendChild(container);
+
+            if (typeof makeElementDraggable === 'function') {
+                makeElementDraggable(mainHeader, container);
+            }
+
+            // Bind KML Export once
+            const kmlBtn = container.querySelector('#btnLegacyExport');
+            if (kmlBtn) {
+                kmlBtn.onclick = (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const modal = document.getElementById('exportKmlModal');
+                    if (modal) modal.style.display = 'block';
+                };
+            }
+
+        } else {
+            scrollContent = container.querySelector('#draggable-legend-content');
+            if (scrollContent) scrollContent.innerHTML = '';
         }
 
-        container.appendChild(header);
-        container.appendChild(body);
-        document.body.appendChild(container);
+        if (!scrollContent) return;
 
-        // KML Export Logic
-        const kmlBtn = header.querySelector('#kmlExportBtn');
-        if (kmlBtn) {
-            kmlBtn.onclick = (e) => {
-                e.stopPropagation();
-                const renderer = window.mapRenderer;
-                if (!renderer || !renderer.activeLogId || !renderer.activeMetric) {
-                    alert("No active data to export.");
-                    return;
-                }
-                const log = loadedLogs.find(l => l.id === renderer.activeLogId);
-                if (!log) {
-                    alert("Log data not found.");
-                    return;
-                }
-                const kml = renderer.exportToKML(renderer.activeLogId, log.points, renderer.activeMetric);
-                if (!kml) {
-                    alert("Failed to generate KML.");
-                    return;
-                }
-                const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${log.name}_${renderer.activeMetric}.kml`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            };
-        }
+        // Populate Content
+        let hasContent = false;
+        const visibleLogs = window.loadedLogs ? window.loadedLogs.filter(l => l.visible !== false) : [];
 
-        // Sites KML Export Logic
-        const siteKmlBtn = header.querySelector('#siteKmlExportBtn');
-        if (siteKmlBtn) {
-            siteKmlBtn.onclick = (e) => {
-                e.stopPropagation();
-                const renderer = window.mapRenderer;
-                if (!renderer || !renderer.siteIndex || !renderer.siteIndex.all) {
-                    alert("No site database loaded.");
-                    return;
-                }
+        if (visibleLogs.length === 0) {
+            scrollContent.innerHTML = `<div style="padding:10px; color:#888; text-align:center;">No visible layers.</div>`;
+        } else {
+            visibleLogs.forEach(log => {
+                const statsObj = renderer.layerStats ? renderer.layerStats[log.id] : null;
+                if (!statsObj) return;
 
-                // Get Active Points to Filter Sites (Requested Feature: "Export only serving sites")
-                let activePoints = null;
-                if (renderer.activeLogId && window.loadedLogs) {
-                    const activeLog = window.loadedLogs.find(l => l.id === renderer.activeLogId);
-                    if (activeLog && activeLog.points) {
-                        activePoints = activeLog.points;
+                hasContent = true;
+                const metric = statsObj.metric || 'level';
+                const stats = statsObj.activeMetricStats || new Map();
+                const total = statsObj.totalActiveSamples || 0;
+
+                const section = document.createElement('div');
+                section.setAttribute('style', 'margin-bottom: 10px; border: 1px solid #444; border-radius: 4px; overflow: hidden;');
+
+                const sectHeader = document.createElement('div');
+                sectHeader.innerHTML = `<span style="font-weight:bold; color:#eee;">${log.name}</span> <span style="font-size:10px; color:#aaa;">(${metric})</span>`;
+                sectHeader.setAttribute('style', 'background:#333; padding: 5px 8px; font-size:12px; border-bottom:1px solid #444;');
+                section.appendChild(sectHeader);
+
+                const sectBody = document.createElement('div');
+                sectBody.setAttribute('style', 'padding:5px; background:rgba(0,0,0,0.2);');
+
+                if (metric === 'cellId' || metric === 'cid') {
+                    const ids = statsObj.activeMetricIds || [];
+                    const sortedIds = ids.slice().sort((a, b) => (stats.get(b) || 0) - (stats.get(a) || 0));
+                    if (sortedIds.length > 0) {
+                        let html = `<div style="display:flex; flex-direction:column; gap:4px;">`;
+                        sortedIds.slice(0, 50).forEach(id => {
+                            const color = renderer.getDiscreteColor(id);
+                            let name = id;
+                            if (window.mapRenderer && window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
+                                const site = window.mapRenderer.siteIndex.byId.get(id);
+                                if (site) name = site.cellName || site.name || id;
+                            }
+                            const count = stats.get(id) || 0;
+                            html += `<div class="legend-row">
+                                <div class="legend-swatch" style="background:${color};"></div>
+                                <span class="legend-label">${name}</span>
+                                <span class="legend-count">${count}</span>
+                            </div>`;
+                        });
+                        if (sortedIds.length > 50) html += `<div style="font-size:10px; color:#888; text-align:center; padding: 4px;">+ ${sortedIds.length - 50} more...</div>`;
+                        html += `</div>`;
+                        sectBody.innerHTML = html;
                     }
                 }
-
-                const kml = renderer.exportSitesToKML(activePoints);
-                if (!kml) {
-                    alert("Failed to generate Sites KML.");
-                    return;
+                else {
+                    const key = window.getThresholdKey ? window.getThresholdKey(metric) : metric;
+                    const thresholds = (window.themeConfig && window.themeConfig.thresholds[key]) ? window.themeConfig.thresholds[key] : null;
+                    if (thresholds) {
+                        let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
+                        thresholds.forEach((t, idx) => {
+                            const count = stats.get(t.label) || 0;
+                            const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0';
+                            const minVal = t.min !== undefined ? `<input type="number" value="${t.min}" class="legend-input" onchange="window.handleLegendThresholdChange('${key}', ${idx}, 'min', this.value)">` : '-∞';
+                            const maxVal = t.max !== undefined ? `<input type="number" value="${t.max}" class="legend-input" onchange="window.handleLegendThresholdChange('${key}', ${idx}, 'max', this.value)">` : '+∞';
+                            html += `<div class="legend-row">
+                                <input type="color" value="${t.color}" class="legend-color-input" onchange="window.handleLegendColorChange('${key}', ${idx}, this.value)">
+                                <div class="legend-label" style="display:flex; align-items:center; gap:4px;">
+                                    ${minVal} <span style="font-size:9px; color:#666;">to</span> ${maxVal}
+                                </div>
+                                <span class="legend-count">${count} (${pct}%)</span>
+                            </div>`;
+                        });
+                        html += `</div>`;
+                        sectBody.innerHTML = html;
+                    }
                 }
-                const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `Sites_Database_${new Date().getTime()}.kml`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            };
+                section.appendChild(sectBody);
+                scrollContent.appendChild(section);
+            });
         }
-
-
-
-        if (typeof makeElementDraggable === 'function') {
-            makeElementDraggable(header, container);
-        }
-
-        legendControl = { remove: () => container.remove(), addTo: () => { } };
     };
     // Hook updateLegend into UI actions
     // Initial Load (delayed to ensure map exists)
@@ -3406,21 +3573,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 index = log.points.findIndex(p => p.id === point.id);
             }
             // Fallback to Time
-            if (index === -1) {
+            if (index === -1 && point.time) {
                 index = log.points.findIndex(p => p.time === point.time);
             }
-            // Fallback to Coord
+            // Fallback to Coord (Tolerance 1e-5 for roughly 1m)
             if (index === -1) {
-                index = log.points.findIndex(p => Math.abs(p.lat - point.lat) < 1e-6 && Math.abs(p.lng - point.lng) < 1e-6);
+                index = log.points.findIndex(p => Math.abs(p.lat - point.lat) < 0.00001 && Math.abs(p.lng - point.lng) < 0.00001);
             }
+
             if (index !== -1) {
                 window.globalSync(logId, index, source || 'map');
+            } else {
+                // FALLBACK: If sync fails (no index found), still show the popup!
+                // This is critical for robustness with Grid/SHP data.
+                console.warn("[App] Sync Index not found. Showing details only via Fallback.");
+                if (window.updateFloatingInfoPanel) {
+                    window.updateFloatingInfoPanel(point);
+                }
             }
         }
     });
 
     // SPIDER OPTION: Sector Click Listener
     window.addEventListener('site-sector-clicked', (e) => {
+        // GATED: Only run if Spider Mode is ON
+        if (!window.isSpiderMode) return;
+
         const sector = e.detail;
         if (!sector || !window.mapRenderer) return;
 
@@ -3466,8 +3644,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         isMatch = true;
                     }
                     // Support "RNC/CID" format in sector.cellId
-                    else if (sector.cellId.includes('/')) {
-                        const parts = sector.cellId.split('/');
+                    else if (String(sector.cellId).includes('/')) {
+                        const parts = String(sector.cellId).split('/');
                         const cid = parts[parts.length - 1];
                         const rnc = parts.length > 1 ? parts[parts.length - 2] : null;
 
@@ -3710,6 +3888,22 @@ document.addEventListener('DOMContentLoaded', () => {
                         const freq = getVal(['downlink uarfcn', 'dl uarfcn', 'uarfcn', 'freq', 'frequency', 'dl freq']);
                         const band = getVal(['band', 'band name', 'freq band']);
 
+                        // Specific Request: eNodeB ID-Cell ID
+                        const enodebCellIdRaw = getVal(['enodeb id-cell id', 'enodebid-cellid', 'enodebidcellid']);
+
+                        let calculatedEci = null;
+                        if (enodebCellIdRaw) {
+                            const parts = String(enodebCellIdRaw).split('-');
+                            if (parts.length === 2) {
+                                const enb = parseInt(parts[0]);
+                                const cid = parseInt(parts[1]);
+                                if (!isNaN(enb) && !isNaN(cid)) {
+                                    // Standard LTE ECI Calculation: eNodeB * 256 + CellID
+                                    calculatedEci = (enb * 256) + cid;
+                                }
+                            }
+                        }
+
                         let tech = getVal(['tech', 'technology', 'system', 'rat']);
                         const cellName = getVal(['cell name', 'cellname']) || '';
 
@@ -3733,6 +3927,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
 
                         return {
+                            ...row, // Preserve ALL original columns
                             lat, lng, azimuth: isNaN(azimuth) ? 0 : azimuth,
                             name, siteName: name, // Ensure siteName is present
                             cellName,
@@ -3742,7 +3937,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             freq,
                             band,
                             tech,
-                            color
+                            color,
+                            rawEnodebCellId: enodebCellIdRaw,
+                            calculatedEci: calculatedEci
                         };
                     }).filter(s => !isNaN(s.lat) && !isNaN(s.lng));
 
@@ -4312,6 +4509,9 @@ document.addEventListener('DOMContentLoaded', () => {
         container.innerHTML = '';
 
         loadedLogs.forEach(log => {
+            // Exclude SmartCare layers (Excel/SHP) which are in the right sidebar
+            if (log.type === 'excel' || log.type === 'shp') return;
+
             const item = document.createElement('div');
             // REMOVED overflow:hidden to prevent clipping issues. FORCED display:block to override any cached flex rules.
             item.style.cssText = 'background:#252525; margin-bottom:5px; border-radius:4px; border:1px solid #333; min-height: 50px; display: block !important;';
@@ -4825,5 +5025,297 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 });
+
+// --- SITE EDITOR LOGIC ---
+
+window.refreshSites = function () {
+    if (window.mapRenderer && window.mapRenderer.siteData) {
+        // Pass false to prevent auto-zooming/fitting bounds
+        window.mapRenderer.addSiteLayer(window.mapRenderer.siteData, false);
+    }
+};
+
+function ensureSiteEditorDraggable() {
+    const modal = document.getElementById('siteEditorModal');
+    if (!modal) return;
+    const content = modal.querySelector('.modal-content');
+    const header = modal.querySelector('.modal-header');
+
+    // Center it initially (if not already moved)
+    if (!content.dataset.centered) {
+        const w = 400; // rough width
+        const h = 500; // rough height
+        content.style.position = 'absolute';
+        // Simple center based on viewport
+        content.style.left = Math.max(0, (window.innerWidth - w) / 2) + 'px';
+        content.style.top = Math.max(0, (window.innerHeight - h) / 2) + 'px';
+        content.style.margin = '0'; // Remove auto margin if present
+        content.dataset.centered = "true";
+    }
+
+    // Init Drag if not done
+    if (typeof makeElementDraggable === 'function' && !content.dataset.draggable) {
+        makeElementDraggable(header, content);
+        content.dataset.draggable = "true";
+        header.style.cursor = "move"; // Explicitly show move cursor on header
+    }
+}
+
+window.openAddSectorModal = function () {
+    document.getElementById('siteEditorTitle').textContent = "Add New Site";
+    document.getElementById('editOriginalId').value = "";
+    document.getElementById('editOriginalIndex').value = ""; // Clear Index
+
+    // Clear inputs
+    document.getElementById('editSiteName').value = "";
+    document.getElementById('editCellName').value = "";
+    document.getElementById('editCellId').value = "";
+    document.getElementById('editLat').value = "";
+    document.getElementById('editLng').value = "";
+    document.getElementById('editAzimuth').value = "0";
+    document.getElementById('editPci').value = "";
+    document.getElementById('editTech').value = "4G";
+
+    // Hide Delete Button for New Entry
+    document.getElementById('btnDeleteSector').style.display = 'none';
+
+    // Hide Sibling Button
+    const btnSibling = document.getElementById('btnAddSiblingSector');
+    if (btnSibling) btnSibling.style.display = 'none';
+
+    const modal = document.getElementById('siteEditorModal');
+    modal.style.display = 'block';
+
+    ensureSiteEditorDraggable();
+
+    // Auto-center
+    const content = modal.querySelector('.modal-content');
+    requestAnimationFrame(() => {
+        const rect = content.getBoundingClientRect();
+        if (rect.width > 0) {
+            content.style.left = Math.max(0, (window.innerWidth - rect.width) / 2) + 'px';
+            content.style.top = Math.max(0, (window.innerHeight - rect.height) / 2) + 'px';
+        }
+    });
+};
+
+// Index-based editing (Robust for duplicates)
+window.editSectorByIndex = function (index) {
+    if (!window.mapRenderer || !window.mapRenderer.siteData) return;
+    const s = window.mapRenderer.siteData[index];
+    if (!s) {
+        console.error("Sector index out of bounds:", index);
+        return;
+    }
+
+    document.getElementById('siteEditorTitle').textContent = "Edit Sector";
+    document.getElementById('editOriginalId').value = s.cellId || "";
+    document.getElementById('editOriginalIndex').value = index; // Store Index
+
+    // Populate
+    document.getElementById('editSiteName').value = s.siteName || s.name || "";
+    document.getElementById('editCellName').value = s.cellName || ""; // Load Cell Name
+    document.getElementById('editCellId').value = s.cellId || "";
+    document.getElementById('editLat').value = s.lat;
+    document.getElementById('editLng').value = s.lng;
+    document.getElementById('editAzimuth').value = s.azimuth || 0;
+    document.getElementById('editPci').value = s.sc || s.pci || "";
+    document.getElementById('editTech').value = s.tech || "4G";
+
+    document.getElementById('btnDeleteSector').style.display = 'inline-block';
+
+    // Show Sibling Button
+    const btnSibling = document.getElementById('btnAddSiblingSector');
+    if (btnSibling) btnSibling.style.display = 'inline-block';
+
+    const modal = document.getElementById('siteEditorModal');
+    modal.style.display = 'block';
+
+    ensureSiteEditorDraggable();
+
+    // Auto-center
+    const content = modal.querySelector('.modal-content');
+    requestAnimationFrame(() => {
+        const rect = content.getBoundingClientRect();
+        if (rect.width > 0) {
+            content.style.left = Math.max(0, (window.innerWidth - rect.width) / 2) + 'px';
+            content.style.top = Math.max(0, (window.innerHeight - rect.height) / 2) + 'px';
+        }
+    });
+};
+
+window.addSectorToCurrentSite = function () {
+    // Read current context before clearing
+    const currentName = document.getElementById('editSiteName').value;
+    const currentLat = document.getElementById('editLat').value;
+    const currentLng = document.getElementById('editLng').value;
+    const currentTech = document.getElementById('editTech').value;
+
+    // Switch to Add Mode
+    document.getElementById('siteEditorTitle').textContent = "Add Sector to Site";
+    document.getElementById('editOriginalId').value = ""; // Clear
+    document.getElementById('editOriginalIndex').value = ""; // Clear Index
+
+    // Clear Attributes specific to sector
+    document.getElementById('editCellName').value = ""; // Clear Cell Name
+    document.getElementById('editCellId').value = "";
+    document.getElementById('editAzimuth').value = "0";
+    document.getElementById('editPci').value = "";
+
+    // Keep Site-level Attributes
+    document.getElementById('editSiteName').value = currentName;
+    document.getElementById('editLat').value = currentLat;
+    document.getElementById('editLng').value = currentLng;
+    document.getElementById('editTech').value = currentTech;
+
+    // Hide Delete & Sibling Buttons
+    document.getElementById('btnDeleteSector').style.display = 'none';
+    const btnSibling = document.getElementById('btnAddSiblingSector');
+    if (btnSibling) btnSibling.style.display = 'none';
+};
+
+// Deprecated (Legacy Fallback)
+window.editSector = function (cellId) {
+    // Falls back to finding by ID if index not available
+    if (!window.mapRenderer || !window.mapRenderer.siteData) return;
+    const idx = window.mapRenderer.siteData.findIndex(x => String(x.cellId) === String(cellId));
+    if (idx !== -1) {
+        window.editSectorByIndex(idx);
+    } else {
+        alert("Sector not found: " + cellId);
+    }
+};
+
+window.saveSector = function () {
+    if (!window.mapRenderer) return;
+    if (!window.mapRenderer.siteData) window.mapRenderer.siteData = [];
+
+    const originalIndex = document.getElementById('editOriginalIndex').value;
+    const originalId = document.getElementById('editOriginalId').value;
+
+    // Determine if updating or creating
+    let idx = -1;
+    if (originalIndex !== "" && originalIndex !== null) {
+        idx = parseInt(originalIndex, 10);
+    } else if (originalId !== "") {
+        idx = window.mapRenderer.siteData.findIndex(x => String(x.cellId) === String(originalId));
+    }
+
+    const isNew = (idx === -1 && originalId === ""); // Truly new
+    const newAzimuth = parseInt(document.getElementById('editAzimuth').value, 10);
+    const newSiteName = document.getElementById('editSiteName').value;
+
+    const newObj = {
+        siteName: newSiteName,
+        name: newSiteName,
+        cellName: document.getElementById('editCellName').value, // Save Cell Name
+        cellId: document.getElementById('editCellId').value,
+        lat: parseFloat(document.getElementById('editLat').value),
+        lng: parseFloat(document.getElementById('editLng').value),
+        azimuth: newAzimuth,
+        sc: parseInt(document.getElementById('editPci').value, 10),
+        pci: parseInt(document.getElementById('editPci').value, 10),
+        tech: document.getElementById('editTech').value
+    };
+
+    if (isNaN(newObj.lat) || isNaN(newObj.lng)) {
+        alert("Valid Latitude and Longitude are required.");
+        return;
+    }
+
+    if (isNew) {
+        // Add New
+        window.mapRenderer.siteData.push(newObj);
+    } else {
+        // Update Existing
+        if (idx !== -1 && window.mapRenderer.siteData[idx]) {
+            const oldS = window.mapRenderer.siteData[idx];
+            const oldAzimuth = oldS.azimuth;
+            const oldSiteName = oldS.siteName || oldS.name;
+
+            // 1. Update the target sector
+            window.mapRenderer.siteData[idx] = { ...window.mapRenderer.siteData[idx], ...newObj };
+
+            // 2. Synchronize Azimuth if changed
+            if (oldAzimuth !== newAzimuth && !isNaN(oldAzimuth) && !isNaN(newAzimuth)) {
+                // Find others with same site name and SAME OLD AZIMUTH
+                window.mapRenderer.siteData.forEach((s, subIdx) => {
+                    const sName = s.siteName || s.name;
+                    // Loose check for Site Name match
+                    if (String(sName) === String(oldSiteName) && subIdx !== idx) {
+                        if (s.azimuth === oldAzimuth) {
+                            s.azimuth = newAzimuth; // Sync
+                        }
+                    }
+                });
+            }
+
+        } else {
+            // Fallback push? No, if we can't find it, we shouldn't create a dupe unless requested.
+            console.error("Could not find site to update");
+        }
+    }
+
+    window.refreshSites();
+    document.getElementById('siteEditorModal').style.display = 'none';
+
+    // Auto-Zoom if New Site
+    if (isNew) {
+        window.map.setView([newObj.lat, newObj.lng], 18);
+    }
+
+    // Sync to Backend
+    window.syncToBackend(window.mapRenderer.siteData);
+};
+
+window.deleteSectorCurrent = function () {
+    const originalIndex = document.getElementById('editOriginalIndex').value;
+    const originalId = document.getElementById('editOriginalId').value;
+
+    if (!confirm("Are you sure you want to delete this sector?")) return;
+
+    if (window.mapRenderer && window.mapRenderer.siteData) {
+        let idx = -1;
+        if (originalIndex !== "") {
+            idx = parseInt(originalIndex, 10);
+        } else if (originalId) {
+            idx = window.mapRenderer.siteData.findIndex(x => String(x.cellId) === String(originalId));
+        }
+
+        if (idx !== -1) {
+            window.mapRenderer.siteData.splice(idx, 1);
+            window.refreshSites();
+            document.getElementById('siteEditorModal').style.display = 'none';
+            // Sync to Backend
+            window.syncToBackend(window.mapRenderer.siteData);
+        }
+    }
+};
+
+window.syncToBackend = function (siteData) {
+    if (!siteData) return;
+
+    // Show saving feedback
+    const status = document.getElementById('fileStatus');
+    if (status) status.textContent = "Saving to Excel...";
+
+    fetch('/save_sites', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(siteData)
+    })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Save success:', data);
+            if (status) status.textContent = "Changes saved to sites_updated.xlsx";
+            setTimeout(() => { if (status) status.textContent = ""; }, 3000);
+        })
+        .catch((error) => {
+            console.error('Save error:', error);
+            if (status) status.textContent = "Error saving to Excel (Check console)";
+        });
+};
 
 

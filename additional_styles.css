@@ -24,3 +24,16 @@
     transform-origin: center;
     transform-box: fill-box;
 }
+
+/* High Performance Sector Style (Removed drop-shadow for speed) */
+.sector-polygon {
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    transition: stroke-width 0.1s;
+}
+
+.sector-polygon:hover {
+    stroke: #ffffff;
+    stroke-width: 3px;
+    cursor: pointer;
+}

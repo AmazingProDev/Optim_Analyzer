@@ -54,31 +54,37 @@
         <header id="mainHeader" class="main-header">
             <div class="logo">Log Cracker Pro</div>
             <div class="controls">
-                <input type="file" id="fileInput" accept=".nmf, .nmfs, .csv, .txt, .xlsx, .xls">
-                <label for="fileInput" class="btn">Load Log (NMF/CSV)</label>
+                <input type="file" id="fileInput" accept=".nmf, .nmfs, .csv, .txt, .xlsx, .xls" class="hidden-input">
+                <label for="fileInput" class="btn hidden-input">Load Log (NMF/CSV)</label>
 
-                <input type="file" id="siteInput" accept=".xlsx, .xls, .csv">
-                <label for="siteInput" class="btn btn-blue">Import Sites</label>
+                <input type="file" id="siteInput" accept=".xlsx, .xls, .csv" class="hidden-input">
+                <label for="siteInput" class="btn btn-blue hidden-input">Import Sites</label>
+
+                <button id="importBtn" class="btn btn-purple">Import</button>
+
+                <button id="btnAddSector" class="btn btn-blue ml-2" onclick="window.openAddSectorModal()">Add
+                    Site</button>
 
                 <input type="file" id="shpInput" accept=".shp, .zip, .dbf, .shx, .prj, .xlsx, .xls" multiple
-                    style="display:none;">
-                <label for="shpInput" class="btn btn-purple">Import SmartCare (SHP/Excel)</label>
+                    class="hidden-input">
+                <label for="shpInput" class="btn btn-purple hidden-input">SmartCare data</label>
+
+                <button id="spiderSmartCareBtn" class="btn btn-red" title="Draw spider lines for SmartCare grid">🕸️
+                    Spider: OFF</button>
 
                 <button id="siteSettingsBtn" class="btn btn-gray">⚙️ Sites</button>
-                <button id="exportKmlBtn" class="btn btn-green" title="Export current view to KML">🌍
-                    KML</button>
-                <button id="exportSitesKmlBtn" class="btn btn-green ml-2"
-                    title="Export all sites to KML (Uniform Color)">📡 KML</button>
+                <button id="exportKmlBtn" class="btn btn-green" title="Export to KML">🌍
+                    Export KML</button>
                 <button id="themeSettingsBtn" class="btn btn-gray">🎨 Theme</button>
-                <button id="aiAnalyzeBtn" class="btn btn-gradient">
-                    <span>✨</span> AI Analyze
-                </button>
+
 
                 <div class="search-container">
                     <input type="text" id="searchInput" placeholder="Search (Lat Lng, Site, CI, PCI)"
                         class="search-input">
                     <button id="searchBtn" class="search-btn-icon">🔍</button>
                     <button id="addPointBtn" class="search-btn-icon add-point-btn" title="Add User Point">📍</button>
+                    <button id="rulerBtn" class="search-btn-icon ruler-btn"
+                        title="Ruler Tool (Distance/Bearing)">📏</button>
                 </div>
 
                 <span id="fileStatus">No file loaded</span>
@@ -89,25 +95,26 @@
                 <h4 class="settings-header">Site Settings</h4>
 
                 <div class="setting-item">
-                    <label class="setting-label">Range (m): <span id="valRange">100</span></label>
+                    <label class="setting-label" for="rangeSiteDist">Range (m): <span id="valRange">100</span></label>
                     <input type="range" id="rangeSiteDist" min="50" max="300" step="50" value="100"
                         class="setting-input" aria-label="Site Range">
                 </div>
 
                 <div class="setting-item">
-                    <label class="setting-label">Beamwidth (°): <span id="valBeam">35</span></label>
+                    <label class="setting-label" for="rangeIconBeam">Beamwidth (°): <span id="valBeam">35</span></label>
                     <input type="range" id="rangeIconBeam" min="10" max="180" step="5" value="35" class="setting-input"
                         aria-label="Icon Beamwidth">
                 </div>
 
                 <div class="setting-item">
-                    <label class="setting-label">Opacity: <span id="valOpacity">0.6</span></label>
+                    <label class="setting-label" for="rangeSiteOpacity">Opacity: <span
+                            id="valOpacity">0.6</span></label>
                     <input type="range" id="rangeSiteOpacity" min="0.1" max="1" step="0.1" value="0.6"
                         class="setting-input" aria-label="Site Opacity">
                 </div>
 
                 <div class="setting-item">
-                    <label class="setting-label">Color By</label>
+                    <label class="setting-label" for="siteColorBy">Color By</label>
                     <select id="siteColorBy" class="setting-input site-color-mode" aria-label="Site Color Mode">
                         <option value="tech">Technology</option>
                         <option value="identity">Cell Identity (RNC/CID)</option>
@@ -115,11 +122,12 @@
                 </div>
 
                 <div class="setting-item">
-                    <label class="setting-label">Color Override</label>
+                    <label class="setting-label" for="pickerSiteColor">Color Override</label>
                     <div class="site-color-picker-container">
                         <input type="color" id="pickerSiteColor" value="#3b82f6" class="site-color-picker"
                             aria-label="Site Color Picker">
-                        <label class="site-checkbox-label"><input type="checkbox" id="checkSiteColorOverride">
+                        <label class="site-checkbox-label" for="checkSiteColorOverride"><input type="checkbox"
+                                id="checkSiteColorOverride">
                             Apply</label>
                     </div>
                 </div>
@@ -127,9 +135,11 @@
                 <div class="setting-item">
                     <label class="setting-label">Labels</label>
                     <div class="site-names-container">
-                        <label class="site-checkbox-label"><input type="checkbox" id="checkShowSiteNames"> Show
+                        <label class="site-checkbox-label" for="checkShowSiteNames"><input type="checkbox"
+                                id="checkShowSiteNames"> Show
                             Site Names</label>
-                        <label class="site-checkbox-label"><input type="checkbox" id="checkShowCellNames"> Show
+                        <label class="site-checkbox-label" for="checkShowCellNames"><input type="checkbox"
+                                id="checkShowCellNames"> Show
                             Cell Names</label>
                     </div>
                 </div>
@@ -204,6 +214,10 @@
                         </div>
                     </div>
                 </div>
+                <div id="distanceDisplay" class="distance-display"></div>
+            </div>
+
+            <div id="mapControls">
             </div>
 
             <div id="sidebar" class="hidden">
@@ -299,94 +313,8 @@
         </div>
     </div>
 
-    <!-- AI Analysis Modal -->
-    <!-- AI Analysis Modal -->
-    <div id="aiModal" class="modal">
-        <div class="modal-content ai-modal-content">
-            <div class="modal-header ai-modal-header">
-                <h3 class="ai-modal-title">
-                    <span class="ai-icon-large">✨</span> AI Drive Test Analyst
-                </h3>
-                <span class="close ai-close" onclick="closeAIModal()">&times;</span>
-            </div>
 
-            <div class="modal-body ai-modal-body">
 
-                <!-- API Key Section -->
-                <div id="aiApiKeySection" class="ai-section">
-
-                    <!-- Provider Selector -->
-                    <div class="ai-provider-row">
-                        <label class="ai-label-small">AI Provider:</label>
-                        <div class="ai-provider-options">
-                            <label class="ai-radio-label">
-                                <input type="radio" name="aiProvider" value="gemini" checked
-                                    onchange="toggleAIProvider()" class="ai-radio-input">
-                                <span class="ai-radio-text">Google Gemini</span>
-                            </label>
-                            <label class="ai-radio-label">
-                                <input type="radio" name="aiProvider" value="openai" onchange="toggleAIProvider()"
-                                    class="ai-radio-input">
-                                <span class="ai-radio-text">OpenAI ChatGPT</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <p class="ai-subtext">Enter your API Key to enable
-                        analysis. Keys are stored locally.</p>
-
-                    <div class="ai-model-select-wrapper">
-                        <label for="geminiModelSelect" class="ai-model-select-label">Model:</label>
-                        <select id="geminiModelSelect" class="ai-model-select">
-                            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (New)</option>
-                            <option value="gemini-flash-latest">Gemini Flash Latest</option>
-                            <option value="gemini-pro-latest">Gemini Pro Latest</option>
-                            <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash (Latest)</option>
-                            <option value="gemini-1.5-flash-001">Gemini 1.5 Flash (v001)</option>
-                            <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro (Latest)</option>
-                            <option value="gemini-pro">Gemini 1.0 Pro</option>
-                        </select>
-                    </div>
-
-                    <!-- Gemini Key Input -->
-                    <div id="geminiKeyContainer" class="ai-key-container">
-                        <input type="password" id="geminiApiKey" placeholder="Paste Gemini API Key (AIza...)"
-                            class="ai-key-input">
-                        <button onclick="window.checkGeminiModels()" class="ai-check-btn">Check
-                            Models</button>
-                    </div>
-
-                    <!-- OpenAI Key Input (Hidden by default) -->
-                    <div id="openaiKeyContainer" class="ai-key-container-hidden">
-                        <input type="password" id="openaiApiKey" placeholder="Paste OpenAI API Key (sk-...)"
-                            class="ai-key-input">
-                    </div>
-                    <div id="aiModelDebugLog" class="ai-debug-log">
-                    </div>
-                </div>
-
-                <!-- Loading State -->
-                <div id="aiLoading" class="ai-loading">
-                    <div class="ai-spinner"></div>
-                    <p class="ai-loading-text">Analyzing log data...</p>
-                </div>
-
-                <!-- Result Content -->
-                <div id="aiContent" class="ai-content-wrapper">
-                    <div class="ai-placeholder-wrapper">
-                        <p>Click "Analyze" to generate insights from the current log.</p>
-                        <button onclick="window.runAIAnalysis()" id="runAnalysisBtn" class="ai-analyze-btn">
-                            Generate Analysis
-                        </button>
-                    </div>
-                </div>
-
-            </div> <!-- End modal-body -->
-        </div> <!-- End modal-content -->
-    </div> <!-- End aiModal -->
-
-    <!-- Context Menu -->
-    <!-- Context Menu -->
     <!-- Context Menu -->
     <div id="metricContextMenu" class="metric-context-menu">
         <div class="menu-item" onclick="window.handleContextAction('map')">Open in Map</div>
@@ -411,10 +339,60 @@
         </div>
     </div>
 
-    <script src="map_renderer.js?v=63"></script>
+    <!-- SmartCare Sidebar (Right Side) -->
+    <aside id="smartcare-sidebar">
+        <div class="sidebar-header">
+            <h3>SmartCare Layers</h3>
+            <!-- Minimize Button -->
+            <button id="toggleSmartCareSidebar" class="sidebar-toggle-btn" title="Toggle Sidebar">_</button>
+        </div>
+        <div id="smartcare-layer-list">
+            <!-- Items added dynamically -->
+        </div>
+    </aside>
+
+    <script src="map_renderer.js?v=64"></script>
     <script src="parser.js?v=43"></script>
-    <script src="theme_config.js?v=2"></script>
-    <script src="app.js?v=v123"></script>
+    <!-- KML Export Choice Modal -->
+    <div id="exportKmlModal" class="modal modal-centered">
+        <div class="modal-content modal-small-centered">
+            <div class="modal-header">
+                <h3>Export KML</h3>
+                <span class="close"
+                    onclick="document.getElementById('exportKmlModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p class="modal-subtext">Choose what you want to export:</p>
+                <div class="modal-btn-group">
+                    <button id="btnExportCurrentView" class="btn btn-blue btn-flex-1">Current View</button>
+                    <button id="btnExportAllSites" class="btn btn-green btn-flex-1">All Sites</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Choice Modal -->
+    <div id="importModal" class="modal modal-centered">
+        <div class="modal-content modal-small-centered">
+            <div class="modal-header">
+                <h3>Import Data</h3>
+                <span class="close" onclick="document.getElementById('importModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p class="modal-subtext">Choose what you want to import:</p>
+                <div class="modal-btn-group">
+                    <button id="btnImportSites" class="btn btn-blue btn-flex-1">Sites</button>
+                    <button id="btnImportSmartCare" class="btn btn-purple btn-flex-1">SmartCare Data</button>
+                    <button id="btnImportLog" class="btn btn-flex-1 btn-dark-gray">Log
+                        (NMF/CSV)</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="theme_config.js"></script>
+    <script src="app.js?v=v124"></script>
     <!-- User Point Modal -->
     <div id="userPointModal" class="modal">
         <div class="modal-content user-point-modal-content">
@@ -425,21 +403,80 @@
             </div>
             <div class="modal-body user-point-modal-body">
                 <div class="up-input-group">
-                    <label class="up-label">Name</label>
+                    <label class="up-label" for="upName">Name</label>
                     <input type="text" id="upName" placeholder="Point Name" class="up-input">
                 </div>
                 <div class="up-input-row">
                     <div class="up-input-item">
-                        <label class="up-label">Latitude</label>
+                        <label class="up-label" for="upLat">Latitude</label>
                         <input type="number" id="upLat" placeholder="33.xxx" step="any" class="up-input">
                     </div>
                     <div class="up-input-item">
-                        <label class="up-label">Longitude</label>
+                        <label class="up-label" for="upLng">Longitude</label>
                         <input type="number" id="upLng" placeholder="-7.xxx" step="any" class="up-input">
                     </div>
                 </div>
                 <div class="up-footer">
                     <button id="submitUserPoint" class="btn up-submit-btn">Add to Map</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Site Editor Modal -->
+    <div id="siteEditorModal" class="modal">
+        <div class="modal-content site-editor-modal-content">
+            <div class="modal-header site-editor-modal-header">
+                <h3 id="siteEditorTitle">Edit Sector</h3>
+                <span class="close"
+                    onclick="document.getElementById('siteEditorModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body site-editor-body">
+                <input type="hidden" id="editOriginalId">
+                <input type="hidden" id="editOriginalIndex">
+                <div class="form-group">
+                    <label for="editSiteName">Site Name</label>
+                    <input type="text" id="editSiteName" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label for="editCellName">Cell Name</label>
+                    <input type="text" id="editCellName" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label for="editCellId">Cell ID</label>
+                    <input type="text" id="editCellId" class="form-control">
+                </div>
+                <div class="form-group half">
+                    <label for="editLat">Latitude</label>
+                    <input type="number" step="any" id="editLat" class="form-control">
+                </div>
+                <div class="form-group half">
+                    <label for="editLng">Longitude</label>
+                    <input type="number" step="any" id="editLng" class="form-control">
+                </div>
+                <div class="form-group half">
+                    <label for="editAzimuth">Azimuth</label>
+                    <input type="number" id="editAzimuth" class="form-control">
+                </div>
+                <div class="form-group half">
+                    <label for="editPci">PCI/SC</label>
+                    <input type="number" id="editPci" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label for="editTech">Technology</label>
+                    <select id="editTech" class="form-control">
+                        <option value="4G">4G / LTE</option>
+                        <option value="3G">3G / UMTS</option>
+                        <option value="2G">2G / GSM</option>
+                        <option value="5G">5G / NR</option>
+                    </select>
+                </div>
+
+                <div class="editor-footer">
+                    <button class="btn btn-red" id="btnDeleteSector"
+                        onclick="window.deleteSectorCurrent()">Delete</button>
+                    <button class="btn btn-blue mr-2" id="btnAddSiblingSector"
+                        onclick="window.addSectorToCurrentSite()">+ Add Sector Here</button>
+                    <button class="btn btn-green" onclick="window.saveSector()">Save</button>
                 </div>
             </div>
         </div>

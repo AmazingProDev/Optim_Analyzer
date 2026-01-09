@@ -49,11 +49,166 @@ class MapRenderer {
 
         // Site Labels Layer (separate for performance)
         this.siteLabelsLayer = L.layerGroup();
+
+        // Custom Pane for Connections (Lines) to ensure they are ON TOP of filled polygons
+        this.map.createPane('connectionsPane');
+        this.map.getPane('connectionsPane').style.zIndex = 620; // Lower than sites/points
+        this.map.getPane('connectionsPane').style.pointerEvents = 'none';
+
+        // Define Custom Renderers
+        this.connectionsRenderer = L.canvas({ pane: 'connectionsPane' });
+
+        // CUSTOM PANE FOR SITES & LOG POINTS (Interactive Top Layer)
+        this.map.createPane('sitesPane');
+        this.map.getPane('sitesPane').style.zIndex = 650;
+        this.sitesRenderer = L.canvas({ pane: 'sitesPane', tolerance: 5 });
+
+
+
         this.connectionsLayer = L.layerGroup().addTo(this.map); // Layer for lines
         this.customDiscreteColors = {}; // User-overridden colors (ID -> Color)
+        this.siteData = []; // Initialize empty site data
 
-        // Optim: Only show labels on high zoom
-        this.map.on('zoomend', () => this.updateLabelVisibility());
+        // Optim: Only show labels on high zoom with debounce to prevent UI freeze
+        let zoomTimeout;
+        this.map.on('zoomend', () => {
+            clearTimeout(zoomTimeout);
+            zoomTimeout = setTimeout(() => {
+                this.updateLabelVisibility();
+                if (this.siteData && this.siteData.length > 0) {
+                    this.renderSites(false); // Refresh
+                }
+            }, 300); // Wait for zoom to settle
+        });
+
+        // Ruler State
+        this.rulerActive = false;
+        this.rulerPoints = [];
+        this.rulerLayer = L.layerGroup().addTo(this.map);
+        this.rulerTempLine = null;
+        this.rulerTooltip = null;
+
+        this.layerStats = {}; // Stores stats per layer ID { activeMetricIds, activeMetricStats, totalActiveSamples }
+
+        this.initRuler();
+    }
+
+    initRuler() {
+        this.map.on('click', (e) => {
+            if (!this.rulerActive) return;
+            this.handleRulerClick(e.latlng);
+        });
+
+        this.map.on('mousemove', (e) => {
+            if (!this.rulerActive || this.rulerPoints.length === 0) return;
+            this.handleRulerMove(e.latlng);
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.rulerActive) {
+                this.toggleRulerMode(); // Cancel on Esc
+            }
+        });
+    }
+
+    toggleRulerMode() {
+        this.rulerActive = !this.rulerActive;
+        const btn = document.getElementById('rulerBtn');
+
+        if (btn) btn.classList.toggle('active', this.rulerActive);
+
+        if (this.rulerActive) {
+            this.map.getContainer().style.cursor = 'crosshair';
+        } else {
+            this.map.getContainer().style.cursor = '';
+            this.clearRuler();
+        }
+    }
+
+    handleRulerClick(latlng) {
+        if (this.rulerPoints.length >= 2) {
+            this.clearRuler();
+        }
+
+        this.rulerPoints.push(latlng);
+
+        // Add start/end marker
+        L.circleMarker(latlng, {
+            radius: 5,
+            color: '#ef4444',
+            fillColor: '#fff',
+            fillOpacity: 1,
+            weight: 2,
+            pane: 'markerPane'
+        }).addTo(this.rulerLayer);
+
+        if (this.rulerPoints.length === 2) {
+            this.finishRuler();
+        }
+    }
+
+    handleRulerMove(latlng) {
+        const start = this.rulerPoints[0];
+
+        // Clear previous temp layers
+        if (this.rulerTempLine) this.rulerLayer.removeLayer(this.rulerTempLine);
+        if (this.rulerHaloLine) this.rulerLayer.removeLayer(this.rulerHaloLine);
+
+        // 1. Halo Line (for visibility)
+        this.rulerHaloLine = L.polyline([start, latlng], {
+            className: 'ruler-line-halo',
+            interactive: false
+        }).addTo(this.rulerLayer);
+
+        // 2. Dash Line
+        this.rulerTempLine = L.polyline([start, latlng], {
+            className: 'ruler-line',
+            interactive: false
+        }).addTo(this.rulerLayer);
+
+        // 3. Calculation
+        const dist = start.distanceTo(latlng);
+        const bearing = this.calculateBearing(start.lat, start.lng, latlng.lat, latlng.lng);
+
+        const distStr = dist > 1000 ? (dist / 1000).toFixed(3) + ' km' : dist.toFixed(1) + ' m';
+        const dirStr = bearing.toFixed(1) + '°';
+
+        // 4. Update Tooltip (Follow cursor)
+        if (!this.rulerTooltip) {
+            this.rulerTooltip = L.tooltip({
+                permanent: true,
+                direction: 'right',
+                className: 'ruler-tooltip',
+                offset: [15, 0]
+            });
+        }
+        this.rulerTooltip.setLatLng(latlng).setContent(`${distStr} | ${dirStr}`).addTo(this.rulerLayer);
+    }
+
+    finishRuler() {
+        // Logic handled in click and move, just stay until escaped or re-clicked
+    }
+
+    clearRuler() {
+        this.rulerPoints = [];
+        this.rulerLayer.clearLayers();
+        this.rulerTempLine = null;
+        this.rulerHaloLine = null;
+        this.rulerTooltip = null;
+    }
+
+    calculateBearing(lat1, lon1, lat2, lon2) {
+        const rad = Math.PI / 180;
+        const φ1 = lat1 * rad;
+        const φ2 = lat2 * rad;
+        const Δλ = (lon2 - lon1) * rad;
+
+        const y = Math.sin(Δλ) * Math.cos(φ2);
+        const x = Math.cos(φ1) * Math.sin(φ2) -
+            Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+        let θ = Math.atan2(y, x);
+        const brng = (θ * 180 / Math.PI + 360) % 360;
+        return brng;
     }
 
     updateLabelVisibility() {
@@ -193,14 +348,28 @@ class MapRenderer {
         return palette[index];
     }
 
-    resolveServingName(p) {
+    getServingCell(p) {
         if (!this.siteData) return null;
-        const getName = (s) => s.cellName || s.name || s.siteName;
 
         const pci = p.sc;
         const lac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
         const freq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
         const cellId = p.cellId;
+
+        // 0. PRIORITY: Strict eNodeB ID-Cell ID Matching (User Request)
+        if (cellId) {
+            // Case A: Metric is Numeric ECI (standard) -> Match against calculatedEci
+            // Standard ECI is usually > 65535
+            if (typeof cellId === 'number' && cellId > 65535) {
+                const s = this.siteData.find(x => x.calculatedEci === cellId);
+                if (s) return s;
+            }
+
+            // Case B: Direct String Match (if log provides raw string like "12345-12")
+            // or if we synthesize ECI from log but fallback to string
+            const s = this.siteData.find(x => x.rawEnodebCellId == cellId);
+            if (s) return s;
+        }
 
         // 1. User Rule: Strict RF Params (SC + LAC + Freq)
         if (pci && lac && freq) {
@@ -210,27 +379,34 @@ class MapRenderer {
                 const freqMatch = (x.freq == freq || Math.abs(x.freq - freq) < 1);
                 return pciMatch && lacMatch && freqMatch;
             });
-            if (s) return getName(s);
+            if (s) return s;
         }
 
         // 2. CellID + LAC
         if (cellId && lac) {
             const s = this.siteData.find(x => x.cellId == cellId && x.lac == lac);
-            if (s) return getName(s);
+            if (s) return s;
         }
 
         // 3. CellID Only
         if (cellId) {
             const s = this.siteData.find(x => x.cellId == cellId);
-            if (s) return getName(s);
+            if (s) return s;
         }
 
         return null;
     }
 
-    addLogLayer(id, points, metric = 'level') {
+    resolveServingName(p) {
+        const s = this.getServingCell(p);
+        if (s) return s.cellName || s.name || s.siteName;
+        return null;
+    }
+
+    addLogLayer(id, points, metric = 'level', preventZoom = false) {
         this.activeLogId = id;
         this.activeMetric = metric;
+        this.preventZoom = preventZoom;
         // Create a new layer group for this log
         const layerGroup = L.layerGroup();
 
@@ -313,27 +489,34 @@ class MapRenderer {
                     // CHECK FOR POLYGON GEOMETRY (Imported SHP Grid)
                     if (p.geometry && (p.geometry.type === 'Polygon' || p.geometry.type === 'MultiPolygon')) {
                         layer = L.geoJSON(p.geometry, {
+                            pane: 'sitesPane',
+                            renderer: this.sitesRenderer,
                             style: {
                                 fillColor: color,
-                                color: "#000",
-                                weight: 1,
-                                opacity: 0.5,
-                                fillOpacity: 0.8
+                                color: "transparent",
+                                weight: 0,
+                                opacity: 0,
+                                fillOpacity: 0.8,
+                                interactive: true
                             }
                         }).addTo(layerGroup);
                     } else {
                         // Default Point Rendering
                         layer = L.circleMarker([p.lat, p.lng], {
-                            radius: 5,
+                            radius: 4,
                             fillColor: color,
                             color: "#000",
                             weight: 1,
                             opacity: 1,
-                            fillOpacity: 0.8
+                            fillOpacity: 0.8,
+                            pane: 'sitesPane',
+                            renderer: this.sitesRenderer,
+                            interactive: true
                         }).addTo(layerGroup);
                     }
 
-                    layer.on('click', () => {
+                    layer.on('click', (e) => {
+                        L.DomEvent.stopPropagation(e);
                         window.dispatchEvent(new CustomEvent('map-point-clicked', {
                             detail: { logId: id, point: p }
                         }));
@@ -347,26 +530,42 @@ class MapRenderer {
                 setTimeout(processChunk, 0);
             } else {
                 // Done
-                if (validLocations.length > 0) {
+                if (!this.preventZoom && validLocations.length > 0) {
                     this.map.fitBounds(validLocations);
                 }
 
                 // Finalize Legend IDs if applicable
+                const statsObj = {
+                    metric,
+                    activeMetricIds: null,
+                    activeMetricStats: idsCollection,
+                    totalActiveSamples: totalValidsForMetric
+                };
+
                 if (metric === 'cellId' || metric === 'cid') {
-                    this.activeMetricIds = Array.from(idsCollection.keys()).sort();
-                    this.activeMetricStats = idsCollection; // Map of ID -> Count
+                    this.activeMetricIds = Array.from(idsCollection.keys()).sort(); // Legacy global
+                    this.activeMetricStats = idsCollection;
                     this.totalActiveSamples = totalValidsForMetric;
+
+                    statsObj.activeMetricIds = Array.from(idsCollection.keys()).sort();
+
                     // Re-render sites to match colors if needed
                     this.renderSites(false);
                 } else {
                     // For thematic metrics (level, quality), we also expose stats
-                    this.activeMetricStats = idsCollection; // Map of Label -> Count
+                    this.activeMetricStats = idsCollection;
                     this.totalActiveSamples = totalValidsForMetric;
-                    this.activeMetricIds = null; // Signal this is thematic
+                    this.activeMetricIds = null;
                 }
+
+                // Store stats for this layer
+                this.layerStats[id] = statsObj;
 
                 // Signal that rendering and ID collection is complete
                 window.dispatchEvent(new CustomEvent('layer-metric-ready', { detail: { metric } }));
+
+                // Ensure sites are still on top and visible
+                if (window.refreshSites) window.refreshSites();
             }
         };
 
@@ -411,6 +610,33 @@ class MapRenderer {
         }
     }
 
+    clearLayer(id) {
+        if (this.logLayers[id]) {
+            this.map.removeLayer(this.logLayers[id]);
+            delete this.logLayers[id];
+
+            // Clear stats
+            if (this.layerStats && this.layerStats[id]) {
+                delete this.layerStats[id];
+            }
+
+            if (this.activeLogId === id) {
+                this.activeLogId = null;
+            }
+        }
+    }
+
+    renderLog(log, metric = 'level', preventZoom = false) {
+        // If it already exists, maybe clear first to ensure fresh render?
+        this.clearLayer(log.id);
+
+        if (log.points && log.points.length > 0) {
+            // Use existing point rendering logic
+            // Note: addLogLayer creates the group and adds it to map
+            this.addLogLayer(log.id, log.points, metric, preventZoom);
+        }
+    }
+
     updateLayerMetric(id, points, metric) {
         console.log(`[MapRenderer] updateLayerMetric: id=${id}, points=${points ? points.length : 0}, metric=${metric}`);
 
@@ -430,7 +656,7 @@ class MapRenderer {
         }
 
         this.removeLogLayer(id);
-        this.addLogLayer(id, points, metric);
+        this.addLogLayer(id, points, metric, true);
     }
 
     removeLogLayer(id) {
@@ -524,7 +750,7 @@ class MapRenderer {
         }
     }
 
-    addSiteLayer(sectors) {
+    addSiteLayer(sectors, fitBounds = true) {
         this.siteData = sectors; // Store original data
 
         // Build Index for Performance
@@ -559,7 +785,7 @@ class MapRenderer {
             }
         });
 
-        this.renderSites(true); // Fit bounds on initial load
+        this.renderSites(fitBounds); // Fit bounds only if requested
     }
 
     updateSiteSettings(settings) {
@@ -610,8 +836,32 @@ class MapRenderer {
         const renderedSiteLabels = new Set();
         this.sitePolygons = {};
 
-        this.siteData.forEach(s => {
+        // Calculate LOD based on Zoom
+        const zoom = this.map.getZoom();
+        const showDetailedSectors = zoom >= 12; // Skip sectors at very low zoom for performance
+
+        const bounds = this.map.getBounds().pad(0.2); // Only draw what's visible (plus buffer)
+
+        this.siteData.forEach((s, index) => {
             if (s.lat === undefined || s.lng === undefined || isNaN(s.lat) || isNaN(s.lng)) return;
+
+            // PERFORMANCE: Skip if outside visible area
+            if (!bounds.contains([s.lat, s.lng])) return;
+
+            if (!showDetailedSectors) {
+                // Draw simple dot at low zoom
+                L.circleMarker([s.lat, s.lng], {
+                    radius: 3,
+                    color: this.getSiteColor(s),
+                    fillOpacity: 0.8,
+                    pane: 'sitesPane',
+                    interactive: true
+                }).addTo(this.sitesLayer);
+                return;
+            }
+
+            // SECTOR LOGIC: Root at CGPS
+            const center = [s.lat, s.lng];
 
             // COLOR LOGIC FOR SELECTIVE HIGHLIGHT
             let color;
@@ -619,10 +869,10 @@ class MapRenderer {
             let finalFillOpacity = opacity * 0.5;
 
             if (activeCellIds) {
-                // HIGHLIGHT MODE: Default is dim
-                color = '#444';
-                finalOpacity = 0.2;
-                finalFillOpacity = 0.05;
+                // HIGHLIGHT MODE: Default is dim but visible
+                color = '#555';
+                finalOpacity = 0.4;
+                finalFillOpacity = 0.15;
 
                 let idStr = s.cellId;
                 if (s.rnc && s.cid) idStr = `${s.rnc}/${s.cid}`;
@@ -640,32 +890,42 @@ class MapRenderer {
 
             // Calculations
             const azimuth = s.azimuth || 0;
-            const center = [s.lat, s.lng];
 
-            const getPoint = (lat, lng, bearing, dist) => {
+            const getPoint = (originLat, originLng, bearing, dist) => {
                 const rad = Math.PI / 180;
-                const latRad = lat * rad;
+                const latRad = originLat * rad;
                 const bearRad = bearing * rad;
                 const dy = Math.cos(bearRad) * dist;
                 const dx = Math.sin(bearRad) * dist;
                 const dLat = dy / 111111;
                 const dLng = dx / (111111 * Math.cos(latRad));
-                return [lat + dLat, lng + dLng];
+                return [originLat + dLat, originLng + dLng];
             };
 
             const p1 = getPoint(s.lat, s.lng, azimuth - beam / 2, range);
             const p2 = getPoint(s.lat, s.lng, azimuth + beam / 2, range);
 
             const polygon = L.polygon([center, p1, p2], {
-                color: '#333',
-                weight: 1,
+                color: '#ffffff', // White border for panel look
+                weight: 1.5,      // Clean stroke
                 fillColor: color,
                 fillOpacity: finalFillOpacity,
-                opacity: finalOpacity
+                opacity: 0.9,     // Better visibility
+                className: 'sector-polygon', // CSS for depth/metallic feel
+                interactive: true,
+                pane: 'sitesPane', // Force to use our high Z-index pane
+                renderer: this.sitesRenderer // Use SVG renderer for click-through support
             }).addTo(this.sitesLayer);
 
             if (s.cellId) {
                 this.sitePolygons[s.cellId] = polygon;
+            }
+            // Enhance Indexing for Unique IDs
+            if (s.rawEnodebCellId) {
+                this.sitePolygons[s.rawEnodebCellId] = polygon;
+            }
+            if (s.calculatedEci) {
+                this.sitePolygons[s.calculatedEci] = polygon;
             }
 
             // Labels
@@ -688,7 +948,8 @@ class MapRenderer {
                     Cell: ${s.cellId || '-'}<br>
                     Azimuth: ${azimuth}°<br>
                     Tech: ${s.tech || '-'}<br>
-                    <span style="font-size:10px; color:#888;">(RNC/CID: ${s.rnc}/${s.cid})</span>
+                    <span style="font-size:10px; color:#888;">(RNC/CID: ${s.rnc}/${s.cid})</span><br>
+                    <button style="margin-top:5px; cursor:pointer;" onclick="window.editSectorByIndex(${index})">Edit</button>
                 </div>
             `;
             polygon.bindPopup(content);
@@ -718,7 +979,11 @@ class MapRenderer {
             const bounds = L.latLngBounds(this.siteData.map(s => [s.lat, s.lng]));
             this.map.fitBounds(bounds.pad(0.1));
         }
+
+        // Removed bringLogsToFront() to allow Sites to stay ON TOP
     }
+
+    // Removed bringLogsToFront method entirely
 
     highlightCell(cellId) {
         if (!cellId || !this.sitePolygons) return;
@@ -746,14 +1011,23 @@ class MapRenderer {
                 color: '#ffff00', // Bright Yellow Border
                 weight: 4,
                 fillColor: '#ffff00', // Yellow Fill
-                fillOpacity: 0.6
+                fillOpacity: 0.6,
+                interactive: false // Logic attempt
             });
+
+            // FORCE CSS pointer-events: none (Leaflet setStyle might not update interactivity dynamically on all versions)
+            if (polygon.getElement && polygon.getElement()) {
+                polygon.getElement().style.pointerEvents = 'none';
+            } else if (polygon._path) { // Older Leaflet / Canvas fallback
+                polygon._path.style.pointerEvents = 'none';
+            }
+
             polygon.bringToFront();
 
-            // Pan to it
-            if (polygon.getBounds) {
-                this.map.panTo(polygon.getBounds().getCenter());
-            }
+            // Pan to it - REMOVED per user request to keep current zoom/view
+            // if (polygon.getBounds) {
+            //     this.map.panTo(polygon.getBounds().getCenter());
+            // }
 
             this.currentHighlight = { poly: polygon, originalStyle: originalStyle };
         } else {
@@ -775,13 +1049,30 @@ class MapRenderer {
         if (!startPt || !targets || targets.length === 0) return;
 
         targets.forEach(t => {
-            if (t.lat === undefined || t.lng === undefined) return;
+            if (t.lat === undefined || t.lng === undefined) {
+                return;
+            }
 
             let destLat = t.lat;
             let destLng = t.lng;
 
-            // Tip Calculation logic
-            if (t.cellId && this.sitePolygons[t.cellId]) {
+            // 1. Precise Tip Calculation via Azimuth (Preferred)
+            if (t.azimuth !== undefined && t.range !== undefined) {
+                const rad = Math.PI / 180;
+                const latRad = t.lat * rad;
+                const azRad = t.azimuth * rad;
+                const dist = t.range; // meters
+
+                const dy = Math.cos(azRad) * dist;
+                const dx = Math.sin(azRad) * dist;
+                const dLat = dy / 111111;
+                const dLng = dx / (111111 * Math.cos(latRad));
+
+                destLat = t.lat + dLat;
+                destLng = t.lng + dLng;
+            }
+            // 2. Fallback: Polygon Centroid Logic
+            else if (t.cellId && this.sitePolygons[t.cellId]) {
                 const poly = this.sitePolygons[t.cellId];
                 // Polygon structure: [center, p1, p2]
                 // Leaflet polygons often return nested arrays: [[center, p1, p2]]
@@ -798,9 +1089,32 @@ class MapRenderer {
 
             L.polyline([[startPt.lat, startPt.lng], [destLat, destLng]], {
                 color: t.color,
-                weight: t.weight || 3, // Default thicker (was 2)
-                opacity: 1.0,          // Fully opaque (was 0.8)
-                dashArray: '10, 5'     // Longer dashes (was '5, 5')
+                weight: t.weight || 3,
+                opacity: 1.0,
+                dashArray: '10, 5',
+                pane: 'connectionsPane', // Force to top
+                renderer: this.connectionsRenderer, // Force to Connections Canvas
+                interactive: false // Don't block clicks
+            }).addTo(this.connectionsLayer);
+        });
+    }
+
+    drawSpiderLines(segments) {
+        // Clear previous connections
+        this.connectionsLayer.clearLayers();
+        if (!segments || segments.length === 0) return;
+
+        // Use Canvas renderer for performance if many lines?
+        // Polyline by default uses the map renderer (preferCanvas was set in constructor)
+
+        segments.forEach(seg => {
+            L.polyline([seg.from, seg.to], {
+                color: seg.color || '#3b82f6',
+                weight: 1,
+                opacity: 0.6,
+                pane: 'connectionsPane',
+                renderer: this.connectionsRenderer, // Force to Connections Canvas
+                interactive: false
             }).addTo(this.connectionsLayer);
         });
     }
@@ -1201,10 +1515,23 @@ ${geometry}
             if (!styles.has(styleId)) {
                 styles.add(styleId);
                 const kColor = hexToKmlColor(color);
+                const kPolyColor = '7f' + kColor.substring(2); // 50% Opacity for Polygon Fill
                 styleDefs.push({
                     id: styleId, xml: `
-    <Style id="${styleId}_normal"><BalloonStyle><bgColor>991a1a1a</bgColor><text><![CDATA[<font color="#ffffff">$[description]</font>]]></text></BalloonStyle><IconStyle><color>${kColor}</color><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle><LineStyle><color>${kColor}</color><width>0</width></LineStyle></Style>
-    <Style id="${styleId}_highlight"><BalloonStyle><bgColor>991a1a1a</bgColor><text><![CDATA[<font color="#ffffff">$[description]</font>]]></text></BalloonStyle><IconStyle><color>${kColor}</color><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle><LabelStyle><scale>0</scale></LabelStyle><LineStyle><color>${kColor}</color><width>4</width></LineStyle></Style>
+    <Style id="${styleId}_normal">
+        <BalloonStyle><bgColor>991a1a1a</bgColor><text><![CDATA[<font color="#ffffff">$[description]</font>]]></text></BalloonStyle>
+        <IconStyle><color>${kColor}</color><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle>
+        <LabelStyle><scale>0</scale></LabelStyle>
+        <LineStyle><color>${kColor}</color><width>0</width></LineStyle>
+        <PolyStyle><color>${kPolyColor}</color><outline>0</outline><fill>1</fill></PolyStyle>
+    </Style>
+    <Style id="${styleId}_highlight">
+        <BalloonStyle><bgColor>991a1a1a</bgColor><text><![CDATA[<font color="#ffffff">$[description]</font>]]></text></BalloonStyle>
+        <IconStyle><color>${kColor}</color><scale>1.2</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href></Icon></IconStyle>
+        <LabelStyle><scale>0</scale></LabelStyle>
+        <LineStyle><color>${kColor}</color><width>4</width></LineStyle>
+        <PolyStyle><color>${kPolyColor}</color><outline>1</outline><fill>1</fill></PolyStyle>
+    </Style>
     <StyleMap id="sm_${styleId}"><Pair><key>normal</key><styleUrl>#${styleId}_normal</styleUrl></Pair><Pair><key>highlight</key><styleUrl>#${styleId}_highlight</styleUrl></Pair></StyleMap>\n`
                 });
             }
@@ -1219,6 +1546,32 @@ ${geometry}
 
             // Geometry logic
             let geometryPoint = `<Point><coordinates>${p.lng},${p.lat},0</coordinates></Point>`;
+            let geometryPoly = null;
+
+            // Check for Polygon Geometry (Grid)
+            if (p.geometry && (p.geometry.type === 'Polygon' || p.geometry.type === 'MultiPolygon')) {
+                try {
+                    let coords = p.geometry.coordinates;
+                    // Unwrap MultiPolygon
+                    if (p.geometry.type === 'MultiPolygon') coords = coords[0];
+                    // Unwrap Polygon Ring
+                    if (Array.isArray(coords[0]) && Array.isArray(coords[0][0])) coords = coords[0];
+
+                    // Build LinearRing String matching KML format: lng,lat,0 lng,lat,0 ...
+                    const coordStr = coords.map(c => `${c[0]},${c[1]},0`).join(' ');
+
+                    geometryPoly = `<Polygon>
+                        <outerBoundaryIs>
+                            <LinearRing>
+                                <coordinates>${coordStr}</coordinates>
+                            </LinearRing>
+                        </outerBoundaryIs>
+                    </Polygon>`;
+                } catch (e) {
+                    console.warn("Failed to generate KML Polygon:", e);
+                }
+            }
+
             let geometryLine = null;
             let lineStyleId = null;
             let sectorGroupName = null;
@@ -1381,17 +1734,22 @@ ${geometry}
             // Let's stick to simple extraction for now.
 
             if (!pointGroups.has(groupName)) pointGroups.set(groupName, []);
-            // Point Placemark
-            if (geometryLine) {
-                // Hybrid Approach: Merge Point and Line into MultiGeometry for Hover Effect
-                // Note: LineStyle in Normal is width=0 (hidden), in Highlight is width=2 (visible).
-                const multiGeo = `<MultiGeometry>${geometryPoint}${geometryLine}</MultiGeometry>`;
-                pointGroups.get(groupName).push(`    <Placemark><name>Point ${p.id || ''}</name><description>${desc}</description><styleUrl>#sm_${styleId}</styleUrl>${multiGeo}</Placemark>`);
-            } else {
-                pointGroups.get(groupName).push(`    <Placemark><name>Point ${p.id || ''}</name><description>${desc}</description><styleUrl>#sm_${styleId}</styleUrl>${geometryPoint}</Placemark>`);
+
+            // Build Placemark content
+            let placemarkGeo = geometryPoint;
+            if (geometryPoly) {
+                placemarkGeo = geometryPoly; // PREFER POLYGON IF AVAILABLE
             }
 
-            // Permanent Line Placemark (For persistent visibility via Sidebar)
+            // If Spider Line exists, wrap in MultiGeometry
+            if (geometryLine) {
+                placemarkGeo = `<MultiGeometry>${placemarkGeo}${geometryLine}</MultiGeometry>`;
+            }
+
+            pointGroups.get(groupName).push(`    <Placemark><name>Point ${p.id || ''}</name><description>${desc}</description><styleUrl>#sm_${styleId}</styleUrl>${placemarkGeo}</Placemark>`);
+
+
+            // Permanent Line Placemark (For persistent visibility via Sidebar) (Hidden Logic remains same)
             if (geometryLine && lineStyleId) {
                 const lgName = sectorGroupName || 'Others';
                 // Create a deterministic unique ID for the Group Placemark (we need a way to target it)

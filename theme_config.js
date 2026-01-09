@@ -29,7 +29,12 @@ window.themeConfig = {
 window.getThresholdKey = (metric) => {
     if (!metric) return null;
     const m = metric.toLowerCase();
-    if (['level', 'rscp', 'rsrp', 'n1_rscp', 'n2_rscp', 'n3_rscp'].includes(m)) return 'level';
-    if (['ecno', 'rsrq', 'n1_ecno', 'n2_ecno', 'n3_ecno'].includes(m)) return 'quality';
+
+    // Check for RSCP/RSRP/Level variants
+    if (m.includes('rscp') || m.includes('rsrp') || m === 'level' || m.includes('level')) return 'level';
+
+    // Check for EcNo/RSRQ/Quality variants
+    if (m.includes('ecno') || m.includes('rsrq') || m === 'quality' || m.includes('quality')) return 'quality';
+
     return null; // Uses discrete coloring
 };
