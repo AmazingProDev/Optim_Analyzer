@@ -292,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="sc-metrics-label">DETECTED METRICS</div>
                 <div class="sc-metric-container">
                     ${customMetrics.map(m => `
-                        <div class="sc-metric-button ${log.currentParam === m ? 'active' : ''}" onclick="window.switchSmartCareMetric('${layerId}', '${m}')">${m}</div>
+                        <div class="sc-metric-button ${log.currentParam === m ? 'active' : ''}" onclick="window.showMetricOptions(event, '${layerId}', '${m}', 'smartcare')">${m}</div>
                     `).join('')}
                 </div>
             `;
@@ -330,6 +330,88 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     };
+
+    window.showMetricOptions = (event, layerId, metric, type = 'regular') => {
+        event.stopPropagation();
+
+        // Remove existing menu if any
+        const existingMenu = document.querySelector('.sc-metric-menu');
+        if (existingMenu) existingMenu.remove();
+
+        const log = window.loadedLogs.find(l => l.id === layerId);
+        if (!log) return;
+
+        const menu = document.createElement('div');
+        menu.className = 'sc-metric-menu';
+
+        // Position menu near the clicked button
+        const rect = event.currentTarget.getBoundingClientRect();
+        menu.style.top = `${rect.bottom + window.scrollY + 5}px`;
+        menu.style.left = `${rect.left + window.scrollX}px`;
+
+        menu.innerHTML = `
+            <div class="sc-menu-item" id="menu-map-${layerId}">
+                <span>🗺️</span> Map
+            </div>
+            <div class="sc-menu-item" id="menu-grid-${layerId}">
+                <span>📊</span> Grid
+            </div>
+            <div class="sc-menu-item" id="menu-chart-${layerId}">
+                <span>📈</span> Chart
+            </div>
+        `;
+
+        document.body.appendChild(menu);
+
+        // Map Click Handler
+        menu.querySelector(`#menu-map-${layerId}`).onclick = () => {
+            if (type === 'smartcare') {
+                window.switchSmartCareMetric(layerId, metric);
+            } else {
+                if (window.mapRenderer) {
+                    window.mapRenderer.updateLayerMetric(layerId, log.points, metric);
+                    // Sync theme select
+                    const themeSelect = document.getElementById('themeSelect');
+                    if (themeSelect) {
+                        if (metric === 'cellId' || metric === 'cid') themeSelect.value = 'cellId';
+                        else if (metric.toLowerCase().includes('qual')) themeSelect.value = 'quality';
+                        else themeSelect.value = 'level';
+                        if (typeof window.updateLegend === 'function') window.updateLegend();
+                    }
+                }
+            }
+            menu.remove();
+        };
+
+        // Grid Click Handler
+        menu.querySelector(`#menu-grid-${layerId}`).onclick = () => {
+            window.openGridModal(log, metric);
+            menu.remove();
+        };
+
+        // Chart Click Handler
+        menu.querySelector(`#menu-chart-${layerId}`).onclick = () => {
+            window.openChartModal(log, metric);
+            menu.remove();
+        };
+
+        // Auto-position adjustment if it goes off screen
+        const menuRect = menu.getBoundingClientRect();
+        if (menuRect.right > window.innerWidth) {
+            menu.style.left = `${window.innerWidth - menuRect.width - 10}px`;
+        }
+        if (menuRect.bottom > window.innerHeight) {
+            menu.style.top = `${rect.top + window.scrollY - menuRect.height - 5}px`;
+        }
+    };
+
+    // Close menu when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.sc-metric-menu')) {
+            const menu = document.querySelector('.sc-metric-menu');
+            if (menu) menu.remove();
+        }
+    });
 
     window.toggleSmartCareLayer = (layerId) => {
         const log = window.loadedLogs.find(l => l.id === layerId);
@@ -1951,9 +2033,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // window.addEventListener('layer-metric-ready', (e) => { ... });
 
         // Handle Theme Change
-        document.getElementById('theme-select').addEventListener('change', (e) => {
-            updateLegend();
-        });
+        const themeSelect = document.getElementById('themeSelect');
+        if (themeSelect) {
+            themeSelect.addEventListener('change', (e) => {
+                if (typeof window.updateLegend === 'function') window.updateLegend();
+            });
+        }
         // Bind events
         document.getElementById('pickerServing').addEventListener('input', updateChartStyle);
 
@@ -2742,6 +2827,9 @@ document.addEventListener('DOMContentLoaded', () => {
         headerEl.onmousedown = dragMouseDown;
 
         function dragMouseDown(e) {
+            // Prevent dragging if clicking on interactive elements
+            if (e.target.closest('button, input, select, textarea, .sc-metric-button, .close')) return;
+
             e = e || window.event;
             e.preventDefault();
             // Get mouse cursor position at startup
@@ -2763,24 +2851,44 @@ document.addEventListener('DOMContentLoaded', () => {
             document.onmousemove = elementDrag;
 
             headerEl.style.cursor = 'grabbing';
+            isDragging = true;
         }
 
         function elementDrag(e) {
+            if (!isDragging) return;
             e = e || window.event;
             e.preventDefault();
+
             // Calculate cursor movement
             const dx = e.clientX - startX;
             const dy = e.clientY - startY;
 
+            let newLeft = initialLeft + dx;
+            let newTop = initialTop + dy;
+
+            // Bounds Checking
+            const rect = containerEl.getBoundingClientRect();
+            const winW = window.innerWidth;
+            const winH = window.innerHeight;
+
+            // Prevent dragging off left/right
+            if (newLeft < 0) newLeft = 0;
+            if (newLeft + rect.width > winW) newLeft = winW - rect.width;
+
+            // Prevent dragging off top/bottom
+            if (newTop < 0) newTop = 0;
+            if (newTop + rect.height > winH) newTop = winH - rect.height;
+
             // Set new position
-            containerEl.style.left = (initialLeft + dx) + "px";
-            containerEl.style.top = (initialTop + dy) + "px";
+            containerEl.style.left = newLeft + "px";
+            containerEl.style.top = newTop + "px";
 
             // Remove any margin that might interfere
             containerEl.style.margin = "0";
         }
 
         function closeDragElement() {
+            isDragging = false;
             document.onmouseup = null;
             document.onmousemove = null;
             headerEl.style.cursor = 'grab';
@@ -2788,6 +2896,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         headerEl.style.cursor = 'grab';
     }
+
+    // Expose to window for global access
+    window.makeElementDraggable = makeElementDraggable;
 
     // Attach Listeners to Grid Modal
     const gridModal = document.getElementById('gridModal');
@@ -4576,25 +4687,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
 
                 // Left Click Handler - Opens Context Menu
-                // Using onclick to be definitive.
                 btn.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    console.log('Click detected on:', label);
-
-                    window.currentContextLogId = log.id;
-                    window.currentContextParam = param;
-
-                    const menu = document.getElementById('metricContextMenu');
-                    if (menu) {
-                        menu.style.display = 'block';
-                        menu.style.position = 'fixed'; // FIXED positioning to be safe
-                        menu.style.left = `${e.clientX}px`; // Use clientX for fixed
-                        menu.style.top = `${e.clientY}px`;  // Use clientY for fixed
-                    }
-                    return false; // Stop propagation legacy style
+                    window.showMetricOptions(e, log.id, param, 'regular');
                 };
-                // REMOVED contextmenu handler and previous direct-open logic
                 return btn;
             };
 
@@ -4794,58 +4889,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.currentContextLogId = null;
     window.currentContextParam = null;
 
-    window.handleContextAction = (action) => {
-        const menu = document.getElementById('metricContextMenu');
-        if (menu) menu.style.display = 'none';
-
-        if (!window.currentContextLogId || !window.currentContextParam) return;
-
-        const log = loadedLogs.find(l => l.id === window.currentContextLogId);
-        if (!log) return;
-        const param = window.currentContextParam;
-
-        if (action === 'map') {
-            if (window.mapRenderer) {
-                // Perform visualization
-                window.mapRenderer.updateLayerMetric(log.id, log.points, param);
-
-                // Auto-Switch Theme/Legend
-                const themeSelect = document.getElementById('themeSelect');
-                if (themeSelect) {
-                    // Check if 'cellId' option exists, if not add it (though it likely doesn't match a config key)
-                    // We handle 'cellId' specially in updateLegend now.
-                    if (param === 'cellId') {
-                        // Temporarily add option if missing or just hijack the value
-                        let opt = Array.from(themeSelect.options).find(o => o.value === 'cellId');
-                        if (!opt) {
-                            opt = document.createElement('option');
-                            opt.value = 'cellId';
-                            opt.text = 'Cell ID';
-                            themeSelect.add(opt);
-                        }
-                        themeSelect.value = 'cellId';
-                    } else if (param.toLowerCase().includes('qual')) {
-                        themeSelect.value = 'quality';
-                    } else {
-                        themeSelect.value = 'level';
-                    }
-                    // Trigger Change Listener to update Legend
-                    // Or call directly:
-                    if (typeof window.updateLegend === 'function') window.updateLegend();
-                }
-            }
-        } else if (action === 'chart') {
-            window.openChartModal(log, param);
-        } else if (action === 'grid') {
-            window.openGridModal(log, param);
-        }
-    };
-
-    // Close context menu on global click
-    document.addEventListener('click', () => {
-        const menu = document.getElementById('metricContextMenu');
-        if (menu) menu.style.display = 'none';
-    });
 
     // DRAG AND DROP MAP HANDLERS
     window.allowDrop = (ev) => {
@@ -5224,8 +5267,29 @@ window.saveSector = function () {
     }
 
     if (isNew) {
-        // Add New
-        window.mapRenderer.siteData.push(newObj);
+        // Create 3 Sectors by default: 0, 120, 240
+        const azimuths = [0, 120, 240];
+        const basePci = parseInt(document.getElementById('editPci').value, 10);
+        const baseCellId = document.getElementById('editCellId').value;
+        const baseCellName = document.getElementById('editCellName').value;
+
+        azimuths.forEach((az, i) => {
+            const suffix = `_${i + 1}`;
+            const sectorObj = { ...newObj }; // Clone base object
+
+            // Override specific fields per sector
+            sectorObj.azimuth = az;
+            sectorObj.cellId = baseCellId ? `${baseCellId}${suffix}` : `${Date.now()}_${i}`;
+            sectorObj.cellName = baseCellName ? `${baseCellName}${suffix}` : `${newSiteName}_S${i + 1}`;
+
+            // Increment PCI if valid number
+            if (!isNaN(basePci)) {
+                sectorObj.sc = basePci + i;
+                sectorObj.pci = basePci + i;
+            }
+
+            window.mapRenderer.siteData.push(sectorObj);
+        });
     } else {
         // Update Existing
         if (idx !== -1 && window.mapRenderer.siteData[idx]) {
@@ -5317,5 +5381,8 @@ window.syncToBackend = function (siteData) {
             if (status) status.textContent = "Error saving to Excel (Check console)";
         });
 };
+
+// Initialize Map Action Controls Draggability
+// Map Action Controls are now fixed in the header, no draggability needed.
 
 

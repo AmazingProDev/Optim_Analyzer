@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Log Cracker Pro - Nemo Visualizer</title>
+    <title>Optim Analyzer Pro - Nemo Visualizer</title>
     <link rel="icon"
         href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📡</text></svg>">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -52,32 +52,29 @@
     <div id="app">
         <!-- Main Application Header -->
         <header id="mainHeader" class="main-header">
-            <div class="logo">Log Cracker Pro</div>
-            <div class="controls">
-                <input type="file" id="fileInput" accept=".nmf, .nmfs, .csv, .txt, .xlsx, .xls" class="hidden-input">
-                <label for="fileInput" class="btn hidden-input">Load Log (NMF/CSV)</label>
-
-                <input type="file" id="siteInput" accept=".xlsx, .xls, .csv" class="hidden-input">
-                <label for="siteInput" class="btn btn-blue hidden-input">Import Sites</label>
-
-                <button id="importBtn" class="btn btn-purple">Import</button>
-
-                <button id="btnAddSector" class="btn btn-blue ml-2" onclick="window.openAddSectorModal()">Add
-                    Site</button>
-
+            <div class="logo">Optim Analyzer Pro</div>
+            <div class="header-map-actions">
+                <!-- Hidden Inputs -->
+                <input type="file" id="fileInput" accept=".nmf, .nmfs, .csv, .txt, .xlsx, .xls" class="hidden-input"
+                    aria-label="Import Log File">
+                <input type="file" id="siteInput" accept=".xlsx, .xls, .csv" class="hidden-input"
+                    aria-label="Import Site Data">
                 <input type="file" id="shpInput" accept=".shp, .zip, .dbf, .shx, .prj, .xlsx, .xls" multiple
-                    class="hidden-input">
-                <label for="shpInput" class="btn btn-purple hidden-input">SmartCare data</label>
+                    class="hidden-input" aria-label="Import Shapefile or SmartCare Data">
 
-                <button id="spiderSmartCareBtn" class="btn btn-red" title="Draw spider lines for SmartCare grid">🕸️
-                    Spider: OFF</button>
-
-                <button id="siteSettingsBtn" class="btn btn-gray">⚙️ Sites</button>
-                <button id="exportKmlBtn" class="btn btn-green" title="Export to KML">🌍
-                    Export KML</button>
-                <button id="themeSettingsBtn" class="btn btn-gray">🎨 Theme</button>
-
-
+                <!-- Action Buttons -->
+                <button id="importBtn" class="btn header-btn" title="Import Logs, Sites, or SmartCare data">📂
+                    Import</button>
+                <button id="exportKmlBtn" class="btn header-btn" title="Export current view to KML">🌍 Export</button>
+                <button id="spiderSmartCareBtn" class="btn header-btn" title="Draw spider lines for SmartCare grid">🕸️
+                    Spider</button>
+                <button id="btnAddSector" class="btn header-btn" onclick="window.openAddSectorModal()"
+                    title="Add Site Manually">📍 Add Site</button>
+                <button id="siteSettingsBtn" class="btn header-btn" title="Site Display Settings">⚙️ Sites</button>
+                <button id="themeSettingsBtn" class="btn header-btn" title="Thematic Analysis Settings">🎨
+                    Theme</button>
+            </div>
+            <div class="controls">
                 <div class="search-container">
                     <input type="text" id="searchInput" placeholder="Search (Lat Lng, Site, CI, PCI)"
                         class="search-input">
@@ -86,7 +83,6 @@
                     <button id="rulerBtn" class="search-btn-icon ruler-btn"
                         title="Ruler Tool (Distance/Bearing)">📏</button>
                 </div>
-
                 <span id="fileStatus">No file loaded</span>
             </div>
 
@@ -192,6 +188,8 @@
             <div id="center-pane" class="center-pane">
                 <div id="map" class="map-container" ondrop="window.drop(event)" ondragover="window.allowDrop(event)">
                 </div>
+
+
 
                 <!-- Bottom Panel for Docked Views (Legacy/Bottom) -->
                 <!-- Bottom Panel for Docked Views (Legacy/Bottom) -->
@@ -315,12 +313,6 @@
 
 
 
-    <!-- Context Menu -->
-    <div id="metricContextMenu" class="metric-context-menu">
-        <div class="menu-item" onclick="window.handleContextAction('map')">Open in Map</div>
-        <div class="menu-item" onclick="window.handleContextAction('chart')">Open in Chart</div>
-        <div class="menu-item" onclick="window.handleContextAction('grid')">Open in Grid</div>
-    </div>
 
 
 
@@ -354,37 +346,38 @@
     <script src="map_renderer.js?v=64"></script>
     <script src="parser.js?v=43"></script>
     <!-- KML Export Choice Modal -->
+    <!-- KML Export Choice Modal -->
     <div id="exportKmlModal" class="modal modal-centered">
-        <div class="modal-content modal-small-centered">
-            <div class="modal-header">
+        <div class="modal-content glass-modal-content">
+            <div class="modal-header glass-modal-header">
                 <h3>Export KML</h3>
                 <span class="close"
                     onclick="document.getElementById('exportKmlModal').style.display='none'">&times;</span>
             </div>
-            <div class="modal-body">
-                <p class="modal-subtext">Choose what you want to export:</p>
-                <div class="modal-btn-group">
-                    <button id="btnExportCurrentView" class="btn btn-blue btn-flex-1">Current View</button>
-                    <button id="btnExportAllSites" class="btn btn-green btn-flex-1">All Sites</button>
+            <div class="modal-body glass-modal-body">
+                <p class="modal-subtext" style="color: #aaa; margin-bottom: 0;">Choose what you want to export:</p>
+                <div class="glass-btn-group">
+                    <button id="btnExportCurrentView" class="btn">Current View</button>
+                    <button id="btnExportAllSites" class="btn">All Sites</button>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Import Choice Modal -->
+    <!-- Import Choice Modal -->
     <div id="importModal" class="modal modal-centered">
-        <div class="modal-content modal-small-centered">
-            <div class="modal-header">
+        <div class="modal-content glass-modal-content">
+            <div class="modal-header glass-modal-header">
                 <h3>Import Data</h3>
                 <span class="close" onclick="document.getElementById('importModal').style.display='none'">&times;</span>
             </div>
-            <div class="modal-body">
-                <p class="modal-subtext">Choose what you want to import:</p>
-                <div class="modal-btn-group">
-                    <button id="btnImportSites" class="btn btn-blue btn-flex-1">Sites</button>
-                    <button id="btnImportSmartCare" class="btn btn-purple btn-flex-1">SmartCare Data</button>
-                    <button id="btnImportLog" class="btn btn-flex-1 btn-dark-gray">Log
-                        (NMF/CSV)</button>
+            <div class="modal-body glass-modal-body">
+                <p class="modal-subtext" style="color: #aaa; margin-bottom: 0;">Choose what you want to import:</p>
+                <div class="glass-btn-group">
+                    <button id="btnImportSites" class="btn">Sites (Excel/CSV)</button>
+                    <button id="btnImportSmartCare" class="btn">SmartCare Data</button>
+                    <button id="btnImportLog" class="btn">Log File (NMF/CSV)</button>
                 </div>
             </div>
         </div>
@@ -422,61 +415,76 @@
             </div>
         </div>
     </div>
-    <!-- Site Editor Modal -->
+    <!-- Site Editor Modal (Draggable) -->
     <div id="siteEditorModal" class="modal">
-        <div class="modal-content site-editor-modal-content">
-            <div class="modal-header site-editor-modal-header">
+        <!-- Added .site-editor-size to strictly keep it wider -->
+        <div class="modal-content glass-modal-content site-editor-size">
+            <div class="modal-header glass-modal-header site-editor-modal-header">
                 <h3 id="siteEditorTitle">Edit Sector</h3>
                 <span class="close"
                     onclick="document.getElementById('siteEditorModal').style.display='none'">&times;</span>
             </div>
-            <div class="modal-body site-editor-body">
+            <div class="modal-body glass-modal-body site-editor-body">
                 <input type="hidden" id="editOriginalId">
                 <input type="hidden" id="editOriginalIndex">
-                <div class="form-group">
-                    <label for="editSiteName">Site Name</label>
-                    <input type="text" id="editSiteName" class="form-control">
+
+                <div class="modal-section-title">Site Information</div>
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editSiteName">Site Name</label>
+                        <input type="text" id="editSiteName" class="form-control" placeholder="e.g. Site A">
+                    </div>
+                    <div class="form-group">
+                        <label for="editCellName">Cell Name (Base)</label>
+                        <input type="text" id="editCellName" class="form-control" placeholder="e.g. SiteA_1">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="editCellName">Cell Name</label>
-                    <input type="text" id="editCellName" class="form-control">
+
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editLat">Latitude</label>
+                        <input type="number" step="any" id="editLat" class="form-control" placeholder="33.xxxxx">
+                    </div>
+                    <div class="form-group">
+                        <label for="editLng">Longitude</label>
+                        <input type="number" step="any" id="editLng" class="form-control" placeholder="-7.xxxxx">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="editCellId">Cell ID</label>
-                    <input type="text" id="editCellId" class="form-control">
+
+                <div class="modal-section-title">Sector Details</div>
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editCellId">Cell ID (Base)</label>
+                        <input type="text" id="editCellId" class="form-control" placeholder="e.g. 1001">
+                    </div>
+                    <div class="form-group">
+                        <label for="editPci">PCI / SC (Start)</label>
+                        <input type="number" id="editPci" class="form-control" placeholder="e.g. 50">
+                    </div>
                 </div>
-                <div class="form-group half">
-                    <label for="editLat">Latitude</label>
-                    <input type="number" step="any" id="editLat" class="form-control">
-                </div>
-                <div class="form-group half">
-                    <label for="editLng">Longitude</label>
-                    <input type="number" step="any" id="editLng" class="form-control">
-                </div>
-                <div class="form-group half">
-                    <label for="editAzimuth">Azimuth</label>
-                    <input type="number" id="editAzimuth" class="form-control">
-                </div>
-                <div class="form-group half">
-                    <label for="editPci">PCI/SC</label>
-                    <input type="number" id="editPci" class="form-control">
-                </div>
-                <div class="form-group">
-                    <label for="editTech">Technology</label>
-                    <select id="editTech" class="form-control">
-                        <option value="4G">4G / LTE</option>
-                        <option value="3G">3G / UMTS</option>
-                        <option value="2G">2G / GSM</option>
-                        <option value="5G">5G / NR</option>
-                    </select>
+
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editAzimuth">Azimuth (1st Sector)</label>
+                        <input type="number" id="editAzimuth" class="form-control" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="editTech">Technology</label>
+                        <select id="editTech" class="form-control">
+                            <option value="4G">4G / LTE</option>
+                            <option value="3G">3G / UMTS</option>
+                            <option value="2G">2G / GSM</option>
+                            <option value="5G">5G / NR</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="editor-footer">
                     <button class="btn btn-red" id="btnDeleteSector"
                         onclick="window.deleteSectorCurrent()">Delete</button>
                     <button class="btn btn-blue mr-2" id="btnAddSiblingSector"
-                        onclick="window.addSectorToCurrentSite()">+ Add Sector Here</button>
-                    <button class="btn btn-green" onclick="window.saveSector()">Save</button>
+                        onclick="window.addSectorToCurrentSite()">+ Add Sector</button>
+                    <button class="btn btn-green" onclick="window.saveSector()">Save Site</button>
                 </div>
             </div>
         </div>

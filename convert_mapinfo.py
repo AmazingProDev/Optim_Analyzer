@@ -68,7 +68,7 @@ def convert_tab_to_shp(input_folder):
 
     print(f"\nconversion complete! {count}/{len(tab_files)} files converted.")
     print(f"Output folder: {output_path.absolute()}")
-    print("\nYou can now drag and drop these .shp (plus .shx, .dbf, .prj) files into Log Cracker Pro.")
+    print("\nYou can now drag and drop these .shp (plus .shx, .dbf, .prj) files into Optim Analyzer Pro.")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
