@@ -14,6 +14,35 @@ document.addEventListener('DOMContentLoaded', () => {
     window.map = map.map; // Expose Leaflet instance globally for inline onclicks
     window.mapRenderer = map; // Expose Renderer helper for debugging/verification
 
+    // ----------------------------------------------------
+    // THEMATIC CONFIGURATION & HELPERS
+    // ----------------------------------------------------
+    // Helper to map metric names to theme keys
+    window.getThresholdKey = (metric) => {
+        if (!metric) return 'level';
+        const m = metric.toLowerCase();
+        if (m.includes('qual') || m.includes('sinr') || m.includes('ecno')) return 'quality';
+        return 'level'; // Default to level (RSRP/RSCP)
+    };
+
+    // Global Theme Configuration
+    window.themeConfig = {
+        thresholds: {
+            'level': [
+                { min: -70, max: undefined, color: '#22c55e', label: 'Excellent (>= -70)' },      // Green (34,197,94)
+                { min: -85, max: -70, color: '#84cc16', label: 'Good (-85 to -70)' },             // Light Green (132,204,22)
+                { min: -95, max: -85, color: '#eab308', label: 'Fair (-95 to -85)' },             // Yellow (234,179,8)
+                { min: -105, max: -95, color: '#f97316', label: 'Poor (-105 to -95)' },            // Orange (249,115,22)
+                { min: undefined, max: -105, color: '#ef4444', label: 'Bad (< -105)' }             // Red (239,68,68)
+            ],
+            'quality': [
+                { min: -10, max: undefined, color: '#22c55e', label: 'Excellent (>= -10)' },
+                { min: -15, max: -10, color: '#eab308', label: 'Fair (-15 to -10)' },
+                { min: undefined, max: -15, color: '#ef4444', label: 'Poor (< -15)' }
+            ]
+        }
+    };
+
     // Global Listener for Map Rendering Completion (Async Legend)
     window.addEventListener('layer-metric-ready', (e) => {
         // console.log(`[App] layer-metric-ready received for: ${e.detail.metric}`);
@@ -555,20 +584,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 const timeKey = Object.keys(row).find(k => /time/i.test(k));
                 const pciKey = Object.keys(row).find(k => /pci|sc/i.test(k));
 
-                // Specific Request: NodeB ID-Cell ID
+                // Robust Cell ID Detection
+                // 1. "NodeB ID-Cell ID" (SmartCare specific)
                 const nodebCellIdKey = Object.keys(row).find(k => /nodeb id-cell id/i.test(k) || /enodeb id-cell id/i.test(k));
-                let foundCellId = nodebCellIdKey ? row[nodebCellIdKey] : undefined;
+                // 2. Standard Cell ID / CI / ECI
+                const standardCellIdKey = Object.keys(row).find(k => /^cell[_\s]?id$/i.test(k) || /^ci$/i.test(k) || /^eci$/i.test(k));
+
+                let foundCellId = nodebCellIdKey ? row[nodebCellIdKey] : (standardCellIdKey ? row[standardCellIdKey] : undefined);
+
+                // RNC/CID Explicit
+                const rncKey = Object.keys(row).find(k => /^rnc$/i.test(k));
+                const cidKey = Object.keys(row).find(k => /^cid$/i.test(k));
+                const rnc = rncKey ? row[rncKey] : undefined;
+                const cid = cidKey ? row[cidKey] : undefined;
 
                 let calculatedEci = null;
+                // Heuristic: If we have RNC+CID, we can form a unique ID
+                // Or if we have "NodeB-CellID", calculate ECI.
+
                 if (foundCellId) {
                     const parts = String(foundCellId).split('-');
                     if (parts.length === 2) {
                         const enb = parseInt(parts[0]);
-                        const cid = parseInt(parts[1]);
-                        if (!isNaN(enb) && !isNaN(cid)) {
-                            calculatedEci = (enb * 256) + cid;
+                        const id = parseInt(parts[1]);
+                        if (!isNaN(enb) && !isNaN(id)) {
+                            calculatedEci = (enb * 256) + id;
                         }
+                    } else if (!isNaN(parseInt(foundCellId))) {
+                        // Simple numeric ID (ECI or CI)
+                        calculatedEci = parseInt(foundCellId);
                     }
+                } else if (rnc && cid) {
+                    // Construct ID from RNC/CID if CellID missing
+                    foundCellId = `${rnc}/${cid}`;
                 }
 
                 return {
@@ -581,6 +629,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     sc: pciKey ? row[pciKey] : undefined,
                     time: timeKey ? row[timeKey] : '00:00:00',
                     cellId: foundCellId, // Store raw string as Primary ID reference
+                    rnc: rnc,
+                    cid: cid,
+                    // calculatedEci: calculatedEci, // Remove duplicate property definition if it exists lower down
                     calculatedEci: calculatedEci,
                     geometry: geometry, // Key for rendering squares
                     properties: row
@@ -2298,7 +2349,6 @@ document.addEventListener('DOMContentLoaded', () => {
             mainHeader.innerHTML = `
                 <span>Legend</span>
                 <div style="display:flex; gap:8px; align-items:center;">
-                     <button id="btnLegacyExport" title="Export KML (Active)" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
                      <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
                 </div>
             `;
@@ -3208,153 +3258,30 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Global Helper: Lookup Cell Name from SiteData ---
     window.resolveSmartSite = (p) => {
         const NO_MATCH = { name: null, id: null };
-        const pci = p.sc || p.pci; // Normalized SC
-        const cellId = p.cellId;
-        const lac = p.lac;
-        const freq = p.freq;
-        const lat = p.lat;
-        const lng = p.lng;
-        const rnc = p.rnc;
-
         try {
-            // 0. Helper & Dist
-            if (!window.mapRenderer || !window.mapRenderer.siteData) return NO_MATCH;
-            const siteData = window.mapRenderer.siteData;
+            if (!window.mapRenderer) return NO_MATCH;
 
-            const getName = (s) => s.cellName || s.name || s.siteName;
-            const getDistSq = (s) => {
-                if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999999999;
-                return Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2);
-            };
+            // Use the central logic in MapRenderer
+            const s = window.mapRenderer.getServingCell(p);
 
-            const norm = (val) => String(val).replace(/\s/g, '');
-
-            // 1. Serving Cell Logic: STRICT CellID Match (with SC Disambiguation)
-            let match = null;
-            if (cellId !== undefined && cellId !== null && cellId !== 'N/A') {
-                let candidates = [];
-
-                // A. Exact Match (All candidates via Index)
-                if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                    const indexed = window.mapRenderer.siteIndex.byId.get(String(cellId));
-                    if (indexed) candidates = [indexed];
-                } else {
-                    // Fallback if index missing
-                    // Fallback if index missing
-                    // REMOVED LINEAR SCAN: candidates = siteData.filter(s => s.cellId == cellId);
-                    // If Index is missing, we simply fail fast.
-                }
-
-                // B. Fallback: Short CID + LAC Match
-                if (candidates.length === 0 && lac) {
-                    const shortCid = cellId & 0xFFFF;
-                    if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                        const match = window.mapRenderer.siteIndex.byId.get(String(shortCid));
-                        if (match && match.lac == lac) candidates = [match];
-                    }
-                    if (candidates.length === 0) {
-                        // REMOVED LINEAR SCAN: candidates = siteData.filter(s => s.cellId == shortCid && s.lac == lac);
-                    }
-                }
-
-                // C. Fallback: RNC/CID Format Match (Robust)
-                if (candidates.length === 0) {
-                    // Try decomposition for 28-bit IDs (3G) if RNC is missing but cellId is large
-                    let lookupRnc = rnc;
-                    let lookupCid = cellId & 0xFFFF;
-
-                    if ((lookupRnc === undefined || lookupRnc === null || lookupRnc === 'N/A') && cellId > 65535) {
-                        lookupRnc = cellId >> 16;
-                    }
-
-                    if (lookupRnc !== undefined && lookupRnc !== null && lookupRnc !== 'N/A') {
-                        const rncCidStr = `${lookupRnc}/${lookupCid}`;
-                        if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                            const match = window.mapRenderer.siteIndex.byId.get(rncCidStr);
-                            if (match) candidates = [match];
-                        }
-                    }
-
-                    // If Point has "RNC/CID" string directly in cellId
-                    if (candidates.length === 0 && String(cellId).includes('/')) {
-                        if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                            const match = window.mapRenderer.siteIndex.byId.get(String(cellId));
-                            if (match) candidates = [match];
-                        }
-                    }
-                }
-
-                // DISAMBIGUATE: If multiple candidates, use SC (pci) to pick the right one
-                if (candidates.length > 0) {
-                    if (pci !== undefined && pci !== null) {
-                        // Try loose match on SC or PCI
-                        match = candidates.find(s => s.sc == pci || s.pci == pci);
-                    }
-                    // Fallback: Use first candidate if no SC match or no SC provided
-                    if (!match) match = candidates[0];
-                }
+            if (s) {
+                return {
+                    name: s.cellName || s.name || s.siteName,
+                    id: s.cellId || s.calculatedEci || s.id,
+                    lat: s.lat,
+                    lng: s.lng,
+                    azimuth: s.azimuth
+                };
             }
 
-            // STALE CELLID CHECK (or MISSING ID RECOVERY):
-            // Logic: If (Match found but SC mismatch) OR (No Match found), try SC+Location Search
-            const isStale = match && pci !== undefined && pci !== null && (match.sc != pci && match.pci != pci);
-            const isMissing = !match;
-
-            if (isStale || isMissing) {
-                // Try to find a site primarily by SC + Location (and Freq)
-                if (pci !== undefined && pci !== null) {
-                    let scCandidates = [];
-                    if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.bySc) {
-                        const indexed = window.mapRenderer.siteIndex.bySc.get(String(pci));
-                        if (indexed) scCandidates = [...indexed]; // Copy to avoid mutation
-                    } else {
-                        // REMOVED LINEAR SCAN: scCandidates = siteData.filter(s => s.pci == pci || s.sc == pci);
-                    }
-                    if (freq) {
-                        const fTol = 2; // Tolerance
-                        scCandidates = scCandidates.filter(s => !s.dl_earfcn || Math.abs(s.dl_earfcn - freq) < fTol || !s.uarfcn || Math.abs(s.uarfcn - freq) < fTol);
-                    }
-                    if (scCandidates.length > 0) {
-                        // Pick closest
-                        let best = scCandidates[0];
-                        let bestDistSq = getDistSq(best);
-                        for (let i = 1; i < scCandidates.length; i++) {
-                            const dSq = getDistSq(scCandidates[i]);
-                            if (dSq < bestDistSq) {
-                                best = scCandidates[i];
-                                bestDistSq = dSq;
-                            }
-                        }
-                        // If we found a valid SC candidate close enough (< 20km approx 0.2 deg? No, using lat/lng diff directly is flawed if not conv to meters?
-                        // Wait, previous code used lat/lng diff directly inside Math.sqrt.
-                        // 1 deg lat ~= 111km. 20km ~= 0.18 deg. 
-                        // 0.18^2 = 0.0324.
-                        // User's previous code check `bestDist < 20000` assuming `getDist` returns meters?
-                        // BUT `getDist` above was `Math.sqrt((lat-lat)^2 + ...)`. That returns DEGREES.
-                        // So `bestDist < 20000` was ALWAYS TRUE (Degree diff is like 0.001).
-                        // So the check was useless. I will keep it logic-equivalent (always true) or fix it?
-                        // I will assume degrees. 20km is roughly 0.2 degrees.
-                        // 0.2^2 = 0.04.
-
-                        if (best && bestDistSq < 0.04) { // Approx 22km limit
-                            // Override match with this "Smart" match
-                            match = best;
-                            // console.log(`[SmartMatch] Overrode Stale/Missing ID ${cellId} with Site ${match.cellId} (Dist: ${Math.round(bestDist)}m)`);
-                        }
-                    }
-                }
-            }
-
-            if (match) {
-                return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng, site: match };
-            }
             return NO_MATCH;
-
         } catch (e) {
-            console.error("Error in resolveSmartSite:", e);
+            console.warn("resolveSmartSite error:", e);
             return NO_MATCH;
         }
     };
+
+
 
     // Global function to update the Floating Info Panel
 
@@ -3496,14 +3423,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const displayId = d.displayId || d.cellId;
                 const nameContent = hasId ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${displayId})</span>` : d.name;
                 return `
-                            <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
-                                <td style="padding:4px 4px;">${d.type}</td>
-                                <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.highlightCell('${d.cellId}')">${nameContent}</td>
-                                <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
-                                <td style="padding:4px 4px; text-align:right;">${safeVal(d.rscp)}</td>
-                                <td style="padding:4px 4px; text-align:right;">${safeVal(d.ecno)}</td>
-                                <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
-                            </tr>`;
+                        <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
+                            <td style="padding:4px 4px;">${d.type}</td>
+                            <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.zoomToCell('${d.cellId}')">${nameContent}</td>
+                            <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
+                            <td style="padding:4px 4px; text-align:right;">${safeVal(d.rscp)}</td>
+                            <td style="padding:4px 4px; text-align:right;">${safeVal(d.ecno)}</td>
+                            <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
+                        </tr>`;
             };
 
             let tableRows = renderRow(servingData, true);
@@ -3514,41 +3441,41 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             content.innerHTML = `
-                        <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || p.cellName || 'Unknown Site'}</div>
-                        <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
-                            <span>Lat: ${Number(p.lat).toFixed(6)}</span>
-                            <span>Lng: ${Number(p.lng).toFixed(6)}</span>
-                            <span style="margin-left:auto; color:#666;">${p.time}</span>
+                    <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || p.cellName || 'Unknown Site'}</div>
+                    <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
+                        <span>Lat: ${Number(p.lat).toFixed(6)}</span>
+                        <span>Lng: ${Number(p.lng).toFixed(6)}</span>
+                        <span style="margin-left:auto; color:#666;">${p.time}</span>
+                    </div>
+                    <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
+                        <tr style="border-bottom: 1px solid #555; text-align:left;">
+                            <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
+                            <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
+                            <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
+                            <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
+                            <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
+                            <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
+                        </tr>
+                        ${tableRows}
+                    </table>
+                    
+                    <!-- SHP Attributes Section (Dynamic) -->
+                    ${p.properties ? `
+                    <div style="margin-top: 15px; border-top: 1px solid #444; padding-top: 10px;">
+                        <div style="font-size: 10px; color: #888; margin-bottom: 5px; font-weight: 600; text-transform: uppercase;">SHP Attributes</div>
+                        <div style="max-height: 200px; overflow-y: auto; font-size: 10px; color: #aaa;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                ${Object.entries(p.properties).map(([k, v]) => `
+                                    <tr style="border-bottom: 1px solid #2d2d2d;">
+                                        <td style="padding: 2px 0; font-weight: 600; width: 40%; color: #888;">${k}</td>
+                                        <td style="padding: 2px 0; color: #eee; word-break: break-all;">${v}</td>
+                                    </tr>
+                                `).join('')}
+                            </table>
                         </div>
-                        <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
-                            <tr style="border-bottom: 1px solid #555; text-align:left;">
-                                <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
-                            </tr>
-                            ${tableRows}
-                        </table>
-                        
-                        <!-- SHP Attributes Section (Dynamic) -->
-                        ${p.properties ? `
-                        <div style="margin-top: 15px; border-top: 1px solid #444; padding-top: 10px;">
-                            <div style="font-size: 10px; color: #888; margin-bottom: 5px; font-weight: 600; text-transform: uppercase;">SHP Attributes</div>
-                            <div style="max-height: 200px; overflow-y: auto; font-size: 10px; color: #aaa;">
-                                <table style="width: 100%; border-collapse: collapse;">
-                                    ${Object.entries(p.properties).map(([k, v]) => `
-                                        <tr style="border-bottom: 1px solid #2d2d2d;">
-                                            <td style="padding: 2px 0; font-weight: 600; width: 40%; color: #888;">${k}</td>
-                                            <td style="padding: 2px 0; color: #eee; word-break: break-all;">${v}</td>
-                                        </tr>
-                                    `).join('')}
-                                </table>
-                            </div>
-                        </div>
-                        ` : ''}
-                    `;
+                    </div>
+                    ` : ''}
+                `;
 
         } catch (err) {
             console.error("Critical Error in updateFloatingInfoPanel:", err);
@@ -4052,29 +3979,120 @@ document.addEventListener('DOMContentLoaded', () => {
                             rawEnodebCellId: enodebCellIdRaw,
                             calculatedEci: calculatedEci
                         };
-                    }).filter(s => !isNaN(s.lat) && !isNaN(s.lng));
+                    })
+                    // Filter out invalid
+                    const validSectors = sectors.filter(s => s && s.lat && s.lng);
 
-                    console.log('Parsed Sectors:', sectors.length);
+                    if (validSectors.length > 0) {
+                        const id = Date.now().toString();
+                        const name = file.name.replace(/\.[^/.]+$/, "");
 
-                    if (sectors.length > 0) {
-                        map.addSiteLayer(sectors);
-                        // Also set initial bounds? 
-                        const bounds = L.latLngBounds(sectors.map(s => [s.lat, s.lng]));
-                        map.map.fitBounds(bounds.pad(0.1));
+                        console.log(`[Sites] Importing ${validSectors.length} sites as layer: ${name}`);
 
-                        fileStatus.textContent = `Imported ${sectors.length} sectors.`;
+                        // Add Layer
+                        try {
+                            if (window.mapRenderer) {
+                                console.log('[Sites] Calling mapRenderer.addSiteLayer...');
+                                window.mapRenderer.addSiteLayer(id, name, validSectors, true);
+                                console.log('[Sites] addSiteLayer successful. Adding sidebar item...');
+                                addSiteLayerToSidebar(id, name, validSectors.length);
+                                console.log('[Sites] Sidebar item added.');
+                            } else {
+                                throw new Error("MapRenderer not initialized");
+                            }
+                            fileStatus.textContent = `Sites Imported: ${validSectors.length} (${name})`;
+                        } catch (innerErr) {
+                            console.error('[Sites] CRITICAL ERROR adding layer:', innerErr);
+                            alert(`Error adding site layer: ${innerErr.message}`);
+                            fileStatus.textContent = 'Error adding layer: ' + innerErr.message;
+                        }
                     } else {
-                        fileStatus.textContent = 'No valid site coordinates found.';
+                        fileStatus.textContent = 'No valid site data found (check Lat/Lng)';
                     }
-
+                    e.target.value = ''; // Reset input
                 } catch (err) {
-                    console.error('Excel Import Error:', err);
-                    fileStatus.textContent = 'Error parsing Excel file.';
+                    console.error('Site Import Error:', err);
+                    fileStatus.textContent = 'Error parsing sites: ' + err.message;
                 }
             };
             reader.readAsArrayBuffer(file);
-            e.target.value = '';
         });
+    }
+
+    // --- Site Layer Management UI ---
+    window.siteLayersList = []; // Track UI state locally if needed, but renderer is source of truth
+
+    function addSiteLayerToSidebar(id, name, count) {
+        const container = document.getElementById('sites-layer-list');
+        if (!container) {
+            console.error('[Sites] CRITICAL: Sidebar container #sites-layer-list NOT FOUND in DOM.');
+            return;
+        }
+
+        // AUTO-SHOW SIDEBAR
+        const sidebar = document.getElementById('smartcare-sidebar');
+        if (sidebar) {
+            sidebar.style.display = 'flex';
+        }
+
+        const item = document.createElement('div');
+        item.className = 'layer-item';
+        item.id = `site-layer-${id}`;
+
+        item.innerHTML = `
+        <div class="layer-info">
+            <span class="layer-name" title="${name}" style="font-size:13px;">${name}</span>
+        </div>
+        <div class="layer-controls">
+             <button class="layer-btn settings-btn" data-id="${id}" title="Layer Settings">⚙️</button>
+             <button class="layer-btn visibility-btn" data-id="${id}" title="Toggle Visibility">👁️</button>
+             <button class="layer-btn remove-btn" data-id="${id}" title="Remove Layer">✕</button>
+        </div>
+    `;
+
+        // Event Listeners
+        const settingsBtn = item.querySelector('.settings-btn');
+        settingsBtn.onclick = (e) => {
+            e.stopPropagation();
+            // Open Settings Panel in "Layer Mode"
+            const panel = document.getElementById('siteSettingsPanel');
+            if (panel) {
+                panel.style.display = 'block';
+                window.editingLayerId = id; // Set Context
+
+                // Update Title to show we are editing a layer
+                const title = panel.querySelector('h3');
+                if (title) title.textContent = `Settings: ${name}`;
+            }
+        };
+        const visBtn = item.querySelector('.visibility-btn');
+        visBtn.onclick = () => {
+            const isVisible = visBtn.style.opacity !== '0.5';
+            const newState = !isVisible;
+
+            // UI Toggle
+            visBtn.style.opacity = newState ? '1' : '0.5';
+            if (!newState) visBtn.textContent = '━';
+            else visBtn.textContent = '👁️';
+
+            // Logic Toggle
+            if (window.mapRenderer) {
+                window.mapRenderer.toggleSiteLayer(id, newState);
+            }
+        };
+
+        const removeBtn = item.querySelector('.remove-btn');
+        removeBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (confirm(`Remove site layer "${name}"?`)) {
+                if (window.mapRenderer) {
+                    window.mapRenderer.removeSiteLayer(id);
+                }
+                item.remove();
+            }
+        };
+
+        container.appendChild(item);
     }
 
     // Site Settings UI Logic
@@ -4085,6 +4103,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (settingsBtn && settingsPanel) {
         settingsBtn.onclick = () => {
+            // Open in "Global Mode"
+            window.editingLayerId = null;
+            const title = settingsPanel.querySelector('h3');
+            if (title) title.textContent = 'Site Settings (Global)';
+
             settingsPanel.style.display = settingsPanel.style.display === 'none' ? 'block' : 'none';
         };
         closeSettings.onclick = () => settingsPanel.style.display = 'none';
@@ -4097,23 +4120,45 @@ document.addEventListener('DOMContentLoaded', () => {
             const useOverride = document.getElementById('checkSiteColorOverride').checked;
             const showSiteNames = document.getElementById('checkShowSiteNames').checked;
             const showCellNames = document.getElementById('checkShowCellNames').checked;
+
             const colorBy = siteColorBy ? siteColorBy.value : 'tech';
+
+            // Context-Aware Update
+            if (window.editingLayerId) {
+                // Layer Specific
+                if (map) {
+                    map.updateLayerSettings(window.editingLayerId, {
+                        range: range,
+                        beamwidth: beam,
+                        opacity: opacity,
+                        color: color,
+                        useOverride: useOverride,
+                        showSiteNames: showSiteNames,
+                        showCellNames: showCellNames
+                    });
+                }
+            } else {
+                // Global
+                if (map) {
+                    map.updateSiteSettings({
+                        range: range,
+                        beamwidth: beam,
+                        opacity: opacity,
+                        color: color,
+                        useOverride: useOverride,
+                        showSiteNames: showSiteNames,
+                        showCellNames: showCellNames,
+                        colorBy: colorBy
+                    });
+                }
+            }
 
             document.getElementById('valRange').textContent = range;
             document.getElementById('valBeam').textContent = beam;
             document.getElementById('valOpacity').textContent = opacity;
 
             if (map) {
-                map.updateSiteSettings({
-                    range: range,
-                    beamwidth: beam,
-                    opacity: opacity,
-                    color: color,
-                    useOverride: useOverride,
-                    showSiteNames: showSiteNames,
-                    showCellNames: showCellNames,
-                    colorBy: colorBy
-                });
+                // Logic moved above
             }
         };
 
@@ -4263,15 +4308,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (p.category === 'L3') typeClass = 'badge-l3';
 
                 tr.innerHTML = `
-                        <td>${p.time}</td>
-                        <td><span class="${typeClass}">${p.category}</span></td>
-                        <td>${p.direction}</td>
-                        <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${p.message}">${p.message}</td>
-                        <td>
-                            ${mapBtn} 
-                            <button onclick="const p = this.parentElement.parentElement.pointData; showSignalingPayload(p); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#475569;">Info</button>
-                        </td>
-                    `;
+                    <td>${p.time}</td>
+                    <td><span class="${typeClass}">${p.category}</span></td>
+                    <td>${p.direction}</td>
+                    <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${p.message}">${p.message}</td>
+                    <td>
+                        ${mapBtn} 
+                        <button onclick="const p = this.parentElement.parentElement.pointData; showSignalingPayload(p); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#475569;">Info</button>
+                    </td>
+                `;
                 tbody.appendChild(tr);
             });
         }
@@ -4286,19 +4331,19 @@ document.addEventListener('DOMContentLoaded', () => {
             modal.id = 'payloadModal';
             modal.className = 'modal';
             modal.innerHTML = `
-                <div class="modal-content" style="max-width: 600px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151;">
-                    <div class="modal-header" style="border-bottom: 1px solid #374151; padding: 10px 15px; display:flex; justify-content:space-between; align-items:center;">
-                        <h3 style="margin:0; font-size:16px;">Signaling Details</h3>
-                        <span class="close" onclick="document.getElementById('payloadModal').style.display='none'" style="color:#9ca3af; cursor:pointer; font-size:20px;">&times;</span>
-                    </div>
-                    <div class="modal-body" style="padding: 15px; max-height: 70vh; overflow-y: auto;">
-                        <div id="payloadContent"></div>
-                    </div>
-                    <div class="modal-footer" style="padding: 10px 15px; border-top: 1px solid #374151; text-align: right;">
-                         <button onclick="document.getElementById('payloadModal').style.display='none'" class="btn" style="background:#4b5563;">Close</button>
-                    </div>
+            <div class="modal-content" style="max-width: 600px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151;">
+                <div class="modal-header" style="border-bottom: 1px solid #374151; padding: 10px 15px; display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; font-size:16px;">Signaling Details</h3>
+                    <span class="close" onclick="document.getElementById('payloadModal').style.display='none'" style="color:#9ca3af; cursor:pointer; font-size:20px;">&times;</span>
                 </div>
-            `;
+                <div class="modal-body" style="padding: 15px; max-height: 70vh; overflow-y: auto;">
+                    <div id="payloadContent"></div>
+                </div>
+                <div class="modal-footer" style="padding: 10px 15px; border-top: 1px solid #374151; text-align: right;">
+                     <button onclick="document.getElementById('payloadModal').style.display='none'" class="btn" style="background:#4b5563;">Close</button>
+                </div>
+            </div>
+        `;
             document.body.appendChild(modal);
         }
 
@@ -4312,31 +4357,31 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         content.innerHTML = `
-            <div style="margin-bottom: 15px;">
-                <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Message Type</div>
-                <div style="font-size: 14px; color: #fff; font-weight: bold;">${point.message}</div>
+        <div style="margin-bottom: 15px;">
+            <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Message Type</div>
+            <div style="font-size: 14px; color: #fff; font-weight: bold;">${point.message}</div>
+        </div>
+         <div style="display:flex; gap:20px; margin-bottom: 15px;">
+            <div>
+                 <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Time</div>
+                 <div style="color: #d1d5db;">${point.time}</div>
             </div>
-             <div style="display:flex; gap:20px; margin-bottom: 15px;">
-                <div>
-                     <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Time</div>
-                     <div style="color: #d1d5db;">${point.time}</div>
-                </div>
-                <div>
-                     <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Direction</div>
-                     <div style="color: #d1d5db;">${point.direction}</div>
-                </div>
+            <div>
+                 <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Direction</div>
+                 <div style="color: #d1d5db;">${point.direction}</div>
             </div>
+        </div>
 
-            <div style="background: #111827; padding: 10px; border-radius: 4px; border: 1px solid #374151; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;">
-                <div style="color: #6b7280; margin-bottom: 5px;">RRC Payload (Hex Stream):</div>
-                <div style="color: #10b981; word-break: break-all; white-space: pre-wrap;">${formatHex(payloadRaw)}</div>
-            </div>
+        <div style="background: #111827; padding: 10px; border-radius: 4px; border: 1px solid #374151; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;">
+            <div style="color: #6b7280; margin-bottom: 5px;">RRC Payload (Hex Stream):</div>
+            <div style="color: #10b981; word-break: break-all; white-space: pre-wrap;">${formatHex(payloadRaw)}</div>
+        </div>
 
-             <div style="margin-top: 15px;">
-                <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600; margin-bottom:5px;">Raw NMF Line</div>
-                <code style="display:block; background:#000; padding:8px; border-radius:4px; font-size:10px; color:#aaa; overflow-x:auto; white-space:nowrap;">${point.details}</code>
-            </div>
-        `;
+         <div style="margin-top: 15px;">
+            <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600; margin-bottom:5px;">Raw NMF Line</div>
+            <code style="display:block; background:#000; padding:8px; border-radius:4px; font-size:10px; color:#aaa; overflow-x:auto; white-space:nowrap;">${point.details}</code>
+        </div>
+    `;
 
         modal.style.display = 'block';
     }
@@ -4632,13 +4677,13 @@ document.addEventListener('DOMContentLoaded', () => {
             header.className = 'log-header';
             header.style.cssText = 'padding:8px 10px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; background:#2d2d2d; border-bottom:1px solid #333;';
             header.innerHTML = `
-                <span style="font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;">${log.name}</span>
-                <div style="display:flex; gap:5px;">
-                     <!-- Export Button -->
-                     <button onclick="window.exportOptimFile('${log.id}'); event.stopPropagation();" title="Export Optim CSV" style="background:#059669; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">⬇</button>
-                     <button onclick="event.stopPropagation(); window.removeLog('${log.id}')" style="background:#ef4444; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>
-                </div>
-            `;
+            <span style="font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;">${log.name}</span>
+            <div style="display:flex; gap:5px;">
+                 <!-- Export Button -->
+                 <button onclick="window.exportOptimFile('${log.id}'); event.stopPropagation();" title="Export Optim CSV" style="background:#059669; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">⬇</button>
+                 <button onclick="event.stopPropagation(); window.removeLog('${log.id}')" style="background:#ef4444; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>
+            </div>
+        `;
 
             // Toggle Logic
             header.onclick = () => {
@@ -4658,9 +4703,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const stats = document.createElement('div');
             stats.style.cssText = 'font-size:10px; color:#888; margin-bottom:8px;';
             stats.innerHTML = `
-                <span style="background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;">${log.tech}</span>
-                <span style="margin-left:5px;">${count} pts</span>
-            `;
+            <span style="background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;">${log.tech}</span>
+            <span style="margin-left:5px;">${count} pts</span>
+        `;
 
             // Actions
             const actions = document.createElement('div');
@@ -5043,12 +5088,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const popupContent = `
-                <div style="font-size:13px; min-width:150px;">
-                    <b>${name}</b><br>
-                    <div style="color:#888; font-size:11px; margin-top:4px;">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
-                    <button onclick="window.removeUserPoint('${markerId}')" style="margin-top:8px; background:#ef4444; color:white; border:none; padding:2px 5px; border-radius:3px; cursor:pointer; font-size:10px;">Remove</button>
-                </div>
-             `;
+            <div style="font-size:13px; min-width:150px;">
+                <b>${name}</b><br>
+                <div style="color:#888; font-size:11px; margin-top:4px;">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
+                <button onclick="window.removeUserPoint('${markerId}')" style="margin-top:8px; background:#ef4444; color:white; border:none; padding:2px 5px; border-radius:3px; cursor:pointer; font-size:10px;">Remove</button>
+            </div>
+         `;
 
             marker.bindPopup(popupContent).openPopup();
 
@@ -5143,38 +5188,43 @@ window.openAddSectorModal = function () {
 };
 
 // Index-based editing (Robust for duplicates)
-window.editSectorByIndex = function (index) {
-    if (!window.mapRenderer || !window.mapRenderer.siteData) return;
-    const s = window.mapRenderer.siteData[index];
-    if (!s) {
-        console.error("Sector index out of bounds:", index);
+// Layer-compatible editing
+window.editSector = function (layerId, index) {
+    if (!window.mapRenderer || !window.mapRenderer.siteLayers) return;
+    const layer = window.mapRenderer.siteLayers.get(String(layerId));
+    if (!layer || !layer.sectors || !layer.sectors[index]) {
+        console.error("Sector not found:", layerId, index);
         return;
     }
+    const s = layer.sectors[index];
 
     document.getElementById('siteEditorTitle').textContent = "Edit Sector";
-    document.getElementById('editOriginalId').value = s.cellId || "";
-    document.getElementById('editOriginalIndex').value = index; // Store Index
+    document.getElementById('editOriginalId').value = s.cellId || ""; // keep original for reference if needed
+
+    // Store context for saving
+    document.getElementById('editLayerId').value = layerId;
+    document.getElementById('editOriginalIndex').value = index;
 
     // Populate
     document.getElementById('editSiteName').value = s.siteName || s.name || "";
-    document.getElementById('editCellName').value = s.cellName || ""; // Load Cell Name
+    document.getElementById('editCellName').value = s.cellName || "";
     document.getElementById('editCellId').value = s.cellId || "";
     document.getElementById('editLat').value = s.lat;
     document.getElementById('editLng').value = s.lng;
     document.getElementById('editAzimuth').value = s.azimuth || 0;
     document.getElementById('editPci').value = s.sc || s.pci || "";
     document.getElementById('editTech').value = s.tech || "4G";
+    document.getElementById('editBeamwidth').value = s.beamwidth || 65;
 
+    // UI Helpers
     document.getElementById('btnDeleteSector').style.display = 'inline-block';
-
-    // Show Sibling Button
     const btnSibling = document.getElementById('btnAddSiblingSector');
     if (btnSibling) btnSibling.style.display = 'inline-block';
 
     const modal = document.getElementById('siteEditorModal');
     modal.style.display = 'block';
 
-    ensureSiteEditorDraggable();
+    if (typeof ensureSiteEditorDraggable === 'function') ensureSiteEditorDraggable();
 
     // Auto-center
     const content = modal.querySelector('.modal-content');
@@ -5217,120 +5267,113 @@ window.addSectorToCurrentSite = function () {
     if (btnSibling) btnSibling.style.display = 'none';
 };
 
-// Deprecated (Legacy Fallback)
-window.editSector = function (cellId) {
-    // Falls back to finding by ID if index not available
-    if (!window.mapRenderer || !window.mapRenderer.siteData) return;
-    const idx = window.mapRenderer.siteData.findIndex(x => String(x.cellId) === String(cellId));
-    if (idx !== -1) {
-        window.editSectorByIndex(idx);
-    } else {
-        alert("Sector not found: " + cellId);
-    }
-};
+
 
 window.saveSector = function () {
     if (!window.mapRenderer) return;
-    if (!window.mapRenderer.siteData) window.mapRenderer.siteData = [];
 
+    const layerId = document.getElementById('editLayerId').value;
     const originalIndex = document.getElementById('editOriginalIndex').value;
-    const originalId = document.getElementById('editOriginalId').value;
 
-    // Determine if updating or creating
+    // Validate Layer
+    let layer = null;
+    let sectors = null;
+
+    if (layerId && window.mapRenderer.siteLayers.has(layerId)) {
+        layer = window.mapRenderer.siteLayers.get(layerId);
+        sectors = layer.sectors;
+    } else {
+        // Fallback for VERY legacy or newly created "default" sites without layer?
+        // Unlikely in new architecture. Alert error.
+        alert("Layer Context Lost. Cannot save sector.");
+        return;
+    }
+
+    // Determine target index
     let idx = -1;
     if (originalIndex !== "" && originalIndex !== null) {
         idx = parseInt(originalIndex, 10);
-    } else if (originalId !== "") {
-        idx = window.mapRenderer.siteData.findIndex(x => String(x.cellId) === String(originalId));
     }
 
-    const isNew = (idx === -1 && originalId === ""); // Truly new
+    const isNew = (idx === -1);
+
     const newAzimuth = parseInt(document.getElementById('editAzimuth').value, 10);
     const newSiteName = document.getElementById('editSiteName').value;
 
     const newObj = {
         siteName: newSiteName,
         name: newSiteName,
-        cellName: document.getElementById('editCellName').value, // Save Cell Name
-        cellId: document.getElementById('editCellId').value,
+        cellName: (document.getElementById('editCellName').value || newSiteName),
+        cellId: (document.getElementById('editCellId').value || newSiteName + "_1"),
         lat: parseFloat(document.getElementById('editLat').value),
         lng: parseFloat(document.getElementById('editLng').value),
-        azimuth: newAzimuth,
-        sc: parseInt(document.getElementById('editPci').value, 10),
-        pci: parseInt(document.getElementById('editPci').value, 10),
-        tech: document.getElementById('editTech').value
+        azimuth: isNaN(newAzimuth) ? 0 : newAzimuth,
+        // Tech & PCI
+        tech: document.getElementById('editTech').value,
+        sc: document.getElementById('editPci').value,
+        pci: document.getElementById('editPci').value, // Sync both
+        // Beamwidth
+        beamwidth: parseInt(document.getElementById('editBeamwidth').value, 10) || 65
     };
 
-    if (isNaN(newObj.lat) || isNaN(newObj.lng)) {
-        alert("Valid Latitude and Longitude are required.");
-        return;
-    }
+    // Compute RNC/CID if possible
+    try {
+        if (String(newObj.cellId).includes('/')) {
+            const parts = newObj.cellId.split('/');
+            newObj.rnc = parts[0];
+            newObj.cid = parts[1];
+        } else {
+            // If numeric > 65535, try split
+            const num = parseInt(newObj.cellId, 10);
+            if (!isNaN(num) && num > 65535) {
+                newObj.rnc = num >> 16;
+                newObj.cid = num & 0xFFFF;
+            }
+        }
+    } catch (e) { }
+
+    // Add Derived Props
+    newObj.rawEnodebCellId = newObj.cellId;
 
     if (isNew) {
-        // Create 3 Sectors by default: 0, 120, 240
-        const azimuths = [0, 120, 240];
-        const basePci = parseInt(document.getElementById('editPci').value, 10);
-        const baseCellId = document.getElementById('editCellId').value;
-        const baseCellName = document.getElementById('editCellName').value;
-
-        azimuths.forEach((az, i) => {
-            const suffix = `_${i + 1}`;
-            const sectorObj = { ...newObj }; // Clone base object
-
-            // Override specific fields per sector
-            sectorObj.azimuth = az;
-            sectorObj.cellId = baseCellId ? `${baseCellId}${suffix}` : `${Date.now()}_${i}`;
-            sectorObj.cellName = baseCellName ? `${baseCellName}${suffix}` : `${newSiteName}_S${i + 1}`;
-
-            // Increment PCI if valid number
-            if (!isNaN(basePci)) {
-                sectorObj.sc = basePci + i;
-                sectorObj.pci = basePci + i;
-            }
-
-            window.mapRenderer.siteData.push(sectorObj);
-        });
+        sectors.push(newObj);
+        console.log(`[SiteEditor] created sector in layer ${layerId}`);
     } else {
-        // Update Existing
-        if (idx !== -1 && window.mapRenderer.siteData[idx]) {
-            const oldS = window.mapRenderer.siteData[idx];
+        // Update valid index
+        if (sectors[idx]) {
+            const oldS = sectors[idx];
             const oldAzimuth = oldS.azimuth;
             const oldSiteName = oldS.siteName || oldS.name;
 
             // 1. Update the target sector
-            window.mapRenderer.siteData[idx] = { ...window.mapRenderer.siteData[idx], ...newObj };
+            // Merge to preserve other props like frequency if not edited
+            sectors[idx] = { ...sectors[idx], ...newObj };
+            console.log(`[SiteEditor] updated sector ${idx} in layer ${layerId}`);
 
             // 2. Synchronize Azimuth if changed
             if (oldAzimuth !== newAzimuth && !isNaN(oldAzimuth) && !isNaN(newAzimuth)) {
                 // Find others with same site name and SAME OLD AZIMUTH
-                window.mapRenderer.siteData.forEach((s, subIdx) => {
+                sectors.forEach((s, subIdx) => {
                     const sName = s.siteName || s.name;
                     // Loose check for Site Name match
                     if (String(sName) === String(oldSiteName) && subIdx !== idx) {
                         if (s.azimuth === oldAzimuth) {
                             s.azimuth = newAzimuth; // Sync
+                            console.log(`[SiteEditor] Synced azimuth for sector ${subIdx}`);
                         }
                     }
                 });
             }
-
-        } else {
-            // Fallback push? No, if we can't find it, we shouldn't create a dupe unless requested.
-            console.error("Could not find site to update");
         }
     }
 
-    window.refreshSites();
+    // Refresh Map
+    window.mapRenderer.rebuildSiteIndex();
+    window.mapRenderer.renderSites(false);
+
     document.getElementById('siteEditorModal').style.display = 'none';
-
-    // Auto-Zoom if New Site
-    if (isNew) {
-        window.map.setView([newObj.lat, newObj.lng], 18);
-    }
-
-    // Sync to Backend
-    window.syncToBackend(window.mapRenderer.siteData);
 };
+
 
 window.deleteSectorCurrent = function () {
     const originalIndex = document.getElementById('editOriginalIndex').value;

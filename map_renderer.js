@@ -63,11 +63,19 @@ class MapRenderer {
         this.map.getPane('sitesPane').style.zIndex = 650;
         this.sitesRenderer = L.canvas({ pane: 'sitesPane', tolerance: 5 });
 
+        // CUSTOM PANE FOR LABELS (Highest)
+        this.map.createPane('labelsPane');
+        this.map.getPane('labelsPane').style.zIndex = 700;
+        this.map.getPane('labelsPane').style.pointerEvents = 'none'; // Don't block clicks
+
 
 
         this.connectionsLayer = L.layerGroup().addTo(this.map); // Layer for lines
+        this.connectionsLayer = L.layerGroup().addTo(this.map); // Layer for lines
         this.customDiscreteColors = {}; // User-overridden colors (ID -> Color)
-        this.siteData = []; // Initialize empty site data
+        this.siteLayers = new Map(); // Store layers by ID: { id, name, sectors, visible, polygonLayer, labelLayer }
+        // We no longer use a single this.siteData array for rendering, but we might aggregate it for 'getServingCell' lookups
+        this.siteIndex = null; // Composite index of all VISIBLE layers
 
         // Optim: Only show labels on high zoom with debounce to prevent UI freeze
         let zoomTimeout;
@@ -213,10 +221,11 @@ class MapRenderer {
 
     updateLabelVisibility() {
         const zoom = this.map.getZoom();
-        const show = (this.siteSettings && (this.siteSettings.showSiteNames || this.siteSettings.showCellNames));
 
         // Threshold: Only show if zoom >= 14
-        if (show && zoom >= 14) {
+        // We no longer check Global Settings here because individual layers might have labels enabled.
+        // renderSites() determines IF labels are generated. This just controls Zoom LOD.
+        if (zoom >= 14) {
             if (!this.map.hasLayer(this.siteLabelsLayer)) {
                 this.siteLabelsLayer.addTo(this.map);
             }
@@ -348,32 +357,78 @@ class MapRenderer {
         return palette[index];
     }
 
-    getServingCell(p) {
-        if (!this.siteData) return null;
+    rebuildSiteIndex() {
+        // Aggregates all visible sectors for fast lookup
+        const allVisibleSectors = [];
+        this.siteLayers.forEach(layer => {
+            if (layer.visible && layer.sectors) {
+                // Avoid spread operator for large arrays to prevent stack overflow
+                for (let i = 0; i < layer.sectors.length; i++) {
+                    allVisibleSectors.push(layer.sectors[i]);
+                }
+            }
+        });
 
+        console.log(`[MapRenderer] Rebuilding Index. Total Visible Sectors: ${allVisibleSectors.length}`);
+
+        this.siteIndex = {
+            byId: new Map(),
+            bySc: new Map(),
+            all: allVisibleSectors
+        };
+
+        allVisibleSectors.forEach(s => {
+            if (s.cellId) {
+                const normId = String(s.cellId).replace(/\s/g, '');
+                this.siteIndex.byId.set(normId, s);
+                if (s.rnc && s.cid) {
+                    const rncCid = `${s.rnc}/${s.cid}`.replace(/\s/g, '');
+                    this.siteIndex.byId.set(rncCid, s);
+                }
+            }
+            const sc = s.sc || s.pci;
+            if (sc !== undefined) {
+                const key = String(sc);
+                if (!this.siteIndex.bySc.has(key)) {
+                    this.siteIndex.bySc.set(key, []);
+                }
+                this.siteIndex.bySc.get(key).push(s);
+            }
+        });
+        console.log(`[MapRenderer] Index Rebuilt. byId: ${this.siteIndex.byId.size}, bySc: ${this.siteIndex.bySc.size}`);
+    }
+
+    getServingCell(p) {
+        if (!this.siteIndex) {
+            console.warn('[MapRenderer] getServingCell: Site Index is missing!');
+            return null;
+        }
+        // Uses this.siteIndex.all instead of this.siteData
+        const siteData = this.siteIndex.all;
+        if (!siteData || siteData.length === 0) {
+            console.warn('[MapRenderer] getServingCell: No site data in index.');
+            return null;
+        }
+
+        // ... logic continues ...
         const pci = p.sc;
         const lac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
         const freq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
         const cellId = p.cellId;
 
-        // 0. PRIORITY: Strict eNodeB ID-Cell ID Matching (User Request)
+        // 0. PRIORITY: Strict eNodeB ID-Cell ID Matching
         if (cellId) {
-            // Case A: Metric is Numeric ECI (standard) -> Match against calculatedEci
-            // Standard ECI is usually > 65535
             if (typeof cellId === 'number' && cellId > 65535) {
-                const s = this.siteData.find(x => x.calculatedEci === cellId);
+                const s = siteData.find(x => x.calculatedEci === cellId);
                 if (s) return s;
             }
-
-            // Case B: Direct String Match (if log provides raw string like "12345-12")
-            // or if we synthesize ECI from log but fallback to string
-            const s = this.siteData.find(x => x.rawEnodebCellId == cellId);
+            const s = siteData.find(x => x.rawEnodebCellId == cellId);
             if (s) return s;
         }
 
-        // 1. User Rule: Strict RF Params (SC + LAC + Freq)
+        // 1. Strict RF
         if (pci && lac && freq) {
-            const s = this.siteData.find(x => {
+            const s = siteData.find(x => {
                 const pciMatch = (x.pci == pci || x.sc == pci);
                 const lacMatch = (x.lac == lac);
                 const freqMatch = (x.freq == freq || Math.abs(x.freq - freq) < 1);
@@ -384,16 +439,22 @@ class MapRenderer {
 
         // 2. CellID + LAC
         if (cellId && lac) {
-            const s = this.siteData.find(x => x.cellId == cellId && x.lac == lac);
+            const s = siteData.find(x => x.cellId == cellId && x.lac == lac);
             if (s) return s;
         }
 
         // 3. CellID Only
         if (cellId) {
-            const s = this.siteData.find(x => x.cellId == cellId);
+            // Optimization: check index first if string match
+            const norm = String(cellId).replace(/\s/g, '');
+            if (this.siteIndex.byId.has(norm)) return this.siteIndex.byId.get(norm);
+
+            // Fallback for numeric vs string types mismatch
+            const s = siteData.find(x => x.cellId == cellId);
             if (s) return s;
         }
 
+        console.warn('[MapRenderer] getServingCell: Failed to find match.', { pci, lac, freq, cellId });
         return null;
     }
 
@@ -750,47 +811,62 @@ class MapRenderer {
         }
     }
 
-    addSiteLayer(sectors, fitBounds = true) {
-        this.siteData = sectors; // Store original data
+    addSiteLayer(id, name, sectors, fitBounds = true) {
+        // Create new layer group (we can keep separate groups or merge into one 'sitesLayer' - merging is better for Z-index control)
+        // But for toggle, separate management is easier.
+        // Let's store raw data and re-render everything when something changes (to keep Z-Index and batching clean).
+        // Actually, re-rendering ALL sites is fast enough for <10k sites.
 
-        // Build Index for Performance
-        this.siteIndex = {
-            byId: new Map(),
-            bySc: new Map(),
-            all: sectors
-        };
+        if (this.siteLayers.has(id)) {
+            console.warn(`Layer ${id} already exists, replacing.`);
+        }
 
-        sectors.forEach(s => {
-            // Index by CellID (String normalized)
-            if (s.cellId) {
-                // Normalize: Remove whitespace to match app.js 'norm' logic
-                const normId = String(s.cellId).replace(/\s/g, '');
-                this.siteIndex.byId.set(normId, s);
-
-                // Also index by RNC/CID if available, just in case
-                if (s.rnc && s.cid) {
-                    const rncCid = `${s.rnc}/${s.cid}`.replace(/\s/g, '');
-                    this.siteIndex.byId.set(rncCid, s);
-                }
-            }
-
-            // Index by SC (PCI) for Fuzzy Freq Matching
-            const sc = s.sc || s.pci;
-            if (sc !== undefined) {
-                const key = String(sc);
-                if (!this.siteIndex.bySc.has(key)) {
-                    this.siteIndex.bySc.set(key, []);
-                }
-                this.siteIndex.bySc.get(key).push(s);
-            }
+        this.siteLayers.set(id, {
+            id: id,
+            name: name,
+            sectors: sectors,
+            visible: true,
+            settings: null // Will store {color, opacity, range, beamwidth, useOverride} individually
         });
 
-        this.renderSites(fitBounds); // Fit bounds only if requested
+        this.rebuildSiteIndex();
+        this.renderSites(fitBounds);
+    }
+
+    removeSiteLayer(id) {
+        if (this.siteLayers.has(id)) {
+            console.log(`[MapRenderer] Removing Site Layer: ${id}`);
+            this.siteLayers.delete(id);
+            this.rebuildSiteIndex();
+            this.renderSites(false);
+            return true;
+        } else {
+            console.warn(`[MapRenderer] removeSiteLayer: ID ${id} not found. Available:`, Array.from(this.siteLayers.keys()));
+        }
+        return false;
+    }
+
+    toggleSiteLayer(id, visible) {
+        const layer = this.siteLayers.get(id);
+        if (layer) {
+            layer.visible = visible;
+            this.rebuildSiteIndex();
+            this.renderSites(false);
+        }
+    }
+
+    updateLayerSettings(id, settings) {
+        if (this.siteLayers.has(id)) {
+            const layer = this.siteLayers.get(id);
+            // Merge existing settings with new ones
+            layer.settings = { ...(layer.settings || {}), ...settings };
+            this.renderSites(false);
+        }
     }
 
     updateSiteSettings(settings) {
         this.siteSettings = { ...this.siteSettings, ...settings };
-        if (this.siteData) {
+        if (this.siteLayers.size > 0 || (this.siteData && this.siteData.length > 0)) {
             this.renderSites(false); // Do NOT fit bounds on settings update
         }
     }
@@ -818,7 +894,22 @@ class MapRenderer {
             this.map.removeLayer(this.sitesLayer);
         }
 
-        if (!this.siteData || this.siteData.length === 0) return;
+        // Aggregate ALL Visible Sectors
+        let visibleSectors = [];
+        this.siteLayers.forEach(layer => {
+            if (layer.visible && layer.sectors) {
+                // Avoid spread operator for large arrays to prevent stack overflow
+                for (let i = 0; i < layer.sectors.length; i++) {
+                    visibleSectors.push(layer.sectors[i]);
+                }
+            }
+        });
+
+        if (visibleSectors.length === 0) {
+            console.warn('[MapRenderer] No visible sectors to render.');
+            return;
+        }
+        console.log(`[MapRenderer] Rendering ${visibleSectors.length} sectors.`);
 
         this.sitesLayer = L.layerGroup();
 
@@ -827,163 +918,181 @@ class MapRenderer {
             this.siteLabelsLayer.clearLayers();
         }
 
-        const settings = this.siteSettings || {};
-        const range = parseInt(settings.range) || 100;
-        const opacity = parseFloat(settings.opacity) || 0.6;
-        const beam = parseInt(settings.beamwidth) || 35;
-        const overrideColor = settings.useOverride ? settings.color : null;
 
-        const renderedSiteLabels = new Set();
-        this.sitePolygons = {};
-
-        // Calculate LOD based on Zoom
-        const zoom = this.map.getZoom();
-        const showDetailedSectors = zoom >= 12; // Skip sectors at very low zoom for performance
-
+        const globalSettings = this.siteSettings || {};
         const bounds = this.map.getBounds().pad(0.2); // Only draw what's visible (plus buffer)
 
-        this.siteData.forEach((s, index) => {
-            if (s.lat === undefined || s.lng === undefined || isNaN(s.lat) || isNaN(s.lng)) return;
+        this.sitePolygons = {};
+        const renderedSiteLabels = new Set();
 
-            // PERFORMANCE: Skip if outside visible area
-            if (!bounds.contains([s.lat, s.lng])) return;
+        // Loop through each layer to render with its specific settings
+        this.siteLayers.forEach(layer => {
+            if (!layer.visible || !layer.sectors) return;
 
-            if (!showDetailedSectors) {
-                // Draw simple dot at low zoom
-                L.circleMarker([s.lat, s.lng], {
-                    radius: 3,
-                    color: this.getSiteColor(s),
-                    fillOpacity: 0.8,
+            // Determine Effective Settings for this Layer
+            // If layer.settings exists, merge it on top of defaults. 
+            // BUT: If a specific property is set in layer.settings, use it. 
+            // If layer.settings is null, use globalSettings.
+
+            // Strategy: Start with Global Defaults -> Override with Global User Settings -> Override with Layer Settings
+            const defaults = { range: 100, opacity: 0.6, beamwidth: 35, color: null, useOverride: false };
+            const effective = { ...defaults, ...globalSettings, ...(layer.settings || {}) };
+
+            const range = parseInt(effective.range) || 100;
+            const opacity = parseFloat(effective.opacity) || 0.6;
+            const beam = parseInt(effective.beamwidth) || 35;
+            const overrideColor = effective.useOverride ? effective.color : null;
+
+            // Calculate LOD based on Zoom (re-calculated here or consistent)
+            const zoom = this.map.getZoom();
+            const showDetailedSectors = zoom >= 12;
+
+            layer.sectors.forEach((s, index) => {
+                if (s.lat === undefined || s.lng === undefined || isNaN(s.lat) || isNaN(s.lng)) return;
+                // PERFORMANCE: Skip if outside visible area
+                if (!bounds.contains([s.lat, s.lng])) return;
+
+                // ... render logic ...
+                if (!showDetailedSectors) {
+                    // Draw simple dot at low zoom
+                    L.circleMarker([s.lat, s.lng], {
+                        radius: 3,
+                        color: this.getSiteColor(s), // Note: Dot color doesn't usually use override unless we want it to
+                        fillOpacity: 0.8,
+                        pane: 'sitesPane',
+                        interactive: true
+                    }).addTo(this.sitesLayer);
+                    return;
+                }
+
+                // SECTOR LOGIC
+                const center = [s.lat, s.lng];
+                let color;
+                let finalOpacity = opacity;
+                let finalFillOpacity = opacity; // User requested 100% opacity by default
+
+                if (activeCellIds) {
+                    // HIGHLIGHT MODE
+                    color = '#555';
+                    finalOpacity = 0.4;
+                    finalFillOpacity = 0.15;
+                    let idStr = s.cellId;
+                    if (s.rnc && s.cid) idStr = `${s.rnc}/${s.cid}`;
+
+                    if (activeCellIds.includes(String(idStr)) || activeCellIds.includes(String(s.cellId))) {
+                        color = this.getDiscreteColor(idStr);
+                        finalOpacity = 1;
+                        finalFillOpacity = 0.6;
+                    }
+                } else {
+                    // STANDARD MODE - use overrideColor if present
+                    color = overrideColor || this.getSiteColor(s);
+                }
+
+                // Calculations
+                const azimuth = s.azimuth || 0;
+                const getPoint = (originLat, originLng, bearing, dist) => {
+                    const rad = Math.PI / 180;
+                    const latRad = originLat * rad;
+                    const bearRad = bearing * rad;
+                    const dy = Math.cos(bearRad) * dist;
+                    const dx = Math.sin(bearRad) * dist;
+                    const dLat = dy / 111111;
+                    const dLng = dx / (111111 * Math.cos(latRad));
+                    return [originLat + dLat, originLng + dLng];
+                };
+
+                const p1 = getPoint(s.lat, s.lng, azimuth - beam / 2, range);
+                const p2 = getPoint(s.lat, s.lng, azimuth + beam / 2, range);
+
+                const polygon = L.polygon([center, p1, p2], {
+                    color: '#ffffff',
+                    weight: 1.5,
+                    fillColor: color,
+                    fillOpacity: finalFillOpacity,
+                    opacity: 0.9,
+                    className: 'sector-polygon',
+                    interactive: true,
                     pane: 'sitesPane',
-                    interactive: true
+                    renderer: this.sitesRenderer
                 }).addTo(this.sitesLayer);
-                return;
-            }
 
-            // SECTOR LOGIC: Root at CGPS
-            const center = [s.lat, s.lng];
-
-            // COLOR LOGIC FOR SELECTIVE HIGHLIGHT
-            let color;
-            let finalOpacity = opacity;
-            let finalFillOpacity = opacity * 0.5;
-
-            if (activeCellIds) {
-                // HIGHLIGHT MODE: Default is dim but visible
-                color = '#555';
-                finalOpacity = 0.4;
-                finalFillOpacity = 0.15;
-
-                let idStr = s.cellId;
-                if (s.rnc && s.cid) idStr = `${s.rnc}/${s.cid}`;
-
-                if (activeCellIds.includes(String(idStr)) || activeCellIds.includes(String(s.cellId))) {
-                    // Match! Use Identity Color
-                    color = this.getDiscreteColor(idStr);
-                    finalOpacity = 1;
-                    finalFillOpacity = 0.6;
+                if (s.cellId) {
+                    this.sitePolygons[s.cellId] = polygon;
                 }
-            } else {
-                // STANDARD MODE
-                color = overrideColor || this.getSiteColor(s);
-            }
-
-            // Calculations
-            const azimuth = s.azimuth || 0;
-
-            const getPoint = (originLat, originLng, bearing, dist) => {
-                const rad = Math.PI / 180;
-                const latRad = originLat * rad;
-                const bearRad = bearing * rad;
-                const dy = Math.cos(bearRad) * dist;
-                const dx = Math.sin(bearRad) * dist;
-                const dLat = dy / 111111;
-                const dLng = dx / (111111 * Math.cos(latRad));
-                return [originLat + dLat, originLng + dLng];
-            };
-
-            const p1 = getPoint(s.lat, s.lng, azimuth - beam / 2, range);
-            const p2 = getPoint(s.lat, s.lng, azimuth + beam / 2, range);
-
-            const polygon = L.polygon([center, p1, p2], {
-                color: '#ffffff', // White border for panel look
-                weight: 1.5,      // Clean stroke
-                fillColor: color,
-                fillOpacity: finalFillOpacity,
-                opacity: 0.9,     // Better visibility
-                className: 'sector-polygon', // CSS for depth/metallic feel
-                interactive: true,
-                pane: 'sitesPane', // Force to use our high Z-index pane
-                renderer: this.sitesRenderer // Use SVG renderer for click-through support
-            }).addTo(this.sitesLayer);
-
-            if (s.cellId) {
-                this.sitePolygons[s.cellId] = polygon;
-            }
-            // Enhance Indexing for Unique IDs
-            if (s.rawEnodebCellId) {
-                this.sitePolygons[s.rawEnodebCellId] = polygon;
-            }
-            if (s.calculatedEci) {
-                this.sitePolygons[s.calculatedEci] = polygon;
-            }
-
-            // Labels
-            if (settings.showSiteNames) {
-                const siteName = s.siteName || s.name;
-                if (siteName && !renderedSiteLabels.has(siteName)) {
-                    renderedSiteLabels.add(siteName);
-                    L.marker(center, { icon: L.divIcon({ className: 'site-label', html: `<div style="color:#fff; font-size:10px; text-shadow:0 0 2px #000; white-space:nowrap;">${siteName}</div>`, iconAnchor: [20, 10] }), interactive: false }).addTo(this.siteLabelsLayer);
+                // Enhance Indexing for Unique IDs
+                if (s.rawEnodebCellId) {
+                    this.sitePolygons[s.rawEnodebCellId] = polygon;
                 }
-            }
-            if (settings.showCellNames) {
-                const tipMid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
-                L.marker(tipMid, { icon: L.divIcon({ className: 'cell-label', html: `<div style="color:#ddd; font-size:9px; text-shadow:0 0 2px #000; white-space:nowrap;">${s.cellId || ''}</div>`, iconAnchor: [10, 0] }), interactive: false }).addTo(this.siteLabelsLayer);
-            }
+                if (s.calculatedEci) {
+                    this.sitePolygons[s.calculatedEci] = polygon;
+                }
 
-            // Popup
-            const content = `
+                // Labels
+                if (effective.showSiteNames) {
+                    const siteName = s.siteName || s.name;
+                    if (siteName && !renderedSiteLabels.has(siteName)) {
+                        renderedSiteLabels.add(siteName);
+                        L.marker(center, {
+                            icon: L.divIcon({
+                                className: 'site-label',
+                                html: `<div style="background:rgba(0,0,0,0.4); color:#fff; font-size:10px; padding:2px 4px; border-radius:3px; white-space:nowrap; transform: translate(-50%, -50%); position: absolute; left: 0; top: 0;">${siteName}</div>`,
+                                iconSize: [0, 0] // Trick to make the div positioned at the coordinate origin
+                            }),
+                            interactive: false,
+                            pane: 'labelsPane'
+                        }).addTo(this.siteLabelsLayer);
+                    }
+                }
+                if (effective.showCellNames) {
+                    const tipMid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
+                    L.marker(tipMid, { icon: L.divIcon({ className: 'cell-label', html: `<div style="color:#ddd; font-size:9px; text-shadow:0 0 2px #000; white-space:nowrap;">${s.cellId || ''}</div>`, iconAnchor: [10, 0] }), interactive: false, pane: 'labelsPane' }).addTo(this.siteLabelsLayer);
+                }
+
+                // Popup
+                const content = `
                 <div style="font-family: sans-serif; font-size: 13px;">
                     <strong>${s.name || 'Unknown Site'}</strong><br>
                     Cell: ${s.cellId || '-'}<br>
                     Azimuth: ${azimuth}°<br>
                     Tech: ${s.tech || '-'}<br>
                     <span style="font-size:10px; color:#888;">(RNC/CID: ${s.rnc}/${s.cid})</span><br>
-                    <button style="margin-top:5px; cursor:pointer;" onclick="window.editSectorByIndex(${index})">Edit</button>
+                    <button style="margin-top:5px; cursor:pointer;" onclick="window.editSector('${layer.id}', ${index})">Edit</button>
                 </div>
             `;
-            polygon.bindPopup(content);
-            polygon.on('click', () => {
-                window.dispatchEvent(new CustomEvent('site-sector-clicked', {
-                    detail: {
-                        cellId: s.cellId,
-                        sc: s.sc || s.pci,
-                        lac: s.lac,
-                        freq: s.freq,
-                        lat: s.lat,
-                        lng: s.lng,
-                        azimuth: azimuth,
-                        rnc: s.rnc,
-                        cid: s.cid,
-                        range: range,
-                        beamwidth: beam
-                    }
-                }));
+                polygon.bindPopup(content);
+                polygon.on('click', () => {
+                    window.dispatchEvent(new CustomEvent('site-sector-clicked', {
+                        detail: {
+                            cellId: s.cellId,
+                            sc: s.sc || s.pci,
+                            lac: s.lac,
+                            freq: s.freq,
+                            lat: s.lat,
+                            lng: s.lng,
+                            azimuth: azimuth,
+                            rnc: s.rnc,
+                            cid: s.cid,
+                            range: range,
+                            beamwidth: beam
+                        }
+                    }));
+                });
+
+                if (s.cellId) {
+                    this.sitePolygons[s.cellId] = polygon;
+                }
+                // Enhance Indexing for Unique IDs
+                if (s.rawEnodebCellId) {
+                    this.sitePolygons[s.rawEnodebCellId] = polygon;
+                }
             });
         });
 
         this.sitesLayer.addTo(this.map);
         this.updateLabelVisibility();
 
-        if (fitBounds && this.siteData.length > 0) {
-            const bounds = L.latLngBounds(this.siteData.map(s => [s.lat, s.lng]));
-            this.map.fitBounds(bounds.pad(0.1));
-        }
-
-        // Removed bringLogsToFront() to allow Sites to stay ON TOP
     }
-
-    // Removed bringLogsToFront method entirely
 
     highlightCell(cellId) {
         if (!cellId || !this.sitePolygons) return;
@@ -1042,6 +1151,56 @@ class MapRenderer {
         // Firing global events to trigger re-rendering of active log/theme
         window.dispatchEvent(new CustomEvent('metric-color-changed', { detail: { id, color } }));
     }
+
+    async zoomToCell(cellId) {
+        if (!cellId) return;
+
+        // 1. Try finding existing polygon (rendered)
+        const polygon = this.sitePolygons[cellId];
+        if (polygon) {
+            const center = polygon.getBounds().getCenter();
+
+            // Check if already on screen
+            if (this.map.getBounds().contains(center)) {
+                this.map.panTo(center, { animate: true });
+            } else {
+                this.map.flyTo(center, 17, { animate: true, duration: 1.5 });
+            }
+            this.highlightCell(cellId);
+            return;
+        }
+
+        // 2. Fallback: Search in Raw Data (if not currently rendered/visible)
+        console.log(`[MapRenderer] Cell ${cellId} not rendered. Searching raw data...`);
+        let foundSector = null;
+
+        for (const layer of this.siteLayers.values()) {
+            if (!layer.sectors) continue;
+            foundSector = layer.sectors.find(s => {
+                if (String(s.cellId) === String(cellId)) return true;
+                if (s.rawEnodebCellId === cellId) return true;
+                if (s.calculatedEci == cellId) return true;
+                if (s.rnc && s.cid && `${s.rnc}/${s.cid}` === String(cellId)) return true;
+                return false;
+            });
+            if (foundSector) break;
+        }
+
+        if (foundSector) {
+            console.log(`[MapRenderer] Found ${cellId} in raw data. Flying to ${foundSector.lat}, ${foundSector.lng}`);
+            this.map.flyTo([foundSector.lat, foundSector.lng], 17, { animate: true, duration: 1.5 });
+
+            // Wait a bit for render to catch up after move, then highlight
+            this.map.once('moveend', () => {
+                setTimeout(() => {
+                    this.highlightCell(cellId);
+                }, 500);
+            });
+        } else {
+            console.warn(`[MapRenderer] zoomToCell: Cell ${cellId} not found anywhere.`);
+        }
+    }
+
 
     drawConnections(startPt, targets) {
         // Clear previous connections

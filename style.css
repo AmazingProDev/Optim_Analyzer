@@ -1799,3 +1799,75 @@ body,
 .hidden-input {
     display: none !important;
 }
+
+/* Site Layers */
+.layer-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: #eee;
+    font-size: 12px;
+}
+
+.layer-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+}
+
+.layer-color-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: #aaa;
+    flex-shrink: 0;
+}
+
+.layer-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+}
+
+.layer-count {
+    font-size: 10px;
+    color: #666;
+}
+
+.layer-controls {
+    display: flex;
+    gap: 6px;
+}
+
+.layer-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0;
+    transition: opacity 0.2s;
+}
+
+.layer-btn.visibility-btn {
+    color: #aaa;
+}
+
+.layer-btn.settings-btn {
+    color: #cbd5e1;
+    /* Slate-300 */
+}
+
+.layer-btn.remove-btn {
+    color: #ef4444;
+}
+
+.layer-btn:hover {
+    opacity: 0.8;
+}
