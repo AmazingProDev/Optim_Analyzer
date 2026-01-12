@@ -561,8 +561,8 @@ class MapRenderer {
                     // CHECK FOR POLYGON GEOMETRY (Imported SHP Grid)
                     if (p.geometry && (p.geometry.type === 'Polygon' || p.geometry.type === 'MultiPolygon')) {
                         layer = L.geoJSON(p.geometry, {
-                            pane: 'smartCarePane', // Use dedicated pane for smoothing
-                            renderer: this.smartCareRenderer,
+                            pane: 'sitesPane', // Shared pane to ensure interactivity (Canvas stacking issue fix)
+                            renderer: this.sitesRenderer,
                             style: {
                                 fillColor: color,
                                 color: "transparent",
@@ -2143,17 +2143,12 @@ ${geometry}
         return { styles: styleDefs, placemarks: placemarks };
     }
     toggleSmoothing(enable) {
-        // Toggle SmartCare Pane (Grids)
-        const pane = this.map.getPane('smartCarePane');
+        // Apply Blur to sitesPane (Shared Canvas)
+        // Note: This blurs both Grids and Sites, but ensures Interactivity works in Sharp mode.
+        const pane = this.map.getPane('sitesPane');
         if (pane) {
-            // Reset opacity in case it was hidden by heatmap logic
-            pane.style.opacity = '1';
-
-            // Apply CSS blur for "Atoll-like" Smoothing (Interpolation effect)
-            // Using a higher blur radius (8px) creates a smoother surface blending adjacent cells
             pane.style.transition = 'filter 0.3s ease';
             pane.style.filter = enable ? 'blur(8px)' : 'none';
-
             console.log(`[MapRenderer] Grid Interpolation (Smoothing) ${enable ? 'ENABLED' : 'DISABLED'}`);
         }
 
