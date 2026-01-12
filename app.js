@@ -2226,6 +2226,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const themeSelect = document.getElementById('themeSelect');
     const thresholdsContainer = document.getElementById('thresholdsContainer');
 
+    // Smooth Edges Toggle
+    // Smooth Edges Button Logic (Toggle)
+    const btnSmoothEdges = document.getElementById('btnSmoothEdges');
+    window.isSmoothingEnabled = false; // Default OFF
+
+    if (btnSmoothEdges) {
+        btnSmoothEdges.onclick = () => {
+            window.isSmoothingEnabled = !window.isSmoothingEnabled;
+
+            if (window.mapRenderer) {
+                window.mapRenderer.toggleSmoothing(window.isSmoothingEnabled);
+            }
+
+            // Visual Feedback
+            if (window.isSmoothingEnabled) {
+                btnSmoothEdges.innerHTML = '💧 Smooth: ON';
+                btnSmoothEdges.classList.add('btn-green');
+            } else {
+                btnSmoothEdges.innerHTML = '💧 Smooth';
+                btnSmoothEdges.classList.remove('btn-green');
+            }
+        };
+    }
+
     // Legend Elements
     let legendControl = null;
 

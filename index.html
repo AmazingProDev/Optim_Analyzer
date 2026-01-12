@@ -68,6 +68,8 @@
                 <button id="exportKmlBtn" class="btn header-btn" title="Export current view to KML">🌍 Export</button>
                 <button id="spiderSmartCareBtn" class="btn header-btn" title="Draw spider lines for SmartCare grid">🕸️
                     Spider</button>
+                <button id="btnSmoothEdges" class="btn header-btn" title="Toggle Smooth Edges (Heatmap View)">💧
+                    Smooth</button>
                 <button id="btnAddSector" class="btn header-btn" onclick="window.openAddSectorModal()"
                     title="Add Site Manually">📍 Add Site</button>
                 <button id="siteSettingsBtn" class="btn header-btn" title="Site Display Settings">⚙️ Sites</button>
@@ -227,6 +229,7 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
     <!-- Signaling Modal -->
     <!-- Signaling Modal -->
     <div id="signalingModal" class="modal">

@@ -68,6 +68,12 @@ class MapRenderer {
         this.map.getPane('labelsPane').style.zIndex = 700;
         this.map.getPane('labelsPane').style.pointerEvents = 'none'; // Don't block clicks
 
+        // CUSTOM PANE FOR SMARTCARE GRIDS (Polygons) - zIndex 640 (Below sitesPane 650)
+        this.map.createPane('smartCarePane');
+        this.map.getPane('smartCarePane').style.zIndex = 640;
+        // Canvas renderer for this pane to allow efficient rendering of many polygons
+        this.smartCareRenderer = L.canvas({ pane: 'smartCarePane', tolerance: 5 });
+
 
 
         this.connectionsLayer = L.layerGroup().addTo(this.map); // Layer for lines
@@ -468,6 +474,11 @@ class MapRenderer {
         this.activeLogId = id;
         this.activeMetric = metric;
         this.preventZoom = preventZoom;
+
+        // Store for Heatmap use
+        this.currentPoints = points;
+        this.currentMetric = metric;
+
         // Create a new layer group for this log
         const layerGroup = L.layerGroup();
 
@@ -550,8 +561,8 @@ class MapRenderer {
                     // CHECK FOR POLYGON GEOMETRY (Imported SHP Grid)
                     if (p.geometry && (p.geometry.type === 'Polygon' || p.geometry.type === 'MultiPolygon')) {
                         layer = L.geoJSON(p.geometry, {
-                            pane: 'sitesPane',
-                            renderer: this.sitesRenderer,
+                            pane: 'smartCarePane', // Use dedicated pane for smoothing
+                            renderer: this.smartCareRenderer,
                             style: {
                                 fillColor: color,
                                 color: "transparent",
@@ -2130,5 +2141,26 @@ ${geometry}
         });
 
         return { styles: styleDefs, placemarks: placemarks };
+    }
+    toggleSmoothing(enable) {
+        // Toggle SmartCare Pane (Grids)
+        const pane = this.map.getPane('smartCarePane');
+        if (pane) {
+            // Reset opacity in case it was hidden by heatmap logic
+            pane.style.opacity = '1';
+
+            // Apply CSS blur for "Atoll-like" Smoothing (Interpolation effect)
+            // Using a higher blur radius (8px) creates a smoother surface blending adjacent cells
+            pane.style.transition = 'filter 0.3s ease';
+            pane.style.filter = enable ? 'blur(8px)' : 'none';
+
+            console.log(`[MapRenderer] Grid Interpolation (Smoothing) ${enable ? 'ENABLED' : 'DISABLED'}`);
+        }
+
+        // Disable Heatmap if it exists (Cleanup)
+        if (this.heatLayer) {
+            this.map.removeLayer(this.heatLayer);
+            this.heatLayer = null;
+        }
     }
 }
