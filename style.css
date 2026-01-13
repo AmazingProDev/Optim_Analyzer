@@ -146,6 +146,145 @@ input[type="file"] {
     background-color: #059669;
 }
 
+/* Boundary Controls */
+/* Boundary Controls & Modern Modal Styling */
+.boundary-modal-content {
+    max-width: 360px;
+    border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    /* Stronger shadow for dark mode */
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    /* Subtle light border */
+    overflow: hidden;
+    animation: slideUpFade 0.3s ease-out;
+    background-color: rgba(0, 0, 0, 0.5);
+    /* 50% transparent black */
+    backdrop-filter: blur(10px);
+    /* Frosted glass effect */
+    -webkit-backdrop-filter: blur(10px);
+    color: #e5e7eb;
+    /* Light text */
+}
+
+@keyframes slideUpFade {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Specific Header for Boundary Modal */
+.boundary-modal-content .modal-header {
+    background-color: rgba(0, 0, 0, 0.2);
+    /* Slightly darker header */
+    padding: 16px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.boundary-modal-content .modal-header h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: #f3f4f6;
+    /* White/Light text */
+}
+
+.boundary-modal-content .close {
+    color: #9ca3af;
+    opacity: 1;
+    font-size: 24px;
+    font-weight: normal;
+    transition: color 0.2s;
+}
+
+.boundary-modal-content .close:hover {
+    color: #fff;
+}
+
+/* Modal Body Spacing */
+.boundary-modal-content .modal-body {
+    padding: 24px;
+    background-color: transparent;
+    /* Inherit from content */
+}
+
+/* Setting Items Layout */
+.boundary-modal-content .setting-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0;
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.boundary-modal-content .setting-item:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.boundary-modal-content .setting-item:first-of-type {
+    flex-direction: column;
+    align-items: flex-start;
+    padding-top: 0;
+    padding-bottom: 18px;
+    gap: 8px;
+}
+
+/* Labels */
+.boundary-modal-content .setting-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #d1d5db;
+    /* Light gray */
+    width: auto;
+}
+
+/* Modern Select Styles */
+.boundary-select {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    color: #e5e7eb;
+    background-color: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    outline: none;
+    transition: all 0.2s;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 16px;
+    cursor: pointer;
+}
+
+.boundary-select:focus {
+    border-color: #059669;
+    background-color: rgba(0, 0, 0, 0.6);
+    box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
+}
+
+.boundary-select option {
+    background-color: #1f2937;
+    /* Dark background for dropdown options */
+    color: #fff;
+}
+
+/* Toggles (Switch) Refinement */
+/* Ensure the generic switch classes work well here */
+.boundary-modal-content .switch {
+    margin-left: auto;
+}
+
 .btn-purple {
     background-color: #8b5cf6;
 }
@@ -1080,12 +1219,18 @@ body,
 .grid-modal-overlay {
     display: none;
     position: fixed;
-    z-index: 1000;
+    z-index: 2000;
     left: 0;
     top: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.4);
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.6) !important;
+    /* Enforce darker, transparent overlay */
+    -webkit-backdrop-filter: blur(5px);
+    backdrop-filter: blur(5px);
+    justify-content: center;
+    align-items: center;
 }
 
 .grid-modal-content {

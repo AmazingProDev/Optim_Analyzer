@@ -554,9 +554,10 @@ const ExcelParser = {
         if (json.length === 0) return { points: [], tech: 'Unknown', customMetrics: [] };
 
         // 1. Identify Key Columns (Time, Lat, Lon)
-        // Normalize keys for matching
-        const sampleRow = json[0];
-        const keys = Object.keys(sampleRow);
+        // ROBUST HEADER EXTRACTION: Get headers explicitly, don't rely on json[0] keys
+        const headerJson = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const keys = (headerJson && headerJson.length > 0) ? headerJson[0].map(k => String(k)) : Object.keys(json[0]);
+
         const normalize = k => k.toLowerCase().replace(/[\s_]/g, '');
 
         let timeKey = keys.find(k => /time/i.test(normalize(k)));
@@ -606,6 +607,17 @@ const ExcelParser = {
         const freqCol = detectBestColumn(['servingcelldlearfcn', 'earfcn', 'uarfcn', 'freq', 'channel'], ['active', 'set', 'neighbor']);
         const bandCol = detectBestColumn(['band'], ['active', 'set', 'neighbor']);
         const cellIdCol = detectBestColumn(['cellid', 'ci', 'cid', 'cell_id', 'identity'], ['active', 'set', 'neighbor', 'target']); // Add CellID detection
+
+        // DEBUG: Log all keys and their normalized versions
+        console.log('[ExcelParser] Keys found:', keys);
+        keys.forEach(k => console.log(`[ExcelParser] Key: "${k}" -> Norm: "${normalize(k)}"`));
+
+        // Throughput Detection
+        const dlThputCol = detectBestColumn(['averagedlthroughput', 'dlthroughput', 'downlinkthroughput'], []);
+        const ulThputCol = detectBestColumn(['averageulthroughput', 'ulthroughput', 'uplinkthroughput'], []);
+
+        console.log('[ExcelParser] DL Throughput Column:', dlThputCol);
+        console.log('[ExcelParser] UL Throughput Column:', ulThputCol);
 
         // Number Parsing Helper (handles comma decimals)
         const parseNumber = (val) => {
@@ -666,7 +678,9 @@ const ExcelParser = {
                     sc: (scCol && row[scCol] !== undefined) ? parseInt(parseNumber(row[scCol])) : 0,
                     freq: (freqCol && row[freqCol] !== undefined) ? parseNumber(row[freqCol]) : undefined,
                     band: (bandCol && row[bandCol] !== undefined) ? row[bandCol] : undefined,
-                    cellId: (cellIdCol && row[cellIdCol] !== undefined) ? row[cellIdCol] : undefined
+                    cellId: (cellIdCol && row[cellIdCol] !== undefined) ? row[cellIdCol] : undefined,
+                    throughput_dl: (dlThputCol && row[dlThputCol] !== undefined) ? (parseNumber(row[dlThputCol]) / 1000.0) : undefined, // Convert Kbps -> Mbps
+                    throughput_ul: (ulThputCol && row[ulThputCol] !== undefined) ? (parseNumber(row[ulThputCol]) / 1000.0) : undefined  // Convert Kbps -> Mbps
                 };
 
                 // Fallback: If SC is 0 and CellID looks like PCI (and no explicit SC col), try to recover
@@ -791,6 +805,10 @@ const ExcelParser = {
                 points.push(point);
             } // End if !isNaN
         } // End for i loop
+
+        // Add Computed Metrics to List
+        if (dlThputCol) customMetrics.push('throughput_dl');
+        if (ulThputCol) customMetrics.push('throughput_ul');
 
         return {
             points: points,

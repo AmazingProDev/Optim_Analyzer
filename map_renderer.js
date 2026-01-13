@@ -2152,10 +2152,411 @@ ${geometry}
             console.log(`[MapRenderer] Grid Interpolation (Smoothing) ${enable ? 'ENABLED' : 'DISABLED'}`);
         }
 
-        // Disable Heatmap if it exists (Cleanup)
         if (this.heatLayer) {
             this.map.removeLayer(this.heatLayer);
             this.heatLayer = null;
+        }
+    }
+
+    // Toggle Boundary Layers (Regions, Provinces, Communes)
+    // type: 'regions', 'provinces', 'communes'
+    async toggleBoundary(type, visible) {
+        if (!this.boundaryLayers) this.boundaryLayers = {};
+
+        if (visible) {
+            if (this.boundaryLayers[type]) {
+                if (!this.map.hasLayer(this.boundaryLayers[type])) {
+                    this.boundaryLayers[type].addTo(this.map);
+                }
+            } else {
+                await this.loadBoundary(type);
+            }
+        } else {
+            if (this.boundaryLayers[type] && this.map.hasLayer(this.boundaryLayers[type])) {
+                this.map.removeLayer(this.boundaryLayers[type]);
+            }
+        }
+    }
+
+    async loadBoundary(type) {
+        const basePath = 'boundaries_data'; // Symlink to avoid character encoding issues
+        let url = '';
+        let style = {};
+
+        if (type === 'regions') {
+            url = `${basePath}/DA_REGIONS_12R.zip`;
+            style = { color: 'black', weight: 3, fill: false, opacity: 0.8 };
+        } else if (type === 'provinces') {
+            url = `${basePath}/DA_PROVINCES_12R.zip`;
+            style = { color: '#333', weight: 1.5, fill: false, opacity: 0.7 };
+        } else if (type === 'communes') {
+            url = `${basePath}/DA_COMMUNES_12R.zip`;
+            style = { color: '#666', weight: 0.5, dashArray: '4, 4', fill: false, opacity: 0.6 };
+        } else if (type === 'drs') {
+            // Special handling for DRs: Aggregate from Provinces
+            await this.generateDRLayer();
+            return;
+        }
+
+        console.log(`[MapRenderer] Loading boundary: ${type} from ${url}`);
+
+        try {
+            // shp(url) returns a promise that resolves to GeoJSON
+            const geojson = await shp(url);
+
+            const layer = L.geoJSON(geojson, {
+                style: style,
+                pane: 'labelsPane', // Use labelsPane (high z-index) so borders sit on top
+                interactive: false  // Non-interactive to not block clicks on data below
+            });
+
+            this.boundaryLayers[type] = layer;
+            layer.addTo(this.map);
+            console.log(`[MapRenderer] Loaded ${type} successfully.`);
+
+        } catch (e) {
+            console.error(`[MapRenderer] Failed to load ${type}:`, e);
+            alert(`Error loading ${type}:\nMake sure the .zip file exists in ${basePath}.\nDetails: ${e.message}`);
+        }
+    }
+
+    // Filter DRs
+    async filterDR(drName) {
+        if (!drName) {
+            // Remove if exists
+            if (this.boundaryLayers['drs']) {
+                this.map.removeLayer(this.boundaryLayers['drs']);
+                delete this.boundaryLayers['drs'];
+            }
+            return;
+        }
+        await this.generateDRLayer(drName);
+    }
+
+    async generateDRLayer(filterDR = "All") {
+        const basePath = 'boundaries_data';
+        const url = `${basePath}/DA_PROVINCES_12R.zip`;
+
+        // Mapping: Normalized Province Name -> DR Code
+        // Corrections applied: FS->FES, MEKNS->MEKNES, TTOUAN->TETOUAN, etc.
+        const PROVINCE_TO_DR_CODE = {
+            "ALHOCEIMA": "DRT",
+            "CHEFCHAOUEN": "DRT",
+            "FAHSANJRA": "DRT",
+            "LARACHE": "DRT",
+            "OUEZZANE": "DRR",
+            "TANGERASSILAH": "DRT",
+            "TETOUAN": "DRT",
+            "MDIQFNIDEQ": "DRT",
+            "BERKANE": "DRO",
+            "DRIOUCH": "DRO",
+            "FIGUIG": "DRO",
+            "GUERCIF": "DRO",
+            "JERADA": "DRO",
+            "NADOR": "DRO",
+            "OUJDAANGAD": "DRO",
+            "TAOURIRT": "DRO",
+            "MEKNES": "DRF",
+            "BOULEMANE": "DRF",
+            "ELHAJEB": "DRF",
+            "FES": "DRF",
+            "IFRANE": "DRF",
+            "SEFROU": "DRF",
+            "TAOUNATE": "DRF",
+            "TAZA": "DRF",
+            "MOULAYYACOUB": "DRF",
+            "KENITRA": "DRR",
+            "KHEMISSET": "DRR",
+            "RABAT": "DRR",
+            "SALE": "DRR",
+            "SIDIKACEM": "DRR",
+            "SIDISLIMANE": "DRR",
+            "SKHIRATETEMARA": "DRR",
+            "AZILAL": "DRS",
+            "BENIMELLAL": "DRS",
+            "FQUIHBENSALAH": "DRS",
+            "KHENIFRA": "DRF",
+            "KHOURIBGA": "DRS",
+            "BENSLIMANE": "DRS",
+            "BERRECHID": "DRS",
+            "CASABLANCA": "DRC",
+            "ELJADIDA": "DRS",
+            "MEDIUNA": "DRC",
+            "MEDIOUNA": "DRC",
+            "MDIOUNA": "DRC",
+            "MOHAMMEDIA": "DRC",
+            "MOHAMMADIA": "DRC",
+            "NOUACEUR": "DRC",
+            "MOHAMMEDIA": "DRC",
+            "MOHAMMADIA": "DRC",
+            "NOUACEUR": "DRC",
+            "SETTAT": "DRS",
+            "SIDIBENNOUR": "DRS",
+            "ALHAOUZ": "DRM",
+            "CHICHAOUA": "DRM",
+            "ELKELAADESSRAGHNA": "DRM",
+            "ESSAOUIRA": "DRM",
+            "MARRAKECH": "DRM",
+            "REHAMNA": "DRM",
+            "SAFI": "DRM",
+            "YOUSSOUFIA": "DRM",
+            "ERRACHIDIA": "DRF",
+            "MIDELT": "DRF",
+            "OUARZAZATE": "DRM",
+            "TINGHIR": "DRM",
+            "ZAGORA": "DRM",
+            "AGADIRIDAOUTANANE": "DRA",
+            "CHTOUKAAITBAHA": "DRA",
+            "INEZGANEAITMELLOUL": "DRA",
+            "TAROUDANNT": "DRA",
+            "TATA": "DRA",
+            "TIZNIT": "DRA",
+            "ASSAZAG": "DRA",
+            "GUELMIM": "DRA",
+            "SIDIIFNI": "DRA",
+            "TANTAN": "DRA",
+            "BOUJDOUR": "DRA",
+            "ESSEMARA": "DRA",
+            "LAAYOUNE": "DRA",
+            "TARFAYA": "DRA",
+            "AOUSSERD": "DRA",
+            "OUEDEDDAHAB": "DRA"
+        };
+
+        // Map Codes to Readable Names (for UI and Coloring)
+        const DR_CODE_MAP = {
+            "DRT": "DR Tanger",
+            "DRR": "DR Rabat",
+            "DRO": "DR Oujda",
+            "DRF": "DR Fes",
+            "DRS": "DR Beni Mellal", // Covering Settat/Beni Mellal
+            "DRC": "DR Casa",
+            "DRM": "DR Marrakech",
+            "DRA": "DR Agadir"     // Covering South
+        };
+
+        const DR_COLORS = {
+            "DR Casa": "#e6194b", "DR Rabat": "#3cb44b", "DR Fes": "#ffe119", "DR Tanger": "#4363d8",
+            "DR Marrakech": "#f58231", "DR Agadir": "#911eb4", "DR Oujda": "#46f0f0", "DR Beni Mellal": "#f032e6",
+            "DR Errachidia": "#bcf60c", "DR Sud": "#fabebe", "Unknown": "#808080"
+        };
+
+        try {
+            // Cache GeoJSON to avoid re-downloading/parsing
+            if (!this.cachedProvinceGeoJSON) {
+                console.log(`[MapRenderer] Fetching Provinces for DR generation...`);
+                this.cachedProvinceGeoJSON = await shp(url);
+            }
+
+            const geojson = this.cachedProvinceGeoJSON;
+
+            if (typeof turf === 'undefined') {
+                console.error("[MapRenderer] Turf.js missing.");
+                return;
+            }
+
+            const drFeatures = {};
+
+            // Group by DRFeatures
+            geojson.features.forEach(f => {
+                let nameKey = 'NOM_PROV_P';
+                if (!f.properties[nameKey]) {
+                    nameKey = Object.keys(f.properties).find(k => k.toLowerCase().includes('nom') || k.toLowerCase().includes('name'));
+                }
+
+                const rawName = f.properties[nameKey] ? f.properties[nameKey].toString() : "UNKNOWN";
+
+                // Robust Normalization: 
+                // 1. Decompose accents (NFD) -> 'é' becomes 'e' + '´'
+                // 2. Remove combining diacritical marks ([\u0300-\u036f])
+                // 3. To Upper Case
+                // 4. Remove non-A-Z characters
+                const normName = rawName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z]/g, '');
+
+                const code = PROVINCE_TO_DR_CODE[normName];
+                const dr = code ? (DR_CODE_MAP[code] || "Unknown") : "Unknown";
+
+                if (dr === "Unknown") {
+                    // Log unmapped provinces to help debug missing areas
+                    if (!this.loggedUnmapped) this.loggedUnmapped = new Set();
+                    if (!this.loggedUnmapped.has(rawName)) {
+                        console.warn(`[MapRenderer] Unmapped Province: '${rawName}' -> Normalized: '${normName}'`);
+                        this.loggedUnmapped.add(rawName);
+                    }
+                }
+
+                // Filter logic
+                if (filterDR === "All" || filterDR === dr) {
+                    if (!drFeatures[dr]) drFeatures[dr] = [];
+                    drFeatures[dr].push(f);
+                }
+            });
+
+            // --- COMMUNE EXCEPTIONS ---
+            // Move Bouznika, Charrate, El Mansouria from Benslimane (DRS) to Rabat (DRR)
+            try {
+                const exceptionCommunes = ["Bouznika", "Charrate", "El Mansouria"];
+
+                // Only proceed if relevant DRs are active or filtering All
+                const affectsRabat = (filterDR === "All" || filterDR === "DR Rabat");
+                const affectsSource = (filterDR === "All" || filterDR === "DR Beni Mellal");
+
+                if (affectsRabat || affectsSource) {
+                    if (!this.cachedCommuneGeoJSON) {
+                        console.log(`[MapRenderer] Fetching Communes for Exception logic from ${basePath}/DA_COMMUNES_12R.zip...`);
+                        try {
+                            this.cachedCommuneGeoJSON = await shp(`${basePath}/DA_COMMUNES_12R.zip`);
+                            console.log(`[MapRenderer] Loaded Communes. Total Features: ${this.cachedCommuneGeoJSON.features.length}`);
+                            if (this.cachedCommuneGeoJSON.features.length > 0) {
+                                console.log("[MapRenderer] Sample Commune Props:", this.cachedCommuneGeoJSON.features[0].properties);
+                            }
+                        } catch (err) {
+                            console.error("[MapRenderer] Failed to load Communes shapefile:", err);
+                            this.cachedCommuneGeoJSON = { features: [] }; // Prevent retry loop failure
+                        }
+                    }
+                    const commGeo = this.cachedCommuneGeoJSON;
+
+                    // Find the 3 communes
+                    const targets = commGeo.features.filter(f => {
+                        const n = f.properties.NOM_COM_P || f.properties.NOM_COM || f.properties.Nom_Com || f.properties.Nom_Commun || f.properties.NAME || "";
+                        // Loose match
+                        const match = exceptionCommunes.some(t => n.toLowerCase().includes(t.toLowerCase()));
+                        if (match) console.log(`[MapRenderer] Found target commune: ${n}`);
+                        return match;
+                    });
+
+                    console.log(`[MapRenderer] Exception Communes found: ${targets.length} / ${exceptionCommunes.length}`);
+
+                    if (targets.length > 0) {
+                        console.log(`[MapRenderer] Found ${targets.length} exception communes to move.`);
+
+                        // 1. Remove from Source (Benslimane in DR Beni Mellal)
+                        // We need to find Benslimane in drFeatures['DR Beni Mellal']
+                        // Benslimane norm name is BENSLIMANE
+
+                        const sourceDR = "DR Beni Mellal"; // or wherever Benslimane is mapped
+                        if (drFeatures[sourceDR]) {
+                            const bensIndex = drFeatures[sourceDR].findIndex(f => {
+                                const raw = f.properties.NOM_PROV_P || "";
+                                return raw.toUpperCase().includes("BENSLIMANE");
+                            });
+
+                            if (bensIndex !== -1) {
+                                let bensFeature = drFeatures[sourceDR][bensIndex];
+
+                                // Difference: Benslimane - Union(Targets)
+                                try {
+                                    let toRemove = targets[0];
+                                    if (targets.length > 1) {
+                                        for (let i = 1; i < targets.length; i++) toRemove = turf.union(toRemove, targets[i]);
+                                    }
+
+                                    const newBens = turf.difference(bensFeature, toRemove);
+                                    if (newBens) {
+                                        // Update properties from original
+                                        newBens.properties = bensFeature.properties;
+                                        drFeatures[sourceDR][bensIndex] = newBens; // Replace
+                                        console.log("[MapRenderer] Successfully subtracted communes from Benslimane.");
+                                    }
+                                } catch (err) {
+                                    console.error("Error diffing communes from Benslimane", err);
+                                }
+                            }
+                        }
+
+                        // 2. Add to Target (DR Rabat)
+                        if (drFeatures["DR Rabat"]) {
+                            targets.forEach(t => drFeatures["DR Rabat"].push(t));
+                        } else if (filterDR === "All" || filterDR === "DR Rabat") {
+                            drFeatures["DR Rabat"] = targets;
+                        }
+                    }
+                }
+            } catch (ex) {
+                console.error("[MapRenderer] Commune Exception Warning:", ex);
+            }
+            // --------------------------
+
+            // Ensure storage exists
+            if (!this.boundaryLayers) this.boundaryLayers = {};
+
+            const finalFeatures = [];
+
+            for (const [drName, features] of Object.entries(drFeatures)) {
+                if (features.length > 0) {
+                    if (filterDR !== "All" && drName !== filterDR) continue;
+                    if (filterDR === "All" && drName === "Unknown") continue;
+
+                    let merged = null;
+
+                    // Filter valid geometries
+                    const validFeatures = features.filter(f => f.geometry && (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'));
+
+                    if (validFeatures.length === 0) continue;
+
+                    try {
+                        // Try Modern Turf (Collection)
+                        // v7+ wants turf.union(featureCollection)
+                        if (validFeatures.length > 1) {
+                            try {
+                                const fc = { type: 'FeatureCollection', features: validFeatures };
+                                merged = turf.union(fc);
+                            } catch (e_v7) {
+                                // Fallback to iterative (v6 style or robust fallback)
+                                // console.warn("v7 union failed", e_v7);
+                                merged = validFeatures[0];
+                                for (let i = 1; i < validFeatures.length; i++) {
+                                    merged = turf.union(merged, validFeatures[i]);
+                                }
+                            }
+                        } else {
+                            merged = validFeatures[0];
+                        }
+                    } catch (e) {
+                        console.warn(`[MapRenderer] Merge failed for ${drName}. Using raw features.`, e);
+                        merged = null;
+                    }
+
+                    if (merged) {
+                        merged.properties = { DR_NAME: drName };
+                        finalFeatures.push(merged);
+                    } else {
+                        // Fallback
+                        console.log(`[MapRenderer] Using raw features for ${drName} (Merge incomplete)`);
+                        validFeatures.forEach(f => {
+                            f.properties.DR_NAME = drName;
+                            finalFeatures.push(f);
+                        });
+                    }
+                }
+            }
+
+            // Remove existing logic to refresh
+            if (this.boundaryLayers['drs']) {
+                this.map.removeLayer(this.boundaryLayers['drs']);
+            }
+
+            const mergedGeoJSON = { type: "FeatureCollection", features: finalFeatures };
+
+            const layer = L.geoJSON(mergedGeoJSON, {
+                style: (feature) => ({
+                    color: DR_COLORS[feature.properties.DR_NAME] || 'black',
+                    weight: 3,
+                    fillColor: DR_COLORS[feature.properties.DR_NAME],
+                    fillOpacity: 0.2,
+                    interactive: false
+                }),
+                pane: 'labelsPane'
+            });
+
+            this.boundaryLayers['drs'] = layer;
+            layer.addTo(this.map);
+            console.log(`[MapRenderer] Displaying ${filterDR === 'All' ? 'All' : filterDR} DRs.`);
+
+        } catch (e) {
+            console.error("[MapRenderer] Failed to generate DR layer:", e);
+            alert("Error generating DR layer.");
         }
     }
 }

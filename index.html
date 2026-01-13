@@ -16,6 +16,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
     <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+    <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <link rel="stylesheet" href="style.css?v=32">
     <link rel="stylesheet" href="grid_styles.css?v=2">
     <link rel="stylesheet" href="additional_styles.css?v=2">
@@ -70,6 +71,7 @@
                     Spider</button>
                 <button id="btnSmoothEdges" class="btn header-btn" title="Toggle Smooth Edges (Heatmap View)">💧
                     Smooth</button>
+                <button id="btnZones" class="btn header-btn" title="Toggle Administrative Boundaries">🗺️ Zones</button>
                 <button id="btnAddSector" class="btn header-btn" onclick="window.openAddSectorModal()"
                     title="Add Site Manually">📍 Add Site</button>
                 <button id="siteSettingsBtn" class="btn header-btn" title="Site Display Settings">⚙️ Sites</button>
@@ -88,6 +90,61 @@
                 <span id="fileStatus">No file loaded</span>
             </div>
 
+            <!-- Boundaries Modal -->
+            <div id="boundariesModal" class="modal">
+                <div class="modal-content boundary-modal-content">
+                    <div class="modal-header">
+                        <h3>Admin Zones</h3>
+                        <span class="close" id="closeBoundariesModal">&times;</span>
+                    </div>
+                    <div class="modal-body">
+                        <div class="setting-item">
+                            <label class="setting-label">Direction Régionale</label>
+                            <select id="drSelect" class="form-control boundary-select"
+                                aria-label="Select Direction Régionale" title="Select Direction Régionale">
+                                <option value="">-- Select DR --</option>
+                                <option value="All">Show All</option>
+                                <option value="DR Casa">DR Casa</option>
+                                <option value="DR Rabat">DR Rabat</option>
+                                <option value="DR Fes">DR Fes</option>
+                                <option value="DR Tanger">DR Tanger</option>
+                                <option value="DR Marrakech">DR Marrakech</option>
+                                <option value="DR Agadir">DR Agadir</option>
+                                <option value="DR Oujda">DR Oujda</option>
+                                <option value="DR Beni Mellal">DR Beni Mellal</option>
+                                <option value="DR Errachidia">DR Errachidia</option>
+                                <option value="DR Sud">DR Sud</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label class="setting-label">Regions</label>
+                            <label class="switch">
+                                <input type="checkbox" id="chkRegions" title="Toggle Regions"
+                                    aria-label="Toggle Regions">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="setting-label">Provinces</label>
+                            <label class="switch">
+                                <input type="checkbox" id="chkProvinces" title="Toggle Provinces"
+                                    aria-label="Toggle Provinces">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="setting-label">Communes</label>
+                            <label class="switch">
+                                <input type="checkbox" id="chkCommunes" title="Toggle Communes"
+                                    aria-label="Toggle Communes">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Site Settings Modal -->
             <!-- Site Settings Panel -->
             <div id="siteSettingsPanel" class="settings-panel">
                 <h4 class="settings-header">Site Settings</h4>
@@ -354,7 +411,7 @@
     </aside>
 
     <script src="map_renderer.js?v=64"></script>
-    <script src="parser.js?v=43"></script>
+    <script src="parser.js?v=45"></script>
     <!-- KML Export Choice Modal -->
     <!-- KML Export Choice Modal -->
     <div id="exportKmlModal" class="modal modal-centered">
