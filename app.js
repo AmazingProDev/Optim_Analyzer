@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!metric) return 'level';
         const m = metric.toLowerCase();
         if (m.includes('qual') || m.includes('sinr') || m.includes('ecno')) return 'quality';
+        if (m.includes('throughput')) return 'throughput';
         return 'level'; // Default to level (RSRP/RSCP)
     };
 
@@ -39,7 +40,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 { min: -10, max: undefined, color: '#22c55e', label: 'Excellent (>= -10)' },
                 { min: -15, max: -10, color: '#eab308', label: 'Fair (-15 to -10)' },
                 { min: undefined, max: -15, color: '#ef4444', label: 'Poor (< -15)' }
+            ],
+            'throughput': [
+                { min: 20, max: undefined, color: '#22c55e', label: 'Excellent (>= 20 Mbps)' },
+                { min: 10, max: 20, color: '#84cc16', label: 'Good (10-20 Mbps)' },
+                { min: 3, max: 10, color: '#eab308', label: 'Fair (3-10 Mbps)' },
+                { min: 1, max: 3, color: '#f97316', label: 'Poor (1-3 Mbps)' },
+                { min: undefined, max: 1, color: '#ef4444', label: 'Bad (< 1 Mbps)' }
             ]
+
         }
     };
 
@@ -2225,6 +2234,74 @@ document.addEventListener('DOMContentLoaded', () => {
     const resetThemeBtn = document.getElementById('resetThemeBtn');
     const themeSelect = document.getElementById('themeSelect');
     const thresholdsContainer = document.getElementById('thresholdsContainer');
+
+    // Smooth Edges Toggle
+    // Smooth Edges Button Logic (Toggle)
+    const btnSmoothEdges = document.getElementById('btnSmoothEdges');
+    window.isSmoothingEnabled = false; // Default OFF
+
+    if (btnSmoothEdges) {
+        btnSmoothEdges.onclick = () => {
+            window.isSmoothingEnabled = !window.isSmoothingEnabled;
+
+            if (window.mapRenderer) {
+                window.mapRenderer.toggleSmoothing(window.isSmoothingEnabled);
+            }
+
+            // Visual Feedback
+            if (window.isSmoothingEnabled) {
+                btnSmoothEdges.innerHTML = '💧 Smooth: ON';
+                btnSmoothEdges.classList.add('btn-green');
+            } else {
+                btnSmoothEdges.innerHTML = '💧 Smooth';
+                btnSmoothEdges.classList.remove('btn-green');
+            }
+        };
+    }
+
+    // Zones (Boundaries) Modal Logic
+    const btnZones = document.getElementById('btnZones');
+    const boundariesModal = document.getElementById('boundariesModal');
+    const closeBoundariesModal = document.getElementById('closeBoundariesModal');
+
+    if (btnZones && boundariesModal) {
+        btnZones.onclick = () => {
+            boundariesModal.style.display = 'flex'; // Use flex to center the modal content
+        };
+        closeBoundariesModal.onclick = () => {
+            boundariesModal.style.display = 'none';
+        };
+        // Close on click outside
+        window.addEventListener('click', (event) => {
+            if (event.target === boundariesModal) {
+                boundariesModal.style.display = 'none';
+            }
+        });
+    }
+
+    // Boundary Checkboxes
+    ['chkRegions', 'chkProvinces', 'chkCommunes'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('change', (e) => {
+                const type = id.replace('chk', '').toLowerCase(); // regions, provinces, communes
+                if (window.mapRenderer) {
+                    window.mapRenderer.toggleBoundary(type, e.target.checked);
+                }
+            });
+        }
+    });
+
+    // DR Selection Logic
+    const drSelect = document.getElementById('drSelect');
+    if (drSelect) {
+        drSelect.addEventListener('change', (e) => {
+            const val = e.target.value;
+            if (window.mapRenderer) {
+                window.mapRenderer.filterDR(val);
+            }
+        });
+    }
 
     // Legend Elements
     let legendControl = null;
@@ -4753,9 +4830,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 actions.appendChild(addHeader('Detected Metrics'));
 
                 log.customMetrics.forEach(metric => {
-                    // Create clean label: e.g. "RSRP (dBm)" -> "RSRP" or just keep originals
-                    // For dynamic, original is best to avoid confusion.
-                    actions.appendChild(addAction(metric, metric));
+                    let label = metric;
+                    if (metric === 'throughput_dl') label = 'DL Throughput (Mbps)';
+                    if (metric === 'throughput_ul') label = 'UL Throughput (Mbps)';
+                    actions.appendChild(addAction(label, metric));
                 });
 
                 // Also add "Time" and "GPS" if they exist in basic points but maybe not in customMetrics list?
