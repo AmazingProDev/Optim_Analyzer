@@ -421,6 +421,12 @@ class MapRenderer {
         const freq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
         const cellId = p.cellId;
 
+        // NEW: Priority RNC/CID Lookup (3G)
+        if (p.rnc != null && p.cid != null) {
+            const key = `${p.rnc}/${p.cid}`.replace(/\s/g, '');
+            if (this.siteIndex.byId.has(key)) return this.siteIndex.byId.get(key);
+        }
+
         // 0. PRIORITY: Strict eNodeB ID-Cell ID Matching
         if (cellId) {
             if (typeof cellId === 'number' && cellId > 65535) {
