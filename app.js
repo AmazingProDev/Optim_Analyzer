@@ -42,11 +42,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 { min: undefined, max: -15, color: '#ef4444', label: 'Poor (< -15)' }
             ],
             'throughput': [
-                { min: 20, max: undefined, color: '#22c55e', label: 'Excellent (>= 20 Mbps)' },
-                { min: 10, max: 20, color: '#84cc16', label: 'Good (10-20 Mbps)' },
-                { min: 3, max: 10, color: '#eab308', label: 'Fair (3-10 Mbps)' },
-                { min: 1, max: 3, color: '#f97316', label: 'Poor (1-3 Mbps)' },
-                { min: undefined, max: 1, color: '#ef4444', label: 'Bad (< 1 Mbps)' }
+                { min: 20000, max: undefined, color: '#22c55e', label: 'Excellent (>= 20000 Kbps)' },
+                { min: 10000, max: 20000, color: '#84cc16', label: 'Good (10000-20000 Kbps)' },
+                { min: 3000, max: 10000, color: '#eab308', label: 'Fair (3000-10000 Kbps)' },
+                { min: 1000, max: 3000, color: '#f97316', label: 'Poor (1000-3000 Kbps)' },
+                { min: undefined, max: 1000, color: '#ef4444', label: 'Bad (< 1000 Kbps)' }
             ]
 
         }
@@ -468,7 +468,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Update UI Icon
-            const btn = document.querySelector(`#sc-item-\${layerId} .sc-btn-toggle`);
+            const btn = document.querySelector(`#sc-item-${layerId} .sc-btn-toggle`);
             if (btn) {
                 btn.textContent = log.visible ? '👁️' : '🚫';
                 btn.classList.toggle('hidden-layer', !log.visible);
@@ -491,7 +491,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Remove from Sidebar
-        const item = document.getElementById(`sc-item-\${layerId}`);
+        const item = document.getElementById(`sc-item-${layerId}`);
         if (item) item.remove();
 
         // Hide sidebar if empty
@@ -502,48 +502,53 @@ document.addEventListener('DOMContentLoaded', () => {
 
     shpInput.onchange = async (e) => {
         const files = Array.from(e.target.files);
+        console.log(`[Import] Selected ${files.length} files:`, files.map(f => f.name));
+
         if (files.length === 0) return;
 
-        const excelFile = files.find(f => f.name.endsWith('.xlsx') || f.name.endsWith('.xls'));
-        if (excelFile) {
-            await handleExcelImport(excelFile);
+        // Filter for Excel files (Case Insensitive)
+        const excelFiles = files.filter(f => {
+            const name = f.name.toLowerCase();
+            return name.endsWith('.xlsx') || name.endsWith('.xls');
+        });
+
+        console.log(`[Import] Detected ${excelFiles.length} Excel files.`);
+
+        if (excelFiles.length > 0) {
+            // Check if multiple Excel files selected
+            if (excelFiles.length > 1) {
+                console.log("[Import] Multiple Excel files detected. Auto-merging...");
+                await handleMergedExcelImport(excelFiles);
+            } else {
+                // Single File
+                await handleExcelImport(excelFiles[0]);
+            }
         } else {
+            // Proceed with Shapefile (assuming legacy behavior for non-Excel)
             await handleShpImport(files);
         }
+
         shpInput.value = ''; // Reset
     };
 
-    async function handleExcelImport(file) {
-        fileStatus.textContent = `Parsing Excel: ${file.name}...`;
+    // Refactored Helper: Parse a single Excel file and return points/metrics
+    async function parseExcelFile(file) {
         try {
             const data = await file.arrayBuffer();
             const workbook = XLSX.read(data);
             const sheet = workbook.Sheets[workbook.SheetNames[0]];
             const json = XLSX.utils.sheet_to_json(sheet);
 
-            console.log("[Excel] Parsed rows:", json.length);
+            console.log(`[Excel] Parsed ${file.name}: ${json.length} rows`);
 
-            // UTM Zone 29N definition if needed (often standard in proj4 defs, but we define explicit if missing)
-            // EPSG:32629 is usually built-in or we can define it.
-            // Safe fallback:
+            // Safe fallback for Projection
             if (!window.proj4.defs['EPSG:32629']) {
                 window.proj4.defs('EPSG:32629', '+proj=utm +zone=29 +datum=WGS84 +units=m +no_defs');
             }
 
-            const fileName = file.name.split('.')[0];
-            const logId = `excel_${Date.now()}`;
-
-            let gridAnchor = null;
-
-            // --- Auto-Detect Ideal Dimensions (Outer Scope) ---
-            let detectedRx = 20.8; // Default fallback (41.6m)
-            let detectedRy = 24.95; // Default fallback (49.9m)
-
-            if (json.length > 1) {
-                // Auto-detection DISABLED by user request.
-                // Using fixed dimensions: 41.6m (W) x 49.9m (H)
-                console.log(`[Grid] Using fixed dimensions: Width=${(detectedRx * 2).toFixed(1)}m, Height=${(detectedRy * 2).toFixed(1)}m`);
-            }
+            // Grid Dimensions (Default)
+            let detectedRx = 20.8;
+            let detectedRy = 24.95;
 
             const points = json.map((row, idx) => {
                 // Heuristic Column Mapping
@@ -558,17 +563,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (isNaN(lat) || isNaN(lng)) return null;
 
                 // --- 50m Grid Generation ---
-                // 1. Project to Meters (UTM 29N)
                 let [x, y] = window.proj4("EPSG:4326", "EPSG:32629", [lng, lat]);
-
-                // 1b. No Snapping (Center on Data Point)
-                // User requested to generate grids ONLY from the center data point.
                 let tx = x;
                 let ty = y;
 
-
-
-                // 2. Create Rectangle using DETECTED ideal dimensions
                 const rx = detectedRx;
                 const ry = detectedRy;
                 const corners = [
@@ -579,7 +577,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     [tx - rx, ty - ry] // Close ring
                 ];
 
-                // 3. Project back to WGS84
                 const cornersWGS = corners.map(c => window.proj4("EPSG:32629", "EPSG:4326", c));
 
                 const geometry = {
@@ -593,43 +590,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 const timeKey = Object.keys(row).find(k => /time/i.test(k));
                 const pciKey = Object.keys(row).find(k => /pci|sc/i.test(k));
 
-                // Robust Cell ID Detection
-                // 1. "NodeB ID-Cell ID" (SmartCare specific)
                 const nodebCellIdKey = Object.keys(row).find(k => /nodeb id-cell id/i.test(k) || /enodeb id-cell id/i.test(k));
-                // 2. Standard Cell ID / CI / ECI
                 const standardCellIdKey = Object.keys(row).find(k => /^cell[_\s]?id$/i.test(k) || /^ci$/i.test(k) || /^eci$/i.test(k));
 
                 let foundCellId = nodebCellIdKey ? row[nodebCellIdKey] : (standardCellIdKey ? row[standardCellIdKey] : undefined);
-
-                // RNC/CID Explicit
                 const rncKey = Object.keys(row).find(k => /^rnc$/i.test(k));
                 const cidKey = Object.keys(row).find(k => /^cid$/i.test(k));
                 const rnc = rncKey ? row[rncKey] : undefined;
                 const cid = cidKey ? row[cidKey] : undefined;
 
                 let calculatedEci = null;
-                // Heuristic: If we have RNC+CID, we can form a unique ID
-                // Or if we have "NodeB-CellID", calculate ECI.
-
                 if (foundCellId) {
                     const parts = String(foundCellId).split('-');
                     if (parts.length === 2) {
                         const enb = parseInt(parts[0]);
                         const id = parseInt(parts[1]);
-                        if (!isNaN(enb) && !isNaN(id)) {
-                            calculatedEci = (enb * 256) + id;
-                        }
+                        if (!isNaN(enb) && !isNaN(id)) calculatedEci = (enb * 256) + id;
                     } else if (!isNaN(parseInt(foundCellId))) {
-                        // Simple numeric ID (ECI or CI)
                         calculatedEci = parseInt(foundCellId);
                     }
                 } else if (rnc && cid) {
-                    // Construct ID from RNC/CID if CellID missing
                     foundCellId = `${rnc}/${cid}`;
                 }
 
                 return {
-                    id: idx,
+                    id: idx, // Will need re-indexing when merging
                     lat,
                     lng,
                     rsrp: rsrpKey ? parseFloat(row[rsrpKey]) : undefined,
@@ -637,24 +622,36 @@ document.addEventListener('DOMContentLoaded', () => {
                     cellName: cellKey ? row[cellKey] : undefined,
                     sc: pciKey ? row[pciKey] : undefined,
                     time: timeKey ? row[timeKey] : '00:00:00',
-                    cellId: foundCellId, // Store raw string as Primary ID reference
+                    cellId: foundCellId,
                     rnc: rnc,
                     cid: cid,
-                    // calculatedEci: calculatedEci, // Remove duplicate property definition if it exists lower down
                     calculatedEci: calculatedEci,
-                    geometry: geometry, // Key for rendering squares
+                    geometry: geometry,
                     properties: row
                 };
             }).filter(p => p !== null);
 
-            // Detect all possible metrics (numeric columns)
+            // Detect Metrics
             const firstRow = json[0];
             const customMetrics = Object.keys(firstRow).filter(key => {
                 const val = firstRow[key];
                 return typeof val === 'number' || (!isNaN(parseFloat(val)) && isFinite(val));
             });
 
-            console.log("[Excel] Detected metrics:", customMetrics);
+            return { points, customMetrics };
+        } catch (e) {
+            console.error(`Error parsing ${file.name}`, e);
+            throw e;
+        }
+    }
+
+    async function handleExcelImport(file) {
+        fileStatus.textContent = `Parsing Excel: ${file.name}...`;
+        try {
+            const { points, customMetrics } = await parseExcelFile(file);
+
+            const fileName = file.name.split('.')[0];
+            const logId = `excel_${Date.now()}`;
 
             const newLog = {
                 id: logId,
@@ -664,12 +661,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 visible: true,
                 type: 'excel',
                 customMetrics: customMetrics,
-                currentParam: 'level'
+                currentParam: 'level' // Default
             };
 
             loadedLogs.push(newLog);
-            updateLogsList(); // Keep default logs list updated too?
-            addSmartCareLayer(newLog); // Pass full log object
+            updateLogsList();
+            addSmartCareLayer(newLog);
             fileStatus.textContent = `Loaded Excel: ${fileName}`;
 
             // Auto-Zoom
@@ -677,16 +674,305 @@ document.addEventListener('DOMContentLoaded', () => {
             const bounds = L.latLngBounds(latLngs);
             window.map.fitBounds(bounds);
 
-            // Auto-Render Level
             if (window.mapRenderer) {
                 window.mapRenderer.updateLayerMetric(logId, points, 'level');
             }
-
         } catch (e) {
-            console.error("Excel Import Error:", e);
-            alert("Failed to import Excel file.\nSee console for details.");
+            console.error(e);
+            alert(`Failed to import ${file.name}`);
             fileStatus.textContent = 'Import Failed';
         }
+    }
+
+    async function handleMergedExcelImport(files) {
+        fileStatus.textContent = `Merging ${files.length} Excel files...`;
+        let pooledPoints = [];
+        let allMetrics = new Set();
+        let nameList = [];
+
+        try {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                fileStatus.textContent = `Parsing ${i + 1}/${files.length}: ${file.name}...`;
+                const result = await parseExcelFile(file);
+
+                // Re-index IDs to avoid collisions
+                const offset = pooledPoints.length;
+                const pointsWithOffset = result.points.map(p => ({ ...p, id: p.id + offset }));
+
+                pooledPoints = pooledPoints.concat(pointsWithOffset);
+                result.customMetrics.forEach(m => allMetrics.add(m));
+                nameList.push(file.name.split('.')[0]);
+            }
+
+            if (pooledPoints.length === 0) {
+                alert("No valid data found in selected files.");
+                fileStatus.textContent = 'Merge Failed (No Data)';
+                return;
+            }
+
+            const fileName = nameList.length > 3 ? `${nameList[0]}_plus_${nameList.length - 1}_merged` : nameList.join('_');
+            const logId = `smartcare_merged_${Date.now()}`;
+
+            const newLog = {
+                id: logId,
+                name: fileName + " (Merged)",
+                points: pooledPoints,
+                color: '#3b82f6',
+                visible: true,
+                type: 'excel',
+                customMetrics: Array.from(allMetrics),
+                currentParam: 'level'
+            };
+
+            loadedLogs.push(newLog);
+            updateLogsList();
+            addSmartCareLayer(newLog);
+            fileStatus.textContent = `Merged ${files.length} files successfully.`;
+
+            // Auto-Zoom
+            const latLngs = pooledPoints.map(p => [p.lat, p.lng]);
+            const bounds = L.latLngBounds(latLngs);
+            window.map.fitBounds(bounds);
+
+            if (window.mapRenderer) {
+                window.mapRenderer.updateLayerMetric(logId, pooledPoints, 'level');
+            }
+
+        } catch (e) {
+            console.error("Merge Error:", e);
+            alert("Error during merge: " + e.message);
+            fileStatus.textContent = 'Merge Failed';
+        }
+    }
+
+    async function handleTRPImport(file) {
+        fileStatus.textContent = 'Unzipping TRP...';
+        try {
+            if (!window.JSZip) {
+                alert("JSZip library not loaded. Please refresh or check internet connection.");
+                return;
+            }
+            const zip = await JSZip.loadAsync(file);
+            console.log("[TRP] Zip loaded. Files:", Object.keys(zip.files).length);
+
+            const channelLogs = [];
+            zip.forEach((relativePath, zipEntry) => {
+                // Look for channel.log files (usually in channels/chX/)
+                if (relativePath.endsWith('channel.log')) channelLogs.push(zipEntry);
+            });
+
+            console.log(`[TRP] Found ${channelLogs.length} channel logs.`);
+
+            let allPoints = [];
+            let allSignaling = [];
+
+            for (const logFile of channelLogs) {
+                try {
+                    // Peek at first bytes to check for binary
+                    const head = await logFile.async('uint8array');
+                    let isBinary = false;
+                    // Check first 100 bytes for nulls which usually indicates binary/datalog
+                    for (let i = 0; i < Math.min(head.length, 100); i++) {
+                        if (head[i] === 0) { isBinary = true; break; }
+                    }
+
+                    if (!isBinary) {
+                        const text = await logFile.async('string');
+                        // Use existing NMF parser
+                        const parserResult = NMFParser.parse(text);
+                        if (parserResult.points.length > 0 || parserResult.signaling.length > 0) {
+                            console.log(`[TRP] Parsed ${parserResult.points.length} points from ${logFile.name}`);
+                            allPoints = allPoints.concat(parserResult.points);
+                            allSignaling = allSignaling.concat(parserResult.signaling);
+                        }
+                    } else {
+                        console.warn(`[TRP] Skipping binary log: ${logFile.name}`);
+                        // Future: Implement binary parser or service.xml correlation if needed
+                    }
+                } catch (err) {
+                    console.warn(`[TRP] Failed to parse ${logFile.name}:`, err);
+                }
+            }
+
+            if (allPoints.length === 0 && allSignaling.length === 0) {
+                console.warn("[TRP] No text logs found. Attempting XML Fallback (GPX + Events)...");
+
+                // Fallback Strategy: Parse wptrack.xml (GPS) and services.xml (Events)
+                const fallbackData = await parseTRPFallback(zip);
+                if (fallbackData.points.length > 0 || fallbackData.signaling.length > 0) {
+                    allPoints = fallbackData.points;
+                    allSignaling = fallbackData.signaling;
+                    fileStatus.textContent = 'Loaded TRP (Route & Events Only)';
+                    // Alert user about missing radio data
+                    alert("⚠️ Radio Data Missing\n\nThe radio measurements (RSRP/RSCP) in this TRP file are binary/encrypted and cannot be read.\n\nHowever, we have successfully extracted:\n- GPS Track (Gray route)\n- Call Events (Services)\n\nVisualizing map data now.");
+                } else {
+                    alert("No readable data found in TRP file (Binary Logs + No Accessible GPS/Events).");
+                    fileStatus.textContent = 'TRP Import Failed';
+                    return;
+                }
+            }
+
+            // Create Log Object
+            const logId = `trp_${Date.now()}`;
+            const newLog = {
+                id: logId,
+                name: file.name,
+                points: allPoints,
+                signaling: allSignaling,
+                color: '#8b5cf6', // Violet
+                visible: true,
+                type: 'nmf', // Treat as NMF-like standard log
+                currentParam: 'level'
+            };
+
+            loadedLogs.push(newLog);
+            updateLogsList();
+
+            // Auto-Zoom and Render
+            if (allPoints.length > 0) {
+                const latLngs = allPoints.map(p => [p.lat, p.lng]);
+                const bounds = L.latLngBounds(latLngs);
+                window.map.fitBounds(bounds);
+                if (window.mapRenderer) {
+                    window.mapRenderer.renderLog(newLog, 'level');
+                }
+            }
+
+            fileStatus.textContent = `Loaded TRP: ${file.name}`;
+
+
+        } catch (e) {
+            console.error("[TRP] Error:", e);
+            fileStatus.textContent = 'TRP Error';
+            alert("Error processing TRP file: " + e.message);
+        }
+    }
+
+
+    async function parseTRPFallback(zip) {
+        const results = { points: [], signaling: [] };
+        let trackPoints = [];
+
+        // 1. Parse GPS Track (wptrack.xml)
+        try {
+            const trackFile = Object.keys(zip.files).find(f => f.endsWith('wptrack.xml'));
+            if (trackFile) {
+                const text = await zip.files[trackFile].async('string');
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(text, "text/xml");
+                const trkpts = doc.getElementsByTagName("trkpt");
+
+                for (let i = 0; i < trkpts.length; i++) {
+                    const pt = trkpts[i];
+                    const lat = parseFloat(pt.getAttribute("lat"));
+                    const lon = parseFloat(pt.getAttribute("lon"));
+                    const timeTag = pt.getElementsByTagName("time")[0];
+                    const time = timeTag ? timeTag.textContent : null;
+
+                    if (!isNaN(lat) && !isNaN(lon)) {
+                        // Track Point
+                        trackPoints.push({
+                            lat: lat,
+                            lng: lon,
+                            time: time,
+                            timestamp: time ? new Date(time).getTime() : 0,
+                            type: 'MEASUREMENT',
+                            level: -140, // Gray/Low
+                            cellId: 'N/A',
+                            details: 'GPS Track Point',
+                            properties: { source: 'wptrack' }
+                        });
+                    }
+                }
+                console.log(`[TRP Fallback] Parsed ${trackPoints.length} GPS points.`);
+            }
+        } catch (e) {
+            console.warn("[TRP Fallback] Error parsing wptrack.xml", e);
+        }
+
+        // 2. Parse Services/Events (services.xml)
+        try {
+            const servicesFile = Object.keys(zip.files).find(f => f.endsWith('services.xml'));
+            if (servicesFile) {
+                const text = await zip.files[servicesFile].async('string');
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(text, "text/xml");
+                const serviceInfos = doc.getElementsByTagName("ServiceInformation");
+
+                for (let i = 0; i < serviceInfos.length; i++) {
+                    const info = serviceInfos[i];
+
+                    // Extract Name
+                    let name = "Unknown Service";
+                    const nameTag = info.getElementsByTagName("Name")[0];
+                    if (nameTag) {
+                        const content = nameTag.getElementsByTagName("Content")[0]; // Sometimes nested
+                        name = content ? content.textContent : nameTag.textContent;
+                        // Clean up "Voice Quality" -> VoiceQuality
+                        if (typeof name === 'string') name = name.trim();
+                    }
+
+                    // Extract Action (Start/Stop)
+                    let action = "";
+                    const actionTag = info.getElementsByTagName("ServiceAction")[0];
+                    if (actionTag) {
+                        const val = actionTag.getElementsByTagName("Value")[0];
+                        action = val ? val.textContent : "";
+                    }
+
+                    // Extract Time
+                    let time = null;
+                    const props = info.getElementsByTagName("Properties")[0];
+                    if (props) {
+                        const timeTag = props.getElementsByTagName("UtcTime")[0]; // Correct tag structure?
+                        // Structure is <UtcTime><Time>...</Time></UtcTime> inside Properties usually
+                        if (timeTag) {
+                            const t = timeTag.getElementsByTagName("Time")[0];
+                            if (t) time = t.textContent;
+                        }
+                    }
+
+                    if (time) {
+                        // Map to nearest GPS point
+                        const eventTime = new Date(time).getTime();
+                        let closestPt = null;
+                        let minDiff = 10000; // 10 seconds max diff?
+
+                        // Find closest track point
+                        // Optimization: Track points are sorted by time usually.
+                        // Simple linear search for now or find relative index
+                        if (trackPoints.length > 0) {
+                            // Find closest
+                            for (let k = 0; k < trackPoints.length; k++) {
+                                const diff = Math.abs(trackPoints[k].timestamp - eventTime);
+                                if (diff < minDiff) {
+                                    minDiff = diff;
+                                    closestPt = trackPoints[k];
+                                }
+                            }
+                        }
+
+                        results.signaling.push({
+                            lat: closestPt ? closestPt.lat : (trackPoints[0] ? trackPoints[0].lat : 0),
+                            lng: closestPt ? closestPt.lng : (trackPoints[0] ? trackPoints[0].lng : 0),
+                            time: time,
+                            type: 'SIGNALING',
+                            event: `${name} ${action}`, // e.g. "Voice Quality Stop"
+                            message: `Service: ${name}`,
+                            details: `Action: ${action}`,
+                            direction: '-'
+                        });
+                    }
+                }
+                console.log(`[TRP Fallback] Parsed ${results.signaling.length} Service Events.`);
+            }
+        } catch (e) {
+            console.warn("[TRP Fallback] Error parsing services.xml", e);
+        }
+
+        results.points = trackPoints;
+        return results;
     }
 
     async function handleShpImport(files) {
@@ -3360,209 +3646,174 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
-    // Global function to update the Floating Info Panel
+    // Helper: Generate HTML and Connections for a SINGLE point
+    function generatePointInfoHTML(p, logColor) {
+        let connectionTargets = [];
+        const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
+        const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
 
+        // 1. Serving Cell Connection
+        let servingRes = window.resolveSmartSite(p);
+        if (servingRes.lat && servingRes.lng) {
+            connectionTargets.push({
+                lat: servingRes.lat, lng: servingRes.lng, color: logColor || '#3b82f6', weight: 8, cellId: servingRes.id
+            });
+        }
 
-    // Global function to update the Floating Info Panel
+        const resolveNeighbor = (pci, cellId, freq) => {
+            return window.resolveSmartSite({
+                sc: pci, cellId: cellId, lac: sLac, freq: freq || sFreq, lat: p.lat, lng: p.lng
+            });
+        }
+
+        // 2. Active Set Connections
+        if (p.a2_sc !== undefined && p.a2_sc !== null) {
+            const a2Res = resolveNeighbor(p.a2_sc, null, sFreq);
+            if (a2Res.lat && a2Res.lng) connectionTargets.push({ lat: a2Res.lat, lng: a2Res.lng, color: '#ef4444', weight: 8, cellId: a2Res.id });
+        }
+        if (p.a3_sc !== undefined && p.a3_sc !== null) {
+            const a3Res = resolveNeighbor(p.a3_sc, null, sFreq);
+            if (a3Res.lat && a3Res.lng) connectionTargets.push({ lat: a3Res.lat, lng: a3Res.lng, color: '#ef4444', weight: 8, cellId: a3Res.id });
+        }
+
+        // 3. Neighbors Connections
+        if (p.parsed && p.parsed.neighbors) {
+            p.parsed.neighbors.forEach((n) => {
+                const nRes = resolveNeighbor(n.pci, null, n.freq || sFreq);
+                // No lines for neighbors usually, or maybe? Existing code didn't seem to have lines for neighbors in the loop, only A2/A3 had distinct pushes?
+                // Actually existing code logic for neighbors loop:
+                // p.parsed.neighbors.forEach(...) { ... neighborRows.push(...) }
+                // It did NOT push to connectionTargets inside the loop in the previous version!
+                // So I won't add them here to avoid clutter.
+            });
+        }
+
+        // Generate RAW Data HTML
+        let rawHtml = '';
+        const ignoredKeys = ['lat', 'lng', 'parsed', 'layer', '_neighborsHelper', 'details', 'active_set']; // details is often the full line
+
+        // Decide source: p.properties (Excel/TRP) or p (NMF)
+        const sourceObj = p.properties ? p.properties : p;
+
+        // If using p directly, filter more aggressively
+        Object.entries(sourceObj).forEach(([k, v]) => {
+            if (p.properties) {
+                // For properties object, usually safe to show all except lat/lon
+                if (k.toLowerCase().includes('lat') || k.toLowerCase().includes('lon')) return;
+            } else {
+                // For NMF point object
+                if (ignoredKeys.includes(k)) return;
+                if (typeof v === 'object' && v !== null) return; // Skip nested objects
+                if (typeof v === 'function') return;
+            }
+
+            // Format Value
+            let displayVal = v;
+            if (typeof v === 'number') {
+                if (Number.isInteger(v)) displayVal = v;
+                else displayVal = Number(v).toFixed(3).replace(/\.?0+$/, ''); // Clean floats
+            }
+
+            rawHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #444; font-size:11px; padding:2px 0;">
+                <span style="color:#aaa;">${k}</span>
+                <span style="color:#fff; font-weight:bold;">${displayVal}</span>
+            </div>`;
+        });
+
+        let html = `
+            <div style="padding: 10px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom: 2px solid #555; padding-bottom:5px;">
+                    <span style="font-size:12px; color:#ccc;">${p.time || 'No Time'}</span>
+                    <span style="font-size:12px; color:#ccc;">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</span>
+                </div>
+
+                <!-- Event Info -->
+                ${p.event ? `
+                    <div style="background:#451a1a; color:#f87171; padding:5px; border-radius:4px; margin-bottom:10px; font-weight:bold; text-align:center;">
+                        ${p.event}
+                    </div>
+                ` : ''}
+                
+                <div class="raw-data-container">
+                    ${rawHtml}
+                </div>
+            </div>
+        `;
+
+        return { html, connectionTargets };
+    }
+
+    // Global function to update the Floating Info Panel (Single Point)
     window.updateFloatingInfoPanel = (p) => {
         try {
-            console.log("[InfoPanel] Updating for point:", p);
             const panel = document.getElementById('floatingInfoPanel');
             const content = document.getElementById('infoPanelContent');
-            if (!panel || !content) {
-                return;
+            if (!panel || !content) return;
+
+            if (panel.style.display !== 'block') panel.style.display = 'block';
+
+            const { html, connectionTargets } = generatePointInfoHTML(p);
+            content.innerHTML = html;
+
+            // Update Connections
+            if (window.mapRenderer && !window.isSpiderMode) {
+                // Find start point
+                let startPt = { lat: p.lat, lng: p.lng };
+                // (Polygon centroid logic would go here if needed again, or rely on pass)
+                window.mapRenderer.drawConnections(startPt, connectionTargets);
+            }
+        } catch (e) {
+            console.error("Error updating Info Panel:", e);
+        }
+    };
+
+    // NEW: Multi-Layer Info Panel
+    window.updateFloatingInfoPanelMulti = (hits) => {
+        try {
+            const panel = document.getElementById('floatingInfoPanel');
+            const content = document.getElementById('infoPanelContent');
+            if (!panel || !content) return;
+
+            if (panel.style.display !== 'block') panel.style.display = 'block';
+            content.innerHTML = ''; // Clear
+
+            let allConnectionTargets = [];
+
+            hits.forEach((hit, idx) => {
+                const { log, point } = hit;
+
+                // Header for this Log Layer
+                const header = document.createElement('div');
+                header.style.cssText = `background:${log.color || '#444'}; color:#fff; padding:5px; font-weight:bold; font-size:12px; margin-top:${idx > 0 ? '10px' : '0'}; border-radius:4px 4px 0 0;`;
+                header.textContent = `Layer: ${log.name}`;
+                content.appendChild(header);
+
+                // Body
+                const { html, connectionTargets } = generatePointInfoHTML(point, log.color);
+                const body = document.createElement('div');
+                body.innerHTML = html;
+                content.appendChild(body);
+
+                // Aggregate connections
+                allConnectionTargets = allConnectionTargets.concat(connectionTargets);
+            });
+
+            // Update Connections (Draw ALL lines from ALL layers)
+            if (window.mapRenderer && !window.isSpiderMode && hits.length > 0) {
+                // Use primary click location as start (assuming all hits are roughly same location)
+                const primary = hits[0].point;
+                window.mapRenderer.drawConnections({ lat: primary.lat, lng: primary.lng }, allConnectionTargets);
             }
 
-            // Show panel if hidden (Fix: checking inline style 'none' is insufficient if hidden by CSS class)
-            if (panel.style.display !== 'block') {
-                panel.style.display = 'block';
-            }
-
-            // --- DATA PREPARATION ---
-            let connectionTargets = [];
-            const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
-            const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
-
-            // 1. Serving Cell
-            // Construct a "point-like" object for serving resolution if needed, but 'p' is usually sufficient
-            // But for consistency with new resolveSmartSite(p), we use p directly.
-            let servingRes = window.resolveSmartSite(p);
-
-            // Fallback for NMF raw ID logic (point might lack some context but have cellId)
-            if (!servingRes.name && p.cellId) {
-                // Try again? resolveSmartSite handles p.cellId. 
-            }
-
-            if (servingRes.lat && servingRes.lng) {
-                connectionTargets.push({
-                    lat: servingRes.lat,
-                    lng: servingRes.lng,
-                    color: '#3b82f6',
-                    weight: 8,
-                    cellId: servingRes.id
-                });
-            }
-
-            const safeVal = (v) => (v !== undefined && v !== '-' && !isNaN(v) ? Number(v).toFixed(1) : '-');
-
-            const formatId = (id) => {
-                if (!id || id === 'N/A') return id;
-                const strId = String(id);
-                if (strId.includes('/')) return id;
-                const num = Number(strId.replace(/[^\d]/g, ''));
-                if (!isNaN(num) && num > 65535) {
-                    return `${num >> 16}/${num & 0xFFFF}`;
-                }
-                return id;
-            };
-
-            const servingData = {
-                type: 'Serving',
-                name: servingRes.name || p.cellName || 'Unknown',
-                cellId: servingRes.id || p.cellId,
-                displayId: formatId(servingRes.id || p.cellId),
-                sc: p.sc,
-                rscp: p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : (p.parsed && p.parsed.serving ? p.parsed.serving.level : '-')),
-                ecno: p.ecno !== undefined ? p.ecno : (p.parsed && p.parsed.serving ? p.parsed.serving.ecno : '-'),
-                freq: sFreq || '-'
-            };
-
-            const resolveNeighbor = (pci, cellId, freq) => {
-                // Construct synthetic point for neighbor lookup
-                return window.resolveSmartSite({
-                    sc: pci,
-                    cellId: cellId,
-                    lac: sLac,
-                    freq: freq || sFreq,
-                    lat: p.lat,
-                    lng: p.lng
-                });
-            }
-
-            // 2. Active Set
-            let activeRows = [];
-            if (p.a2_sc !== undefined && p.a2_sc !== null) {
-                const a2Res = resolveNeighbor(p.a2_sc, null, sFreq);
-                const nA2 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a2_sc) : null;
-                if (a2Res.lat && a2Res.lng) connectionTargets.push({ lat: a2Res.lat, lng: a2Res.lng, color: '#ef4444', weight: 8, cellId: a2Res.id });
-                activeRows.push({
-                    type: '2nd Active Set', name: a2Res.name || 'Unknown', cellId: a2Res.id, displayId: formatId(a2Res.id || p.a2_cellid), sc: p.a2_sc,
-                    rscp: p.a2_rscp || (nA2 ? nA2.rscp : '-'), ecno: nA2 ? nA2.ecno : '-', freq: sFreq || '-'
-                });
-            }
-            if (p.a3_sc !== undefined && p.a3_sc !== null) {
-                const a3Res = resolveNeighbor(p.a3_sc, null, sFreq);
-                const nA3 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a3_sc) : null;
-                if (a3Res.lat && a3Res.lng) connectionTargets.push({ lat: a3Res.lat, lng: a3Res.lng, color: '#ef4444', weight: 8, cellId: a3Res.id });
-                activeRows.push({
-                    type: '3rd Active Set', name: a3Res.name || 'Unknown', cellId: a3Res.id, displayId: formatId(a3Res.id || p.a3_cellid), sc: p.a3_sc,
-                    rscp: p.a3_rscp || (nA3 ? nA3.rscp : '-'), ecno: nA3 ? nA3.ecno : '-', freq: sFreq || '-'
-                });
-            }
-
-            // 3. Neighbors & Detected
-            let neighborRows = [];
-            let detectedRows = [];
-
-            if (p.parsed && p.parsed.neighbors) {
-                const activeSCs = [p.sc, p.a2_sc, p.a3_sc].filter(x => x !== undefined && x !== null);
-
-                p.parsed.neighbors.forEach((n, idx) => {
-                    if (n.type === 'detected') {
-                        const nRes = resolveNeighbor(n.pci, n.cellId, n.freq);
-                        detectedRows.push({
-                            type: `D${n.idx || (idx + 1)}`,
-                            name: nRes.name || 'Unknown',
-                            cellId: nRes.id,
-                            displayId: formatId(nRes.id || n.cellId),
-                            sc: n.pci,
-                            rscp: n.rscp,
-                            ecno: n.ecno,
-                            freq: n.freq
-                        });
-                    } else if (!activeSCs.includes(n.pci)) {
-                        const nRes = resolveNeighbor(n.pci, n.cellId, n.freq);
-                        if (nRes.lat && nRes.lng) connectionTargets.push({ lat: nRes.lat, lng: nRes.lng, color: '#22c55e', weight: 3, cellId: nRes.id });
-                        neighborRows.push({
-                            type: `N${idx + 1}`, name: nRes.name || 'Unknown', cellId: nRes.id, displayId: formatId(nRes.id || n.cellId), sc: n.pci,
-                            rscp: n.rscp, ecno: n.ecno, freq: n.freq
-                        });
-                    }
-                });
-            }
-
-            if (window.mapRenderer && window.mapRenderer.drawConnections) {
-                window.mapRenderer.drawConnections({ lat: p.lat, lng: p.lng }, connectionTargets);
-            }
-
-            const renderRow = (d, isBold = false) => {
-                const hasId = d.cellId !== undefined && d.cellId !== null;
-                const displayId = d.displayId || d.cellId;
-                const nameContent = hasId ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${displayId})</span>` : d.name;
-                return `
-                        <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
-                            <td style="padding:4px 4px;">${d.type}</td>
-                            <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.zoomToCell('${d.cellId}')">${nameContent}</td>
-                            <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
-                            <td style="padding:4px 4px; text-align:right;">${safeVal(d.rscp)}</td>
-                            <td style="padding:4px 4px; text-align:right;">${safeVal(d.ecno)}</td>
-                            <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
-                        </tr>`;
-            };
-
-            let tableRows = renderRow(servingData, true);
-            activeRows.forEach(r => tableRows += renderRow(r));
-            neighborRows.forEach(r => tableRows += renderRow(r));
-            if (detectedRows.length > 0) {
-                detectedRows.forEach(r => tableRows += renderRow(r));
-            }
-
-            content.innerHTML = `
-                    <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || p.cellName || 'Unknown Site'}</div>
-                    <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
-                        <span>Lat: ${Number(p.lat).toFixed(6)}</span>
-                        <span>Lng: ${Number(p.lng).toFixed(6)}</span>
-                        <span style="margin-left:auto; color:#666;">${p.time}</span>
-                    </div>
-                    <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
-                        <tr style="border-bottom: 1px solid #555; text-align:left;">
-                            <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
-                            <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
-                            <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
-                            <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
-                            <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
-                            <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
-                        </tr>
-                        ${tableRows}
-                    </table>
-                    
-                    <!-- SHP Attributes Section (Dynamic) -->
-                    ${p.properties ? `
-                    <div style="margin-top: 15px; border-top: 1px solid #444; padding-top: 10px;">
-                        <div style="font-size: 10px; color: #888; margin-bottom: 5px; font-weight: 600; text-transform: uppercase;">SHP Attributes</div>
-                        <div style="max-height: 200px; overflow-y: auto; font-size: 10px; color: #aaa;">
-                            <table style="width: 100%; border-collapse: collapse;">
-                                ${Object.entries(p.properties).map(([k, v]) => `
-                                    <tr style="border-bottom: 1px solid #2d2d2d;">
-                                        <td style="padding: 2px 0; font-weight: 600; width: 40%; color: #888;">${k}</td>
-                                        <td style="padding: 2px 0; color: #eee; word-break: break-all;">${v}</td>
-                                    </tr>
-                                `).join('')}
-                            </table>
-                        </div>
-                    </div>
-                    ` : ''}
-                `;
-
-        } catch (err) {
-            console.error("Critical Error in updateFloatingInfoPanel:", err);
+        } catch (e) {
+            console.error("Error updating Multi-Info Panel:", e);
         }
     };
 
     window.syncMarker = null; // Global marker for current sync point
 
 
-    window.globalSync = (logId, index, source) => {
+    window.globalSync = (logId, index, source, skipPanel = false) => {
         const log = loadedLogs.find(l => l.id === logId);
         if (!log || !log.points[index]) return;
 
@@ -3618,7 +3869,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 3. Update Floating Panel
-        if (window.updateFloatingInfoPanel) {
+        if (window.updateFloatingInfoPanel && !skipPanel) {
             window.updateFloatingInfoPanel(point);
         }
 
@@ -3680,6 +3931,38 @@ document.addEventListener('DOMContentLoaded', () => {
     // Global Sync Listener (Legacy Adapatation)
     window.addEventListener('map-point-clicked', (e) => {
         const { logId, point, source } = e.detail;
+
+        // --- MULTI-LAYER SEARCH ---
+        const SEARCH_RADIUS = 0.0002; // ~20m tolerance
+        const allHits = [];
+
+        // Always add the clicked point (Primary)
+        // Find the log object for the primary point
+        const primaryLog = loadedLogs.find(l => l.id === logId);
+        if (primaryLog) {
+            const primaryHit = { log: primaryLog, point: point };
+            // Search other logs
+            loadedLogs.forEach(targetLog => {
+                if (!targetLog.visible || targetLog.id === logId) return;
+
+                const hit = targetLog.points.find(p =>
+                    Math.abs(p.lat - point.lat) < SEARCH_RADIUS &&
+                    Math.abs(p.lng - point.lng) < SEARCH_RADIUS
+                );
+
+                if (hit) {
+                    allHits.push({ log: targetLog, point: hit });
+                }
+            });
+            // Add Primary FIRST
+            allHits.unshift(primaryHit);
+        }
+
+        // Update Panel with Multi-Hits
+        if (window.updateFloatingInfoPanelMulti) {
+            window.updateFloatingInfoPanelMulti(allHits);
+        }
+
         const log = loadedLogs.find(l => l.id === logId);
         if (log) {
             // Prioritize ID match (for SHP/uniquely indexed points)
@@ -3697,14 +3980,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (index !== -1) {
-                window.globalSync(logId, index, source || 'map');
+                // Call Sync but SKIP panel update (since we just did the rich multi-update)
+                window.globalSync(logId, index, source || 'map', true);
             } else {
-                // FALLBACK: If sync fails (no index found), still show the popup!
-                // This is critical for robustness with Grid/SHP data.
-                console.warn("[App] Sync Index not found. Showing details only via Fallback.");
-                if (window.updateFloatingInfoPanel) {
-                    window.updateFloatingInfoPanel(point);
-                }
+                // FALLBACK: If sync fails (no index found), we already updated the panel above!
+                // So we do nothing here.
+                console.warn("[App] Sync Index not found. Details panel updated via Multi-Hit logic.");
             }
         }
     });
@@ -3812,6 +4093,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         fileStatus.textContent = `Loading ${file.name}...`;
 
+
+        // TRP Zip Import
+        if (file.name.toLowerCase().endsWith('.trp')) {
+            handleTRPImport(file);
+            return;
+        }
+
         // NMFS Binary Check
         if (file.name.toLowerCase().endsWith('.nmfs')) {
             const headerReader = new FileReader();
@@ -3901,7 +4189,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const signalingData = !Array.isArray(result) ? result.signaling : [];
             const customMetrics = !Array.isArray(result) ? result.customMetrics : []; // New for Excel
 
-            console.log(`Parsed ${parsedData.length} measurement points and ${signalingData ? signalingData.length : 0} signaling messages. Tech: ${technology}`);
+            console.log(`Parsed ${parsedData.length} measurement points and ${signalingData ? signalingData.length : 0} signaling messages.Tech: ${technology}`);
 
             if (parsedData.length > 0 || (signalingData && signalingData.length > 0)) {
                 const id = Date.now().toString();
@@ -3935,7 +4223,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     map.addEventsLayer(id, signalingData);
                 }
 
-                fileStatus.textContent = `Loaded: ${name} (${parsedData.length} pts)`;
+                fileStatus.textContent = `Loaded: ${name}(${parsedData.length} pts)`;
 
 
             } else {
@@ -4077,7 +4365,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             } else {
                                 throw new Error("MapRenderer not initialized");
                             }
-                            fileStatus.textContent = `Sites Imported: ${validSectors.length} (${name})`;
+                            fileStatus.textContent = `Sites Imported: ${validSectors.length}(${name})`;
                         } catch (innerErr) {
                             console.error('[Sites] CRITICAL ERROR adding layer:', innerErr);
                             alert(`Error adding site layer: ${innerErr.message}`);
@@ -4114,17 +4402,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const item = document.createElement('div');
         item.className = 'layer-item';
-        item.id = `site-layer-${id}`;
+        item.id = `site - layer - ${id}`;
 
         item.innerHTML = `
-        <div class="layer-info">
-            <span class="layer-name" title="${name}" style="font-size:13px;">${name}</span>
-        </div>
-        <div class="layer-controls">
-             <button class="layer-btn settings-btn" data-id="${id}" title="Layer Settings">⚙️</button>
-             <button class="layer-btn visibility-btn" data-id="${id}" title="Toggle Visibility">👁️</button>
-             <button class="layer-btn remove-btn" data-id="${id}" title="Remove Layer">✕</button>
-        </div>
+< div class= "layer-info" >
+<span class="layer-name" title="${name}" style="font-size:13px;">${name}</span>
+        </div >
+    <div class="layer-controls">
+        <button class="layer-btn settings-btn" data-id="${id}" title="Layer Settings">⚙️</button>
+        <button class="layer-btn visibility-btn" data-id="${id}" title="Toggle Visibility">👁️</button>
+        <button class="layer-btn remove-btn" data-id="${id}" title="Remove Layer">✕</button>
+    </div>
     `;
 
         // Event Listeners
@@ -4161,7 +4449,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const removeBtn = item.querySelector('.remove-btn');
         removeBtn.onclick = (e) => {
             e.stopPropagation();
-            if (confirm(`Remove site layer "${name}"?`)) {
+            if (confirm(`Remove site layer "${name}" ? `)) {
                 if (window.mapRenderer) {
                     window.mapRenderer.removeSiteLayer(id);
                 }
@@ -4334,13 +4622,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (sigPoints.length > limit) {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td colspan="5" style="background:#552200; color:#fff; text-align:center;">Showing first ${limit} of ${sigPoints.length} messages.</td>`;
+                tr.innerHTML = `< td colspan = "5" style = "background:#552200; color:#fff; text-align:center;" > Showing first ${limit} of ${sigPoints.length} messages.</td > `;
                 tbody.appendChild(tr);
             }
 
             displayPoints.forEach((p, index) => {
                 const tr = document.createElement('tr');
-                tr.id = `sig-row-${p.time.replace(/[:.]/g, '')}-${index}`; // Unique ID for scrolling
+                tr.id = `sig - row - ${p.time.replace(/[:.]/g, '')} - ${index}`; // Unique ID for scrolling
                 tr.className = 'signaling-row'; // Add class for selection
                 tr.style.cursor = 'pointer';
 
@@ -4374,7 +4662,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
 
                 const mapBtn = (p.lat && p.lng)
-                    ? `<button onclick="window.map.setView([${p.lat}, ${p.lng}], 16); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#3b82f6;">Map</button>`
+                    ? `< button onclick = "window.map.setView([${p.lat}, ${p.lng}], 16); event.stopPropagation();" class= "btn" style = "padding:2px 6px; font-size:10px; background-color:#3b82f6;" > Map</button > `
                     : '<span style="color:#666; font-size:10px;">No GPS</span>';
 
                 // Store point data for the info button handler (simulated via dataset or just passing object index if we could, but stringifying is easier for this hack)
@@ -4385,7 +4673,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (p.category === 'L3') typeClass = 'badge-l3';
 
                 tr.innerHTML = `
-                    <td>${p.time}</td>
+< td > ${p.time}</td >
                     <td><span class="${typeClass}">${p.category}</span></td>
                     <td>${p.direction}</td>
                     <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${p.message}">${p.message}</td>
@@ -4408,7 +4696,7 @@ document.addEventListener('DOMContentLoaded', () => {
             modal.id = 'payloadModal';
             modal.className = 'modal';
             modal.innerHTML = `
-            <div class="modal-content" style="max-width: 600px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151;">
+    < div class= "modal-content" style = "max-width: 600px; background: #1f2937; color: #e5e7eb; border: 1px solid #374151;" >
                 <div class="modal-header" style="border-bottom: 1px solid #374151; padding: 10px 15px; display:flex; justify-content:space-between; align-items:center;">
                     <h3 style="margin:0; font-size:16px;">Signaling Details</h3>
                     <span class="close" onclick="document.getElementById('payloadModal').style.display='none'" style="color:#9ca3af; cursor:pointer; font-size:20px;">&times;</span>
@@ -4419,8 +4707,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="modal-footer" style="padding: 10px 15px; border-top: 1px solid #374151; text-align: right;">
                      <button onclick="document.getElementById('payloadModal').style.display='none'" class="btn" style="background:#4b5563;">Close</button>
                 </div>
-            </div>
-        `;
+            </div >
+    `;
             document.body.appendChild(modal);
         }
 
@@ -4434,10 +4722,10 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         content.innerHTML = `
-        <div style="margin-bottom: 15px;">
+    < div style = "margin-bottom: 15px;" >
             <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Message Type</div>
             <div style="font-size: 14px; color: #fff; font-weight: bold;">${point.message}</div>
-        </div>
+        </div >
          <div style="display:flex; gap:20px; margin-bottom: 15px;">
             <div>
                  <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600;">Time</div>
@@ -4552,7 +4840,7 @@ document.addEventListener('DOMContentLoaded', () => {
             [dockedChart, dockedSignaling, dockedGrid].forEach(el => {
                 // Ensure flex basis is reasonable
                 el.style.flex = '1 1 auto';
-                el.style.width = `${width}%`;
+                el.style.width = `${width} % `;
                 el.style.borderRight = '1px solid #444';
                 el.style.height = '100%'; // Full height of bottomPanel
             });
@@ -4754,12 +5042,12 @@ document.addEventListener('DOMContentLoaded', () => {
             header.className = 'log-header';
             header.style.cssText = 'padding:8px 10px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; background:#2d2d2d; border-bottom:1px solid #333;';
             header.innerHTML = `
-            <span style="font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;">${log.name}</span>
-            <div style="display:flex; gap:5px;">
-                 <!-- Export Button -->
-                 <button onclick="window.exportOptimFile('${log.id}'); event.stopPropagation();" title="Export Optim CSV" style="background:#059669; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">⬇</button>
-                 <button onclick="event.stopPropagation(); window.removeLog('${log.id}')" style="background:#ef4444; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>
-            </div>
+< span style = "font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;" > ${log.name}</span >
+<div style="display:flex; gap:5px;">
+    <!-- Export Button -->
+    <button onclick="window.exportOptimFile('${log.id}'); event.stopPropagation();" title="Export Optim CSV" style="background:#059669; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">⬇</button>
+    <button onclick="event.stopPropagation(); window.removeLog('${log.id}')" style="background:#ef4444; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>
+</div>
         `;
 
             // Toggle Logic
@@ -4780,8 +5068,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const stats = document.createElement('div');
             stats.style.cssText = 'font-size:10px; color:#888; margin-bottom:8px;';
             stats.innerHTML = `
-            <span style="background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;">${log.tech}</span>
-            <span style="margin-left:5px;">${count} pts</span>
+    < span style = "background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;" > ${log.tech}</span >
+<span style="margin-left:5px;">${count} pts</span>
         `;
 
             // Actions
@@ -4831,8 +5119,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 log.customMetrics.forEach(metric => {
                     let label = metric;
-                    if (metric === 'throughput_dl') label = 'DL Throughput (Mbps)';
-                    if (metric === 'throughput_ul') label = 'UL Throughput (Mbps)';
+                    if (metric === 'throughput_dl') label = 'DL Throughput (Kbps)';
+                    if (metric === 'throughput_ul') label = 'UL Throughput (Kbps)';
                     actions.appendChild(addAction(label, metric));
                 });
 
@@ -5166,7 +5454,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const popupContent = `
-            <div style="font-size:13px; min-width:150px;">
+< div style = "font-size:13px; min-width:150px;" >
                 <b>${name}</b><br>
                 <div style="color:#888; font-size:11px; margin-top:4px;">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
                 <button onclick="window.removeUserPoint('${markerId}')" style="margin-top:8px; background:#ef4444; color:white; border:none; padding:2px 5px; border-radius:3px; cursor:pointer; font-size:10px;">Remove</button>

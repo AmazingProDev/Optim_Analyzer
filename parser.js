@@ -606,18 +606,12 @@ const ExcelParser = {
         const ecnoCol = detectBestColumn(['servingcellrsrq', 'servingrsrq', 'rsrq', 'ecno', 'sinr'], ['active', 'set', 'neighbor']);
         const freqCol = detectBestColumn(['servingcelldlearfcn', 'earfcn', 'uarfcn', 'freq', 'channel'], ['active', 'set', 'neighbor']);
         const bandCol = detectBestColumn(['band'], ['active', 'set', 'neighbor']);
-        const cellIdCol = detectBestColumn(['cellid', 'ci', 'cid', 'cell_id', 'identity'], ['active', 'set', 'neighbor', 'target']); // Add CellID detection
-
-        // DEBUG: Log all keys and their normalized versions
-        console.log('[ExcelParser] Keys found:', keys);
-        keys.forEach(k => console.log(`[ExcelParser] Key: "${k}" -> Norm: "${normalize(k)}"`));
+        // Prioritize "NodeB ID-Cell ID" or "EnodeB ID-Cell ID" for strict sector matching
+        const cellIdCol = detectBestColumn(['enodeb id-cell id', 'enodebid-cellid', 'nodeb id-cell id', 'cellid', 'ci', 'cid', 'cell_id', 'identity'], ['active', 'set', 'neighbor', 'target']);
 
         // Throughput Detection
         const dlThputCol = detectBestColumn(['averagedlthroughput', 'dlthroughput', 'downlinkthroughput'], []);
         const ulThputCol = detectBestColumn(['averageulthroughput', 'ulthroughput', 'uplinkthroughput'], []);
-
-        console.log('[ExcelParser] DL Throughput Column:', dlThputCol);
-        console.log('[ExcelParser] UL Throughput Column:', ulThputCol);
 
         // Number Parsing Helper (handles comma decimals)
         const parseNumber = (val) => {
@@ -679,8 +673,8 @@ const ExcelParser = {
                     freq: (freqCol && row[freqCol] !== undefined) ? parseNumber(row[freqCol]) : undefined,
                     band: (bandCol && row[bandCol] !== undefined) ? row[bandCol] : undefined,
                     cellId: (cellIdCol && row[cellIdCol] !== undefined) ? row[cellIdCol] : undefined,
-                    throughput_dl: (dlThputCol && row[dlThputCol] !== undefined) ? (parseNumber(row[dlThputCol]) / 1000.0) : undefined, // Convert Kbps -> Mbps
-                    throughput_ul: (ulThputCol && row[ulThputCol] !== undefined) ? (parseNumber(row[ulThputCol]) / 1000.0) : undefined  // Convert Kbps -> Mbps
+                    throughput_dl: (dlThputCol && row[dlThputCol] !== undefined) ? (parseNumber(row[dlThputCol]) * 1000.0) : undefined, // Convert -> Kbps
+                    throughput_ul: (ulThputCol && row[ulThputCol] !== undefined) ? (parseNumber(row[ulThputCol]) * 1000.0) : undefined  // Convert -> Kbps
                 };
 
                 // Fallback: If SC is 0 and CellID looks like PCI (and no explicit SC col), try to recover
