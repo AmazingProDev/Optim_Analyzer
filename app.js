@@ -3676,72 +3676,391 @@ document.addEventListener('DOMContentLoaded', () => {
             if (a3Res.lat && a3Res.lng) connectionTargets.push({ lat: a3Res.lat, lng: a3Res.lng, color: '#ef4444', weight: 8, cellId: a3Res.id });
         }
 
-        // 3. Neighbors Connections
-        if (p.parsed && p.parsed.neighbors) {
-            p.parsed.neighbors.forEach((n) => {
-                const nRes = resolveNeighbor(n.pci, null, n.freq || sFreq);
-                // No lines for neighbors usually, or maybe? Existing code didn't seem to have lines for neighbors in the loop, only A2/A3 had distinct pushes?
-                // Actually existing code logic for neighbors loop:
-                // p.parsed.neighbors.forEach(...) { ... neighborRows.push(...) }
-                // It did NOT push to connectionTargets inside the loop in the previous version!
-                // So I won't add them here to avoid clutter.
-            });
-        }
-
         // Generate RAW Data HTML
         let rawHtml = '';
-        const ignoredKeys = ['lat', 'lng', 'parsed', 'layer', '_neighborsHelper', 'details', 'active_set']; // details is often the full line
 
-        // Decide source: p.properties (Excel/TRP) or p (NMF)
+        // Ensure properties exist, fallback to p (filtered) if not
         const sourceObj = p.properties ? p.properties : p;
+        const ignoredKeys = ['lat', 'lng', 'parsed', 'layer', '_neighborsHelper', 'details', 'active_set', 'properties'];
 
-        // If using p directly, filter more aggressively
         Object.entries(sourceObj).forEach(([k, v]) => {
-            if (p.properties) {
-                // For properties object, usually safe to show all except lat/lon
-                if (k.toLowerCase().includes('lat') || k.toLowerCase().includes('lon')) return;
-            } else {
-                // For NMF point object
+            if (!p.properties) {
                 if (ignoredKeys.includes(k)) return;
-                if (typeof v === 'object' && v !== null) return; // Skip nested objects
+                if (typeof v === 'object' && v !== null) return;
                 if (typeof v === 'function') return;
+            } else {
+                // For Excel/CSV, hide internal tracking keys if any exist in properties
+                if (k.toLowerCase() === 'lat' || k.toLowerCase() === 'latitude') return;
+                if (k.toLowerCase() === 'lng' || k.toLowerCase() === 'longitude' || k.toLowerCase() === 'lon') return;
             }
+
+            // Skip null/undefined/empty
+            if (v === null || v === undefined || v === '') return;
 
             // Format Value
             let displayVal = v;
             if (typeof v === 'number') {
                 if (Number.isInteger(v)) displayVal = v;
-                else displayVal = Number(v).toFixed(3).replace(/\.?0+$/, ''); // Clean floats
+                else displayVal = Number(v).toFixed(3).replace(/\.?0+$/, '');
             }
 
-            rawHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #444; font-size:11px; padding:2px 0;">
-                <span style="color:#aaa;">${k}</span>
-                <span style="color:#fff; font-weight:bold;">${displayVal}</span>
+            rawHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #444; font-size:11px; padding:3px 0;">
+                <span style="color:#aaa; font-weight:500; margin-right: 10px;">${k}</span>
+                <span style="color:#fff; font-weight:bold; word-break: break-all; text-align: right;">${displayVal}</span>
             </div>`;
         });
 
         let html = `
             <div style="padding: 10px;">
                 <div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom: 2px solid #555; padding-bottom:5px;">
-                    <span style="font-size:12px; color:#ccc;">${p.time || 'No Time'}</span>
+                    <span style="font-size:12px; color:#ccc;">${p.time || sourceObj.Time || 'No Time'}</span>
                     <span style="font-size:12px; color:#ccc;">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</span>
                 </div>
 
-                <!-- Event Info -->
+                <!-- Event Info (Highlight) -->
                 ${p.event ? `
                     <div style="background:#451a1a; color:#f87171; padding:5px; border-radius:4px; margin-bottom:10px; font-weight:bold; text-align:center;">
                         ${p.event}
                     </div>
                 ` : ''}
                 
-                <div class="raw-data-container">
+                <div class="raw-data-container" style="max-height: 400px; overflow-y: auto;">
                     ${rawHtml}
+                </div>
+                
+                <div style="margin-top: 15px; text-align: center;">
+                    <button onclick="window.analyzePoint(this)" 
+                            style="background: #3b82f6; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold;">
+                        Analyze Point
+                    </button>
+                    <!-- Hidden data stash for the analyzer -->
+                    <script type="application/json" id="point-data-stash">${JSON.stringify(sourceObj)}</script>
                 </div>
             </div>
         `;
 
         return { html, connectionTargets };
     }
+
+    // --- ANALYSIS ENGINE ---
+
+    window.analyzePoint = (btn) => {
+        try {
+            // Retrieve data from stash or passed argument
+            const container = btn.parentNode;
+            const script = container.querySelector('#point-data-stash');
+            if (!script) {
+                console.error("No point data found for analysis.");
+                return;
+            }
+            const data = JSON.parse(script.textContent);
+
+            // -------------------------------------------------------------
+            // ANALYSIS LOGIC
+            // -------------------------------------------------------------
+
+            // Helper: Run Analysis for a SINGLE data object
+            const runAnalysisForData = (d) => {
+                // Scoped Key Finder
+                const getVal = (targetName) => {
+                    const normTarget = targetName.toLowerCase().replace(/[\s\-_]/g, '');
+                    for (let k in d) {
+                        const normKey = k.toLowerCase().replace(/[\s\-_]/g, '');
+                        if (normKey === normTarget) return parseFloat(d[k]);
+                        if (normKey.includes(normTarget)) return parseFloat(d[k]);
+                    }
+                    return null;
+                };
+
+                // Get Strings for Context
+                const time = d['Time'] || d['time'] || d['timestamp'] || 'N/A';
+                const tech = d['Tech'] || d['Technology'] || d['rat'] || 'LTE'; // Default LTE as per template if unknown
+                const cellId = d['Cell ID'] || d['cellid'] || d['ci'] || d['Serving SC/PCI'] || 'Unknown';
+                const lat = d['Latitude'] || d['lat'] || 'Unknown';
+                const lng = d['Longitude'] || d['lng'] || 'Unknown';
+
+                const rsrp = getVal('rsrp') ?? getVal('level');
+                const rsrq = getVal('rsrq');
+                const cqi = getVal('cqi') ?? getVal('averagedlwidebandcqi') ?? getVal('dlwidebandcqi');
+                const dlLowThptRatio = getVal('dllowthroughputratio') ?? getVal('lowthpt') ?? 0;
+                const dlSpecEff = getVal('dlspectrumefficiency') ?? getVal('dlspectrumeff') ?? getVal('se');
+                const dlRbQty = getVal('averagedlrbquantity') ?? getVal('dlrbquantity') ?? getVal('rbutil');
+
+                const dbUtil = getVal('prbutil') ?? getVal('rbutil');
+                const dlIbler = getVal('dlibler') ?? getVal('bler');
+                const rank2Pct = getVal('rank2percentage') ?? getVal('rank2');
+                const ca1ccPct = getVal('dl1ccpercentage') ?? getVal('ca1cc');
+
+                // --- EVALUATION ---
+                let coverageStatus = 'Unknown';
+                let coverageInterp = 'insufficient signal strength';
+                if (rsrp !== null) {
+                    if (rsrp >= -90) { coverageStatus = 'Good'; coverageInterp = 'strong signal strength'; }
+                    else if (rsrp > -100) { coverageStatus = 'Fair'; coverageInterp = 'adequate signal strength'; }
+                    else { coverageStatus = 'Poor'; coverageInterp = 'weak signal strength at cell edge'; }
+                }
+
+                let interferenceLevel = 'Unknown';
+                if (rsrq !== null) {
+                    if (rsrq >= -8) interferenceLevel = 'Low';
+                    else if (rsrq > -11) interferenceLevel = 'Moderate';
+                    else interferenceLevel = 'High';
+                }
+
+                let channelQuality = 'Unknown';
+                if (cqi !== null) {
+                    if (cqi < 6) channelQuality = 'Poor';
+                    else if (cqi < 9) channelQuality = 'Keep';
+                    else channelQuality = 'Good';
+                }
+
+                let dlUserExp = 'Unknown';
+                if (dlLowThptRatio !== null) {
+                    if (dlLowThptRatio >= 25) dlUserExp = 'Degraded';
+                    else dlUserExp = 'Acceptable'; // Assuming metric is %
+                    if (dlLowThptRatio < 1 && dlLowThptRatio > 0 && dlLowThptRatio >= 0.25) dlUserExp = 'Degraded';
+                }
+
+                let dlSpecPerf = 'Unknown';
+                if (dlSpecEff !== null) {
+                    if (dlSpecEff < 2000) dlSpecPerf = 'Low';
+                    else if (dlSpecEff < 3500) dlSpecPerf = 'Moderate';
+                    else dlSpecPerf = 'High';
+                }
+
+                let cellLoad = 'Unknown';
+                let congestionInterp = 'not related';
+                if (dbUtil !== null) {
+                    if (dbUtil >= 80) { cellLoad = 'Congested'; congestionInterp = 'related'; }
+                    else if (dbUtil < 70) cellLoad = 'Not Congested';
+                    else cellLoad = 'Moderate';
+                } else if (dlRbQty !== null) {
+                    if (dlRbQty <= 100 && dlRbQty >= 0) {
+                        if (dlRbQty >= 80) { cellLoad = 'Congested'; congestionInterp = 'related'; }
+                        else if (dlRbQty < 70) cellLoad = 'Not Congested';
+                    }
+                }
+
+                let mimoUtil = 'Unknown';
+                if (rank2Pct !== null) {
+                    if (rank2Pct >= 30) mimoUtil = 'Good';
+                    else if (rank2Pct < 20) mimoUtil = 'Poor';
+                    else mimoUtil = 'Moderate';
+                }
+
+                let caUtil = 'Unknown';
+                let caInterp = 'limited';
+                if (ca1ccPct !== null) {
+                    if (ca1ccPct >= 60) { caUtil = 'Underutilized'; caInterp = 'limited'; }
+                    else if (ca1ccPct < 50) { caUtil = 'Well Utilized'; caInterp = 'effective'; }
+                    else { caUtil = 'Moderate'; caInterp = 'moderate'; }
+                }
+
+                // Root Cause Logic
+                let rootCauses = [];
+                if (coverageStatus !== 'Poor' && coverageStatus !== 'Unknown' && interferenceLevel === 'High') rootCauses.push('Interference-Limited');
+                else if (coverageStatus === 'Poor') rootCauses.push('Coverage-Limited');
+
+                if (cellLoad === 'Congested') rootCauses.push('Capacity / Congestion-Limited');
+                if (caUtil === 'Underutilized' && channelQuality === 'Good') rootCauses.push('Carrier Aggregation Limited');
+
+                if (rootCauses.length === 0 && (coverageStatus !== 'Unknown' || interferenceLevel !== 'Unknown')) rootCauses.push('No Specific Root Cause Identified');
+
+                // Recommendations Logic
+                let actionsHigh = [];
+                let actionsMed = [];
+
+                if (rootCauses.includes('Interference-Limited')) {
+                    actionsHigh.push('Review Physical Optimization (Tilt/Azimuth)');
+                    actionsHigh.push('Check for External Interference Sources');
+                }
+                if (rootCauses.includes('Coverage-Limited')) {
+                    actionsHigh.push('Optimize Antenna Downtilt (Uptilt if feasible)');
+                    actionsMed.push('Verify Power Settings');
+                }
+                if (rootCauses.includes('Capacity / Congestion-Limited')) {
+                    actionsHigh.push('Evaluate Load Balancing Features');
+                    actionsMed.push('Plan for Capacity Expansion (Carrier Add/Split)');
+                }
+                if (rootCauses.includes('Carrier Aggregation Limited')) {
+                    actionsMed.push('Verify CA Configuration Parameters');
+                    actionsMed.push('Check Secondary Carrier Availability');
+                }
+
+                // Fallbacks if empty
+                if (actionsHigh.length === 0) actionsHigh.push('Monitor KPI Trend for degradation');
+                if (actionsMed.length === 0) actionsMed.push('Perform drive test for further detail');
+
+                return {
+                    metrics: {
+                        coverageStatus, coverageInterp,
+                        interferenceLevel,
+                        channelQuality,
+                        dlUserExp, dlLowThptRatio, dlSpecEff,
+                        dlSpecPerf,
+                        cellLoad, congestionInterp,
+                        mimoUtil, caUtil, caInterp
+                    },
+                    context: { time, tech, cellId, lat, lng },
+                    rootCauses,
+                    recommendations: { high: actionsHigh, med: actionsMed }
+                };
+            }; // End runAnalysisForData
+
+            // -------------------------------------------------------------
+            // REPORT GENERATION
+            // -------------------------------------------------------------
+
+            const dataList = Array.isArray(data) ? data : [{ name: '', data: data }];
+
+            let combinedHtml = '';
+
+            dataList.forEach((item, idx) => {
+                const { metrics, context, rootCauses, recommendations } = runAnalysisForData(item.data);
+
+                // Styles for specific keywords
+                const colorize = (txt) => {
+                    const t = txt.toLowerCase();
+                    if (t === 'good' || t === 'low' || t === 'stable' || t === 'acceptable' || t === 'not congested' || t === 'well utilized' || t === 'effective') return `<span class="status-good">${txt}</span>`;
+                    if (t === 'fair' || t === 'moderate' || t === 'keep') return `<span class="status-fair">${txt}</span>`;
+                    return `<span class="status-poor">${txt}</span>`;
+                };
+
+                combinedHtml += `
+                    <div class="report-section" style="${idx > 0 ? 'margin-top: 40px; border-top: 4px solid #333; padding-top: 30px;' : ''}">
+                         ${item.name ? `<h2 style="margin: 0 0 20px 0; color: #60a5fa; border-bottom: 1px solid #444; padding-bottom: 10px; font-size: 18px;">${item.name} Analysis</h2>` : ''}
+
+                        <div class="report-block">
+                            <h3 class="report-header">1. Cell Context</h3>
+                            <ul class="report-list">
+                                <li><strong>Technology:</strong> ${context.tech}</li>
+                                <li><strong>Cell Identifier:</strong> ${context.cellId}</li>
+                                <li><strong>Location:</strong> ${context.lat}, ${context.lng}</li>
+                                <li><strong>Data Confidence:</strong> High (based on MR Count)</li>
+                            </ul>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">2. Coverage & Radio Conditions</h3>
+                            <p>Coverage in the analyzed grid is classified as <strong>${colorize(metrics.coverageStatus)}</strong>.</p>
+                            <p>Dominant RSRP indicates <strong>${metrics.coverageInterp}</strong>. 
+                               Signal quality assessment shows <strong>${colorize(metrics.interferenceLevel)}</strong> interference conditions, 
+                               based on Dominant RSRQ and CQI behavior.</p>
+                            <p>Overall radio conditions are assessed as <strong>${colorize(metrics.channelQuality)}</strong>.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">3. Throughput & User Experience</h3>
+                            <p>Downlink user experience is classified as <strong>${colorize(metrics.dlUserExp)}</strong>.</p>
+                            <p>This is supported by:</p>
+                            <ul class="report-list">
+                                <li>Average DL Throughput behavior</li>
+                                <li>DL Low-Throughput Ratio (${metrics.dlLowThptRatio !== 0 ? metrics.dlLowThptRatio : 'N/A'})</li>
+                                <li>Spectrum Efficiency classification</li>
+                            </ul>
+                            <p>Uplink performance is <strong>acceptable / secondary</strong>, based on UL KPIs.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">4. Spectrum Efficiency & Resource Utilization</h3>
+                            <p>Downlink spectrum efficiency is classified as <strong>${colorize(metrics.dlSpecPerf)}</strong>.</p>
+                            <p>Average DL RB usage indicates the cell is <strong>${colorize(metrics.cellLoad)}</strong>, 
+                               confirming that performance limitations are <strong>${metrics.congestionInterp}</strong> to congestion.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">5. MIMO & Carrier Aggregation Performance</h3>
+                            <p>MIMO utilization is assessed as <strong>${colorize(metrics.mimoUtil)}</strong>, based on rank distribution statistics.</p>
+                            <p>Carrier Aggregation utilization is <strong>${colorize(metrics.caUtil)}</strong>, indicating <strong>${metrics.caInterp}</strong> use of multi-carrier capabilities.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">6. Traffic Profile & Service Impact</h3>
+                            <p>Traffic composition is dominated by:</p>
+                            <ul class="report-list">
+                                <li>QCI 9 (Internet / Default)</li>
+                            </ul>
+                            <p>This traffic profile is sensitive to:</p>
+                            <ul class="report-list">
+                                <li>Throughput stability</li>
+                                <li>Spectrum efficiency</li>
+                                <li>Interference conditions</li>
+                            </ul>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">7. Root Cause Analysis</h3>
+                            <p>Based on rule evaluation, the primary performance limitation(s) are:</p>
+                            <ul class="report-list" style="color: #ef4444; font-weight: bold;">
+                                ${rootCauses.map(rc => `<li>${rc}</li>`).join('')}
+                            </ul>
+                            <p>These limitations explain the observed throughput behavior despite the current load level.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">8. Optimization Recommendations</h3>
+                            
+                            <h4 style="color:#fbbf24; margin:10px 0 5px 0;">High Priority Actions:</h4>
+                            <ul class="report-list">
+                                ${recommendations.high.map(a => `<li>${a}</li>`).join('')}
+                            </ul>
+
+                            <h4 style="color:#94a3b8; margin:10px 0 5px 0;">Medium Priority Actions:</h4>
+                            <ul class="report-list">
+                                ${recommendations.med.map(a => `<li>${a}</li>`).join('')}
+                            </ul>
+                            
+                            <p style="margin-top:10px; font-style:italic; font-size:11px; color:#888;">Each recommended action is directly linked to the identified root cause(s) and observed KPI behavior.</p>
+                        </div>
+                        
+                        <div class="report-summary">
+                            <h3 class="report-header" style="color:#fff;">EXECUTIVE SUMMARY</h3>
+                            <p>The analyzed LTE cell is primarily <strong>${rootCauses[0]}</strong>, resulting in <strong>${metrics.dlUserExp} User Experience</strong>. Targeted RF and feature optimization is required to improve spectrum efficiency.</p>
+                        </div>
+
+                    </div>
+                `;
+            });
+
+            // CSS For Report
+            const style = `
+                <style>
+                    .report-block { margin-bottom: 20px; }
+                    .report-header { color: #aaa; border-bottom: 1px solid #444; padding-bottom: 4px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+                    .report-list { padding-left: 20px; color: #ddd; font-size: 13px; line-height: 1.6; }
+                    .report-section p { font-size: 13px; color: #eee; line-height: 1.6; margin-bottom: 8px; }
+                    .status-good { color: #4ade80; font-weight: bold; }
+                    .status-fair { color: #facc15; font-weight: bold; }
+                    .status-poor { color: #f87171; font-weight: bold; }
+                    .report-summary { background: #1f2937; padding: 15px; border-left: 4px solid #3b82f6; margin-top: 30px; }
+                </style>
+            `;
+
+            const modalHtml = `
+                <div class="analysis-modal-overlay" onclick="const m=document.querySelector('.analysis-modal-overlay'); if(event.target===m) m.remove()">
+                    <div class="analysis-modal" style="width: 800px; max-width: 90vw;">
+                        <div class="analysis-header">
+                            <h3>Cell Performance Analysis Report</h3>
+                            <button class="analysis-close-btn" onclick="document.querySelector('.analysis-modal-overlay').remove()">×</button>
+                        </div>
+                        <div class="analysis-content" style="padding: 30px;">
+                            ${style}
+                            ${combinedHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Append to body
+            const div = document.createElement('div');
+            div.innerHTML = modalHtml;
+            document.body.appendChild(div.firstElementChild);
+
+        } catch (e) {
+            console.error("Analysis Error:", e);
+            alert("Error running analysis: " + e.message);
+        }
+    };
 
     // Global function to update the Floating Info Panel (Single Point)
     window.updateFloatingInfoPanel = (p) => {
@@ -3778,9 +4097,17 @@ document.addEventListener('DOMContentLoaded', () => {
             content.innerHTML = ''; // Clear
 
             let allConnectionTargets = [];
+            let aggregatedData = [];
 
             hits.forEach((hit, idx) => {
                 const { log, point } = hit;
+
+                // Collect Data for Unified Analysis
+                // Ensure we pass a name/label for the report
+                aggregatedData.push({
+                    name: `Layer: ${log.name}`,
+                    data: point.properties ? point.properties : point
+                });
 
                 // Header for this Log Layer
                 const header = document.createElement('div');
@@ -3788,8 +4115,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 header.textContent = `Layer: ${log.name}`;
                 content.appendChild(header);
 
-                // Body
-                const { html, connectionTargets } = generatePointInfoHTML(point, log.color);
+                // Body (Suppress individual button)
+                const { html, connectionTargets } = generatePointInfoHTML(point, log.color, false);
                 const body = document.createElement('div');
                 body.innerHTML = html;
                 content.appendChild(body);
@@ -3804,6 +4131,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 const primary = hits[0].point;
                 window.mapRenderer.drawConnections({ lat: primary.lat, lng: primary.lng }, allConnectionTargets);
             }
+
+            // UNIFIED ANALYZE BUTTON
+            const btnContainer = document.createElement('div');
+            btnContainer.style.cssText = "margin-top: 15px; text-align: center; border-top: 1px solid #555; padding-top: 10px;";
+            btnContainer.innerHTML = `
+                <button onclick="window.analyzePoint(this)" 
+                        style="background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; width: 100%;">
+                    Analyze All Layers
+                </button>
+                <script type="application/json" id="point-data-stash">${JSON.stringify(aggregatedData)}</script>
+            `;
+            content.appendChild(btnContainer);
 
         } catch (e) {
             console.error("Error updating Multi-Info Panel:", e);

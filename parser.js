@@ -412,11 +412,36 @@ const NMFParser = {
                         const n = this.parsed.neighbors.find(x => x.pci === sc);
                         return n ? n.rscp : null;
                     },
+                    get a3_rscp() {
+                        const sc = this.a3_sc;
+                        if (sc === null) return null;
+                        if (this.sc === sc) return this.level;
+                        const n = this.parsed.neighbors.find(x => x.pci === sc);
+                        return n ? n.rscp : null;
+                    },
                     n1_sc, n1_rscp, n1_ecno,
                     n2_sc, n2_rscp, n2_ecno,
                     n3_sc, n3_rscp, n3_ecno,
                     details: line,
-                    parsed: cellData
+                    parsed: cellData,
+                    properties: { // Standardized Raw Data Container
+                        'Time': parts[1],
+                        'Type': 'MEASUREMENT',
+                        'Tech': techId === 5 ? 'UMTS' : (techId === 7 ? 'LTE' : (techId === 1 || techId === 2 ? 'GSM' : techId)),
+                        'Serving Freq': servingFreq,
+                        'Serving Band': servingBand,
+                        'Serving Level': servingLevel,
+                        'Serving Qual': servingEcNo,
+                        'Serving SC/PCI': servingSc,
+                        'Cell ID': currentCellID,
+                        'RNC': ((!isNaN(currentCellID) && currentCellID >= 0) ? (currentCellID >> 16) : null),
+                        'CID': ((!isNaN(currentCellID) && currentCellID >= 0) ? (currentCellID & 0xFFFF) : null),
+                        'LAC': currentLAC,
+                        // Flattened Neighbors (Top 3)
+                        'N1 PCI': n1_sc, 'N1 Level': n1_rscp, 'N1 Qual': n1_ecno,
+                        'N2 PCI': n2_sc, 'N2 Level': n2_rscp, 'N2 Qual': n2_ecno,
+                        'N3 PCI': n3_sc, 'N3 Level': n3_rscp, 'N3 Qual': n3_ecno
+                    }
                 };
 
                 allPoints.push(point);
@@ -505,7 +530,16 @@ const NMFParser = {
                     message: message,
                     payload: payload,
                     details: line,
-                    event: eventType // New property
+                    event: eventType, // New property
+                    properties: {
+                        'Time': time,
+                        'Type': 'SIGNALING',
+                        'Category': (header.toUpperCase().includes('L3') || header.toUpperCase().includes('NAS')) ? 'L3' : 'RRC',
+                        'Direction': direction,
+                        'Message': message,
+                        'Event': eventType,
+                        'Payload': payload
+                    }
                 });
             }
         }
@@ -674,7 +708,8 @@ const ExcelParser = {
                     band: (bandCol && row[bandCol] !== undefined) ? row[bandCol] : undefined,
                     cellId: (cellIdCol && row[cellIdCol] !== undefined) ? row[cellIdCol] : undefined,
                     throughput_dl: (dlThputCol && row[dlThputCol] !== undefined) ? (parseNumber(row[dlThputCol]) * 1000.0) : undefined, // Convert -> Kbps
-                    throughput_ul: (ulThputCol && row[ulThputCol] !== undefined) ? (parseNumber(row[ulThputCol]) * 1000.0) : undefined  // Convert -> Kbps
+                    throughput_ul: (ulThputCol && row[ulThputCol] !== undefined) ? (parseNumber(row[ulThputCol]) * 1000.0) : undefined,  // Convert -> Kbps
+                    properties: { ...row } // Populate with raw Excel row data
                 };
 
                 // Fallback: If SC is 0 and CellID looks like PCI (and no explicit SC col), try to recover
