@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Log Cracker Pro - Nemo Visualizer</title>
+    <title>Optim Analyzer Pro - Nemo Visualizer</title>
     <link rel="icon"
         href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📡</text></svg>">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -13,7 +13,12 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=31">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+    <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+    <link rel="stylesheet" href="style.css?v=32">
     <link rel="stylesheet" href="grid_styles.css?v=2">
     <link rel="stylesheet" href="additional_styles.css?v=2">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -30,7 +35,7 @@
             min-height: 60px !important;
             background: #2d2d2d !important;
             z-index: 9999 !important;
-            border-bottom: 2px solid red !important;
+            /* border-bottom: 2px solid red !important; REMOVED DEBUG */
         }
 
         #logs-sidebar {
@@ -49,57 +54,123 @@
     <div id="app">
         <!-- Main Application Header -->
         <header id="mainHeader" class="main-header">
-            <div class="logo">Log Cracker Pro</div>
+            <div class="logo">Optim Analyzer Pro</div>
+            <div class="header-map-actions">
+                <!-- Hidden Inputs -->
+                <input type="file" id="fileInput" accept=".nmf, .nmfs, .csv, .txt, .xlsx, .xls, .trp"
+                    class="hidden-input" aria-label="Import Log File">
+                <input type="file" id="siteInput" accept=".xlsx, .xls, .csv" class="hidden-input"
+                    aria-label="Import Site Data">
+                <input type="file" id="shpInput" accept=".shp, .zip, .dbf, .shx, .prj, .xlsx, .xls" multiple
+                    class="hidden-input" aria-label="Import Shapefile or SmartCare Data">
+
+                <!-- Action Buttons -->
+                <button id="importBtn" class="btn header-btn" title="Import Logs, Sites, or SmartCare data">📂
+                    Import</button>
+                <button id="exportKmlBtn" class="btn header-btn" title="Export current view to KML">🌍 Export</button>
+                <button id="spiderSmartCareBtn" class="btn header-btn" title="Draw spider lines for SmartCare grid">🕸️
+                    Spider</button>
+                <button id="btnSmoothEdges" class="btn header-btn" title="Toggle Smooth Edges (Heatmap View)">💧
+                    Smooth</button>
+                <button id="btnZones" class="btn header-btn" title="Toggle Administrative Boundaries">🗺️ Zones</button>
+                <button id="btnAddSector" class="btn header-btn" onclick="window.openAddSectorModal()"
+                    title="Add Site Manually">📍 Add Site</button>
+                <button id="siteSettingsBtn" class="btn header-btn" title="Site Display Settings">⚙️ Sites</button>
+                <button id="themeSettingsBtn" class="btn header-btn" title="Thematic Analysis Settings">🎨
+                    Theme</button>
+            </div>
             <div class="controls">
-                <input type="file" id="fileInput" accept=".nmf, .nmfs, .csv, .txt, .xlsx, .xls">
-                <label for="fileInput" class="btn">Load Log (NMF/CSV)</label>
-
-                <input type="file" id="siteInput" accept=".xlsx, .xls, .csv">
-                <label for="siteInput" class="btn btn-blue">Import Sites</label>
-
-                <button id="siteSettingsBtn" class="btn btn-gray">⚙️ Sites</button>
-                <button id="exportKmlBtn" class="btn btn-green" title="Export current view to KML">🌍
-                    KML</button>
-                <button id="exportSitesKmlBtn" class="btn btn-green ml-2"
-                    title="Export all sites to KML (Uniform Color)">📡 KML</button>
-                <button id="themeSettingsBtn" class="btn btn-gray">🎨 Theme</button>
-                <button id="aiAnalyzeBtn" class="btn btn-gradient">
-                    <span>✨</span> AI Analyze
-                </button>
-
                 <div class="search-container">
-                    <input type="text" id="searchInput" placeholder="CGPS (Lat, Lng)" class="search-input">
+                    <input type="text" id="searchInput" placeholder="Search (Lat Lng, Site, CI, PCI)"
+                        class="search-input">
                     <button id="searchBtn" class="search-btn-icon">🔍</button>
                     <button id="addPointBtn" class="search-btn-icon add-point-btn" title="Add User Point">📍</button>
+                    <button id="rulerBtn" class="search-btn-icon ruler-btn"
+                        title="Ruler Tool (Distance/Bearing)">📏</button>
                 </div>
-
                 <span id="fileStatus">No file loaded</span>
             </div>
 
+            <!-- Boundaries Modal -->
+            <div id="boundariesModal" class="modal">
+                <div class="modal-content boundary-modal-content">
+                    <div class="modal-header">
+                        <h3>Admin Zones</h3>
+                        <span class="close" id="closeBoundariesModal">&times;</span>
+                    </div>
+                    <div class="modal-body">
+                        <div class="setting-item">
+                            <label class="setting-label">Direction Régionale</label>
+                            <select id="drSelect" class="form-control boundary-select"
+                                aria-label="Select Direction Régionale" title="Select Direction Régionale">
+                                <option value="">-- Select DR --</option>
+                                <option value="All">Show All</option>
+                                <option value="DR Casa">DR Casa</option>
+                                <option value="DR Rabat">DR Rabat</option>
+                                <option value="DR Fes">DR Fes</option>
+                                <option value="DR Tanger">DR Tanger</option>
+                                <option value="DR Marrakech">DR Marrakech</option>
+                                <option value="DR Agadir">DR Agadir</option>
+                                <option value="DR Oujda">DR Oujda</option>
+                                <option value="DR Beni Mellal">DR Beni Mellal</option>
+                                <option value="DR Errachidia">DR Errachidia</option>
+                                <option value="DR Sud">DR Sud</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label class="setting-label">Regions</label>
+                            <label class="switch">
+                                <input type="checkbox" id="chkRegions" title="Toggle Regions"
+                                    aria-label="Toggle Regions">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="setting-label">Provinces</label>
+                            <label class="switch">
+                                <input type="checkbox" id="chkProvinces" title="Toggle Provinces"
+                                    aria-label="Toggle Provinces">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="setting-label">Communes</label>
+                            <label class="switch">
+                                <input type="checkbox" id="chkCommunes" title="Toggle Communes"
+                                    aria-label="Toggle Communes">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Site Settings Modal -->
             <!-- Site Settings Panel -->
             <div id="siteSettingsPanel" class="settings-panel">
                 <h4 class="settings-header">Site Settings</h4>
 
                 <div class="setting-item">
-                    <label class="setting-label">Range (m): <span id="valRange">100</span></label>
-                    <input type="range" id="rangeSiteDist" min="50" max="300" step="50" value="100"
+                    <label class="setting-label" for="rangeSiteDist">Range (m): <span id="valRange">100</span></label>
+                    <input type="range" id="rangeSiteDist" min="50" max="1000" step="5" value="100"
                         class="setting-input" aria-label="Site Range">
                 </div>
 
                 <div class="setting-item">
-                    <label class="setting-label">Beamwidth (°): <span id="valBeam">35</span></label>
+                    <label class="setting-label" for="rangeIconBeam">Beamwidth (°): <span id="valBeam">35</span></label>
                     <input type="range" id="rangeIconBeam" min="10" max="180" step="5" value="35" class="setting-input"
                         aria-label="Icon Beamwidth">
                 </div>
 
                 <div class="setting-item">
-                    <label class="setting-label">Opacity: <span id="valOpacity">0.6</span></label>
+                    <label class="setting-label" for="rangeSiteOpacity">Opacity: <span
+                            id="valOpacity">0.6</span></label>
                     <input type="range" id="rangeSiteOpacity" min="0.1" max="1" step="0.1" value="0.6"
                         class="setting-input" aria-label="Site Opacity">
                 </div>
 
                 <div class="setting-item">
-                    <label class="setting-label">Color By</label>
+                    <label class="setting-label" for="siteColorBy">Color By</label>
                     <select id="siteColorBy" class="setting-input site-color-mode" aria-label="Site Color Mode">
                         <option value="tech">Technology</option>
                         <option value="identity">Cell Identity (RNC/CID)</option>
@@ -107,11 +178,12 @@
                 </div>
 
                 <div class="setting-item">
-                    <label class="setting-label">Color Override</label>
+                    <label class="setting-label" for="pickerSiteColor">Color Override</label>
                     <div class="site-color-picker-container">
                         <input type="color" id="pickerSiteColor" value="#3b82f6" class="site-color-picker"
                             aria-label="Site Color Picker">
-                        <label class="site-checkbox-label"><input type="checkbox" id="checkSiteColorOverride">
+                        <label class="site-checkbox-label" for="checkSiteColorOverride"><input type="checkbox"
+                                id="checkSiteColorOverride">
                             Apply</label>
                     </div>
                 </div>
@@ -119,9 +191,11 @@
                 <div class="setting-item">
                     <label class="setting-label">Labels</label>
                     <div class="site-names-container">
-                        <label class="site-checkbox-label"><input type="checkbox" id="checkShowSiteNames"> Show
+                        <label class="site-checkbox-label" for="checkShowSiteNames"><input type="checkbox"
+                                id="checkShowSiteNames"> Show
                             Site Names</label>
-                        <label class="site-checkbox-label"><input type="checkbox" id="checkShowCellNames"> Show
+                        <label class="site-checkbox-label" for="checkShowCellNames"><input type="checkbox"
+                                id="checkShowCellNames"> Show
                             Cell Names</label>
                     </div>
                 </div>
@@ -175,6 +249,8 @@
                 <div id="map" class="map-container" ondrop="window.drop(event)" ondragover="window.allowDrop(event)">
                 </div>
 
+
+
                 <!-- Bottom Panel for Docked Views (Legacy/Bottom) -->
                 <!-- Bottom Panel for Docked Views (Legacy/Bottom) -->
                 <div id="bottomPanel" class="bottom-panel">
@@ -196,6 +272,10 @@
                         </div>
                     </div>
                 </div>
+                <div id="distanceDisplay" class="distance-display"></div>
+            </div>
+
+            <div id="mapControls">
             </div>
 
             <div id="sidebar" class="hidden">
@@ -207,6 +287,7 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
     <!-- Signaling Modal -->
     <!-- Signaling Modal -->
     <div id="signalingModal" class="modal">
@@ -291,100 +372,8 @@
         </div>
     </div>
 
-    <!-- AI Analysis Modal -->
-    <!-- AI Analysis Modal -->
-    <div id="aiModal" class="modal">
-        <div class="modal-content ai-modal-content">
-            <div class="modal-header ai-modal-header">
-                <h3 class="ai-modal-title">
-                    <span class="ai-icon-large">✨</span> AI Drive Test Analyst
-                </h3>
-                <span class="close ai-close" onclick="closeAIModal()">&times;</span>
-            </div>
 
-            <div class="modal-body ai-modal-body">
 
-                <!-- API Key Section -->
-                <div id="aiApiKeySection" class="ai-section">
-
-                    <!-- Provider Selector -->
-                    <div class="ai-provider-row">
-                        <label class="ai-label-small">AI Provider:</label>
-                        <div class="ai-provider-options">
-                            <label class="ai-radio-label">
-                                <input type="radio" name="aiProvider" value="gemini" checked
-                                    onchange="toggleAIProvider()" class="ai-radio-input">
-                                <span class="ai-radio-text">Google Gemini</span>
-                            </label>
-                            <label class="ai-radio-label">
-                                <input type="radio" name="aiProvider" value="openai" onchange="toggleAIProvider()"
-                                    class="ai-radio-input">
-                                <span class="ai-radio-text">OpenAI ChatGPT</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <p class="ai-subtext">Enter your API Key to enable
-                        analysis. Keys are stored locally.</p>
-
-                    <div class="ai-model-select-wrapper">
-                        <label for="geminiModelSelect" class="ai-model-select-label">Model:</label>
-                        <select id="geminiModelSelect" class="ai-model-select">
-                            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (New)</option>
-                            <option value="gemini-flash-latest">Gemini Flash Latest</option>
-                            <option value="gemini-pro-latest">Gemini Pro Latest</option>
-                            <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash (Latest)</option>
-                            <option value="gemini-1.5-flash-001">Gemini 1.5 Flash (v001)</option>
-                            <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro (Latest)</option>
-                            <option value="gemini-pro">Gemini 1.0 Pro</option>
-                        </select>
-                    </div>
-
-                    <!-- Gemini Key Input -->
-                    <div id="geminiKeyContainer" class="ai-key-container">
-                        <input type="password" id="geminiApiKey" placeholder="Paste Gemini API Key (AIza...)"
-                            class="ai-key-input">
-                        <button onclick="window.checkGeminiModels()" class="ai-check-btn">Check
-                            Models</button>
-                    </div>
-
-                    <!-- OpenAI Key Input (Hidden by default) -->
-                    <div id="openaiKeyContainer" class="ai-key-container-hidden">
-                        <input type="password" id="openaiApiKey" placeholder="Paste OpenAI API Key (sk-...)"
-                            class="ai-key-input">
-                    </div>
-                    <div id="aiModelDebugLog" class="ai-debug-log">
-                    </div>
-                </div>
-
-                <!-- Loading State -->
-                <div id="aiLoading" class="ai-loading">
-                    <div class="ai-spinner"></div>
-                    <p class="ai-loading-text">Analyzing log data...</p>
-                </div>
-
-                <!-- Result Content -->
-                <div id="aiContent" class="ai-content-wrapper">
-                    <div class="ai-placeholder-wrapper">
-                        <p>Click "Analyze" to generate insights from the current log.</p>
-                        <button onclick="window.runAIAnalysis()" id="runAnalysisBtn" class="ai-analyze-btn">
-                            Generate Analysis
-                        </button>
-                    </div>
-                </div>
-
-            </div> <!-- End modal-body -->
-        </div> <!-- End modal-content -->
-    </div> <!-- End aiModal -->
-
-    <!-- Context Menu -->
-    <!-- Context Menu -->
-    <!-- Context Menu -->
-    <div id="metricContextMenu" class="metric-context-menu">
-        <div class="menu-item" onclick="window.handleContextAction('map')">Open in Map</div>
-        <div class="menu-item" onclick="window.handleContextAction('chart')">Open in Chart</div>
-        <div class="menu-item" onclick="window.handleContextAction('grid')">Open in Grid</div>
-    </div>
 
 
 
@@ -403,11 +392,68 @@
         </div>
     </div>
 
-    <script src="temp_draggable.js?v=2"></script>
-    <script src="map_renderer.js?v=62"></script>
-    <script src="parser.js?v=43"></script>
-    <script src="theme_config.js?v=2"></script>
-    <script src="app.js?v=v113"></script>
+    <!-- SmartCare Sidebar (Right Side) -->
+    <aside id="smartcare-sidebar">
+        <div class="sidebar-header">
+            <h3>Site Layers</h3>
+        </div>
+        <div id="sites-layer-list">
+            <!-- Site Layers added dynamically -->
+        </div>
+
+        <div class="sidebar-header">
+            <h3>SmartCare Layers</h3>
+            <!-- Minimize Button -->
+            <button id="toggleSmartCareSidebar" class="sidebar-toggle-btn" title="Toggle Sidebar">_</button>
+        </div>
+        <div id="smartcare-layer-list">
+            <!-- Items added dynamically -->
+        </div>
+    </aside>
+
+    <script src="map_renderer.js?v=64"></script>
+    <script src="parser.js?v=46"></script>
+    <!-- KML Export Choice Modal -->
+    <!-- KML Export Choice Modal -->
+    <div id="exportKmlModal" class="modal modal-centered">
+        <div class="modal-content glass-modal-content">
+            <div class="modal-header glass-modal-header">
+                <h3>Export KML</h3>
+                <span class="close"
+                    onclick="document.getElementById('exportKmlModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body glass-modal-body">
+                <p class="modal-subtext modal-subtext-clean">Choose what you want to export:</p>
+                <div class="glass-btn-group">
+                    <button id="btnExportCurrentView" class="btn">Current View</button>
+                    <button id="btnExportAllSites" class="btn">All Sites</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Choice Modal -->
+    <!-- Import Choice Modal -->
+    <div id="importModal" class="modal modal-centered">
+        <div class="modal-content glass-modal-content">
+            <div class="modal-header glass-modal-header">
+                <h3>Import Data</h3>
+                <span class="close" onclick="document.getElementById('importModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body glass-modal-body">
+                <p class="modal-subtext modal-subtext-clean">Choose what you want to import:</p>
+                <div class="glass-btn-group">
+                    <button id="btnImportSites" class="btn">Sites (Excel/CSV)</button>
+                    <button id="btnImportSmartCare" class="btn">SmartCare Data</button>
+                    <button id="btnImportLog" class="btn">Log File (NMF/CSV)</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="theme_config.js"></script>
+    <script src="app.js?v=v124"></script>
     <!-- User Point Modal -->
     <div id="userPointModal" class="modal">
         <div class="modal-content user-point-modal-content">
@@ -418,21 +464,103 @@
             </div>
             <div class="modal-body user-point-modal-body">
                 <div class="up-input-group">
-                    <label class="up-label">Name</label>
+                    <label class="up-label" for="upName">Name</label>
                     <input type="text" id="upName" placeholder="Point Name" class="up-input">
                 </div>
                 <div class="up-input-row">
                     <div class="up-input-item">
-                        <label class="up-label">Latitude</label>
+                        <label class="up-label" for="upLat">Latitude</label>
                         <input type="number" id="upLat" placeholder="33.xxx" step="any" class="up-input">
                     </div>
                     <div class="up-input-item">
-                        <label class="up-label">Longitude</label>
+                        <label class="up-label" for="upLng">Longitude</label>
                         <input type="number" id="upLng" placeholder="-7.xxx" step="any" class="up-input">
                     </div>
                 </div>
                 <div class="up-footer">
                     <button id="submitUserPoint" class="btn up-submit-btn">Add to Map</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Site Editor Modal (Draggable) -->
+    <div id="siteEditorModal" class="modal">
+        <!-- Added .site-editor-size to strictly keep it wider -->
+        <div class="modal-content glass-modal-content site-editor-size">
+            <div class="modal-header glass-modal-header site-editor-modal-header">
+                <h3 id="siteEditorTitle">Edit Sector</h3>
+                <span class="close"
+                    onclick="document.getElementById('siteEditorModal').style.display='none'">&times;</span>
+            </div>
+            <div class="modal-body glass-modal-body site-editor-body">
+                <input type="hidden" id="editOriginalId">
+                <input type="hidden" id="editOriginalIndex">
+                <input type="hidden" id="editLayerId">
+
+                <div class="modal-section-title">Site Information</div>
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editSiteName">Site Name</label>
+                        <input type="text" id="editSiteName" class="form-control" placeholder="e.g. Site A">
+                    </div>
+                    <div class="form-group">
+                        <label for="editCellName">Cell Name (Base)</label>
+                        <input type="text" id="editCellName" class="form-control" placeholder="e.g. SiteA_1">
+                    </div>
+                </div>
+
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editLat">Latitude</label>
+                        <input type="number" step="any" id="editLat" class="form-control" placeholder="33.xxxxx">
+                    </div>
+                    <div class="form-group">
+                        <label for="editLng">Longitude</label>
+                        <input type="number" step="any" id="editLng" class="form-control" placeholder="-7.xxxxx">
+                    </div>
+                </div>
+
+                <div class="modal-section-title">Sector Details</div>
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editCellId">Cell ID (Base)</label>
+                        <input type="text" id="editCellId" class="form-control" placeholder="e.g. 1001">
+                    </div>
+                    <div class="form-group">
+                        <label for="editPci">PCI / SC (Start)</label>
+                        <input type="number" id="editPci" class="form-control" placeholder="e.g. 50">
+                    </div>
+                </div>
+
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editAzimuth">Azimuth (1st Sector)</label>
+                        <input type="number" id="editAzimuth" class="form-control" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="editTech">Technology</label>
+                        <select id="editTech" class="form-control">
+                            <option value="4G">4G / LTE</option>
+                            <option value="3G">3G / UMTS</option>
+                            <option value="2G">2G / GSM</option>
+                            <option value="5G">5G / NR</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-grid-row">
+                    <div class="form-group">
+                        <label for="editBeamwidth">Beamwidth</label>
+                        <input type="number" id="editBeamwidth" class="form-control" placeholder="65" value="65">
+                    </div>
+                </div>
+
+                <div class="editor-footer">
+                    <button class="btn btn-red" id="btnDeleteSector"
+                        onclick="window.deleteSectorCurrent()">Delete</button>
+                    <button class="btn btn-blue mr-2" id="btnAddSiblingSector"
+                        onclick="window.addSectorToCurrentSite()">+ Add Sector</button>
+                    <button class="btn btn-green" onclick="window.saveSector()">Save Site</button>
                 </div>
             </div>
         </div>

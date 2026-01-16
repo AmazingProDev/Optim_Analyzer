@@ -2,11 +2,55 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileInput = document.getElementById('fileInput');
     const fileStatus = document.getElementById('fileStatus');
     const logsList = document.getElementById('logsList');
+    // define custom projection
+    if (window.proj4) {
+        window.proj4.defs("EPSG:32629", "+proj=utm +zone=29 +north +datum=WGS84 +units=m +no_defs");
+    }
+
+    const shpInput = document.getElementById('shpInput');
 
     // Initialize Map
     const map = new MapRenderer('map');
     window.map = map.map; // Expose Leaflet instance globally for inline onclicks
     window.mapRenderer = map; // Expose Renderer helper for debugging/verification
+
+    // ----------------------------------------------------
+    // THEMATIC CONFIGURATION & HELPERS
+    // ----------------------------------------------------
+    // Helper to map metric names to theme keys
+    window.getThresholdKey = (metric) => {
+        if (!metric) return 'level';
+        const m = metric.toLowerCase();
+        if (m.includes('qual') || m.includes('sinr') || m.includes('ecno')) return 'quality';
+        if (m.includes('throughput')) return 'throughput';
+        return 'level'; // Default to level (RSRP/RSCP)
+    };
+
+    // Global Theme Configuration
+    window.themeConfig = {
+        thresholds: {
+            'level': [
+                { min: -70, max: undefined, color: '#22c55e', label: 'Excellent (>= -70)' },      // Green (34,197,94)
+                { min: -85, max: -70, color: '#84cc16', label: 'Good (-85 to -70)' },             // Light Green (132,204,22)
+                { min: -95, max: -85, color: '#eab308', label: 'Fair (-95 to -85)' },             // Yellow (234,179,8)
+                { min: -105, max: -95, color: '#f97316', label: 'Poor (-105 to -95)' },            // Orange (249,115,22)
+                { min: undefined, max: -105, color: '#ef4444', label: 'Bad (< -105)' }             // Red (239,68,68)
+            ],
+            'quality': [
+                { min: -10, max: undefined, color: '#22c55e', label: 'Excellent (>= -10)' },
+                { min: -15, max: -10, color: '#eab308', label: 'Fair (-15 to -10)' },
+                { min: undefined, max: -15, color: '#ef4444', label: 'Poor (< -15)' }
+            ],
+            'throughput': [
+                { min: 20000, max: undefined, color: '#22c55e', label: 'Excellent (>= 20000 Kbps)' },
+                { min: 10000, max: 20000, color: '#84cc16', label: 'Good (10000-20000 Kbps)' },
+                { min: 3000, max: 10000, color: '#eab308', label: 'Fair (3000-10000 Kbps)' },
+                { min: 1000, max: 3000, color: '#f97316', label: 'Poor (1000-3000 Kbps)' },
+                { min: undefined, max: 1000, color: '#ef4444', label: 'Bad (< 1000 Kbps)' }
+            ]
+
+        }
+    };
 
     // Global Listener for Map Rendering Completion (Async Legend)
     window.addEventListener('layer-metric-ready', (e) => {
@@ -15,6 +59,103 @@ document.addEventListener('DOMContentLoaded', () => {
             window.updateLegend();
         }
     });
+
+    // Handle Map Point Clicks (Draw Line to Serving Cell)
+    window.addEventListener('map-point-clicked', (e) => {
+        const { point } = e.detail;
+        if (!point || !mapRenderer) return;
+
+        // Calculate Start Point: Prefer Polygon Centroid if available
+        let startPt = { lat: point.lat, lng: point.lng };
+
+        if (point.geometry && (point.geometry.type === 'Polygon' || point.geometry.type === 'MultiPolygon')) {
+            try {
+                // Simple Average of coordinates for Centroid (good enough for small 50m squares)
+                let coords = point.geometry.coordinates;
+                // Unwrap MultiPolygon outer
+                if (point.geometry.type === 'MultiPolygon') coords = coords[0];
+                // Unwrap Polygon outer ring
+                if (Array.isArray(coords[0])) coords = coords[0];
+
+                if (coords.length > 0) {
+                    let sumLat = 0, sumLng = 0, count = 0;
+                    coords.forEach(c => {
+                        // GeoJSON is [lng, lat]
+                        if (c.length >= 2) {
+                            sumLng += c[0];
+                            sumLat += c[1];
+                            count++;
+                        }
+                    });
+                    if (count > 0) {
+                        startPt = { lat: sumLat / count, lng: sumLng / count };
+                        // console.log("Calculated Centroid:", startPt);
+                    }
+                }
+            } catch (err) {
+                console.warn("Failed to calc centroid:", err);
+            }
+        }
+
+        // 1. Find Serving Cell
+        const servingCell = mapRenderer.getServingCell(point);
+
+        if (servingCell) {
+            // 2. Draw Connection Line
+            // Color can be static (e.g. green) or dynamic (based on point color)
+            const color = mapRenderer.getColor(mapRenderer.getMetricValue(point, mapRenderer.activeMetric), mapRenderer.activeMetric);
+
+            // Construct target object for drawConnections
+            const target = {
+                lat: servingCell.lat,
+                lng: servingCell.lng,
+                azimuth: servingCell.azimuth, // Pass Azimuth
+                range: 100, // Default range or get from settings if possible
+                color: color || '#3b82f6', // Default Blue
+                cellId: servingCell.cellId // For polygon centroid logic (legacy fallback)
+            };
+
+            // Use Best Available ID for Polygon Lookup
+            const bestId = servingCell.rawEnodebCellId || servingCell.calculatedEci || servingCell.cellId;
+            if (bestId) target.cellId = bestId;
+
+            mapRenderer.drawConnections(startPt, [target]);
+
+            // 3. Optional: Highlight Serving Cell (Visual Feedback)
+            mapRenderer.highlightCell(bestId);
+
+            // console.log(`[App] Drawn line to Serving Cell: ${servingCell.cellName || servingCell.cellId}`);
+        } else {
+            console.warn('[App] Serving Cell not found for clicked point.');
+            // Clear previous connections if any
+            mapRenderer.connectionsLayer.clearLayers();
+        }
+    });
+
+    // SPIDER SMARTCARE LOGIC
+    // SPIDER MODE TOGGLE
+    window.isSpiderMode = false; // Default OFF
+    const spiderBtn = document.getElementById('spiderSmartCareBtn');
+    if (spiderBtn) {
+        spiderBtn.onclick = () => {
+            window.isSpiderMode = !window.isSpiderMode;
+            if (window.isSpiderMode) {
+                spiderBtn.classList.remove('btn-red');
+                spiderBtn.classList.add('btn-green');
+                spiderBtn.innerHTML = '🕸️ Spider: ON';
+                // Optional: Clear any existing connections when turning ON? 
+                // Usually user wants to CLICK to see them.
+            } else {
+                spiderBtn.classList.remove('btn-green');
+                spiderBtn.classList.add('btn-red');
+                spiderBtn.innerHTML = '🕸️ Spider: OFF';
+                // Clear connections when turning OFF
+                if (window.mapRenderer) {
+                    window.mapRenderer.clearConnections();
+                }
+            }
+        };
+    }
 
     // Map Drop Zone Logic
     const mapContainer = document.getElementById('map');
@@ -27,231 +168,1009 @@ document.addEventListener('DOMContentLoaded', () => {
         mapContainer.style.boxShadow = 'none';
     });
 
-    // --- AI Integration Logic ---
 
-    const aiModal = document.getElementById('aiModal');
-    const geminiApiKeyInput = document.getElementById('geminiApiKey');
-    const aiContent = document.getElementById('aiContent');
-    const aiLoading = document.getElementById('aiLoading');
 
-    // Restore API Key if saved
-    const savedKey = localStorage.getItem('gemini_api_key');
-    if (savedKey) {
-        geminiApiKeyInput.value = savedKey;
-    }
 
-    window.openAIAnalysis = function () {
-        aiModal.style.display = 'block';
 
-        // Make Draggable
-        const aiModalContent = aiModal.querySelector('.modal-content');
-        const aiModalHeader = aiModal.querySelector('.modal-header');
-        if (aiModalContent && aiModalHeader) {
-            // Ensure function exists (it's defined below in this file or seemingly globally available in this scope)
-            if (typeof makeElementDraggable === 'function') {
-                makeElementDraggable(aiModalHeader, aiModalContent);
-            } else {
-                console.warn('makeElementDraggable function not found');
-            }
-        }
-    }
-
-    window.closeAIModal = function () {
-        aiModal.style.display = 'none';
-    }
-
-    window.saveApiKey = function () {
-        const key = geminiApiKeyInput.value.trim();
-        if (key) {
-            localStorage.setItem('gemini_api_key', key);
-            alert('API Key saved!');
-        } else {
-            alert('Please enter a valid API Key.');
-        }
-    }
-
-    // Attach Event Listener to Button
-    const aiBtn = document.getElementById('aiAnalyzeBtn');
-    if (aiBtn) {
-        aiBtn.onclick = window.openAIAnalysis;
-    }
-
-    // Export KML Logic
+    // --- CONSOLIDATED KML EXPORT (MODAL) ---
     const exportKmlBtn = document.getElementById('exportKmlBtn');
     if (exportKmlBtn) {
-        exportKmlBtn.onclick = () => {
-            if (!mapRenderer || !mapRenderer.activeLogId) {
-                alert('No active log/layer to export. Please load a log and display a metric first.');
+        exportKmlBtn.onclick = (e) => {
+            e.preventDefault();
+            const modal = document.getElementById('exportKmlModal');
+            if (modal) modal.style.display = 'block';
+        };
+    }
+
+    // Modal Action: Current View
+    const btnExportCurrentView = document.getElementById('btnExportCurrentView');
+    if (btnExportCurrentView) {
+        btnExportCurrentView.onclick = () => {
+            const renderer = window.mapRenderer;
+            if (!renderer || !renderer.activeLogId || !renderer.activeMetric) {
+                alert("No active data to export.");
                 return;
             }
-
-            // Find valid log
-            const logId = mapRenderer.activeLogId;
-            const log = loadedLogs.find(l => l.id === logId);
-
+            const log = loadedLogs.find(l => l.id === renderer.activeLogId);
             if (!log) {
-                alert('Active log data not found.');
+                alert("Log data not found.");
                 return;
             }
-
-            const metric = mapRenderer.activeMetric || 'level';
-
-            // USE UNIFIED EXPORT: Includes Points (Colored by Metric) + Relevant Sites (Colored matching Points if Discrete)
-            // This satisfies the user requirement: "export also serving sectors with thematic colors"
-            const kmlContent = mapRenderer.exportUnifiedKML(log.points, metric);
-
-            if (!kmlContent) {
-                alert('Failed to generate KML.');
+            const kml = renderer.exportToKML(renderer.activeLogId, log.points, renderer.activeMetric);
+            if (!kml) {
+                alert("Failed to generate KML.");
                 return;
             }
-
-            // Trigger Download
-            const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+            const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${log.name}_${metric}.kml`;
+            a.download = `${log.name}_${renderer.activeMetric}.kml`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+            document.getElementById('exportKmlModal').style.display = 'none'; // Close modal
         };
     }
 
-    const exportSitesKmlBtn = document.getElementById('exportSitesKmlBtn');
-    if (exportSitesKmlBtn) {
-        exportSitesKmlBtn.onclick = () => {
-            if (!mapRenderer || !mapRenderer.siteData || mapRenderer.siteData.length === 0) {
-                alert('No sites imported. Please import sites first.');
+    // Modal Action: All Sites
+    const btnExportAllSites = document.getElementById('btnExportAllSites');
+    if (btnExportAllSites) {
+        btnExportAllSites.onclick = () => {
+            const renderer = window.mapRenderer;
+            if (!renderer || !renderer.siteIndex || !renderer.siteIndex.all) {
+                alert("No site database loaded.");
                 return;
             }
 
-            // NEW: Pass active log points if available to enable "Spider Lines"
+            // Get Active Points to Filter Sites (Requested Feature: "Export only serving sites")
             let activePoints = null;
-            if (mapRenderer.activeLogId) {
-                const log = loadedLogs.find(l => l.id === mapRenderer.activeLogId);
-                if (log) activePoints = log.points;
+            if (renderer.activeLogId && window.loadedLogs) {
+                const activeLog = window.loadedLogs.find(l => l.id === renderer.activeLogId);
+                if (activeLog && activeLog.points) {
+                    activePoints = activeLog.points;
+                }
             }
 
-            // Default behavior: Export ALL sites with uniform Grey color, plus spider lines if points exist
-            const kmlContent = mapRenderer.exportSitesToKML(activePoints, '#aaaaaa');
-
-            if (!kmlContent) {
-                alert('Failed to generate Sites KML.');
+            const kml = renderer.exportSitesToKML(activePoints);
+            if (!kml) {
+                alert("Failed to generate Sites KML.");
                 return;
             }
-
-            const blob = new Blob([kmlContent], { type: 'application/vnd.google-earth.kml+xml' });
+            const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `All_Sites_${new Date().toLocaleTimeString().replace(/:/g, '')}.kml`;
+            a.download = `Sites_Database_${new Date().getTime()}.kml`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+            document.getElementById('exportKmlModal').style.display = 'none'; // Close modal
         };
     }
 
-    window.checkGeminiModels = async function () {
-        const key = geminiApiKeyInput.value.trim();
-        const debugLog = document.getElementById('aiModelDebugLog');
-        if (!key) {
-            alert('Please enter an API Key first.');
-            return;
+
+
+    // --- CONSOLIDATED IMPORT (MODAL) ---
+    const importBtn = document.getElementById('importBtn');
+    if (importBtn) {
+        importBtn.onclick = (e) => {
+            e.preventDefault();
+            const modal = document.getElementById('importModal');
+            if (modal) modal.style.display = 'block';
+        };
+    }
+
+    const btnImportSites = document.getElementById('btnImportSites');
+    if (btnImportSites) {
+        btnImportSites.onclick = () => {
+            const siteInput = document.getElementById('siteInput');
+            if (siteInput) siteInput.click();
+            document.getElementById('importModal').style.display = 'none';
+        };
+    }
+
+    const btnImportSmartCare = document.getElementById('btnImportSmartCare');
+    if (btnImportSmartCare) {
+        btnImportSmartCare.onclick = () => {
+            const shpInput = document.getElementById('shpInput');
+            if (shpInput) shpInput.click();
+            document.getElementById('importModal').style.display = 'none';
+        };
+    }
+
+    const btnImportLog = document.getElementById('btnImportLog');
+    if (btnImportLog) {
+        btnImportLog.onclick = () => {
+            const fileInput = document.getElementById('fileInput');
+            if (fileInput) fileInput.click();
+            document.getElementById('importModal').style.display = 'none';
+        };
+    }
+
+    // --- SmartCare SHP/Excel Import Logic ---
+    // Initialize Sidebar Logic
+    const scSidebar = document.getElementById('smartcare-sidebar');
+    const scToggleBtn = document.getElementById('toggleSmartCareSidebar');
+    const scLayerList = document.getElementById('smartcare-layer-list');
+
+    if (scToggleBtn) {
+        scToggleBtn.onclick = () => {
+            // Minimize/Expand logic could be just hiding the list or sliding
+            // For now, let's just slide it out completely or toggle visibility
+            // But the request said "hide/unhide it".
+            // Let's toggle a class 'minimized' or just hide.
+            scSidebar.style.display = 'none'; // Simple hide
+        };
+    }
+
+    // To show it again, we might need a button in the main header or it auto-shows on import.
+    // Let's add an "Show Sidebar" logic if it's hidden?
+    // Actually, user asked "possibility to hide/unhide it".
+    // Let's assume the button closes it. We might need a way to open it back.
+    // For now, let's ensure it opens on import.
+
+    function addSmartCareLayer(log) {
+        if (!scSidebar || !scLayerList) return;
+        const { name, id: layerId, customMetrics, type, points } = log;
+        const techLabel = type === 'excel' ? '4G (Excel)' : 'SHP';
+        const pointCount = points ? points.length : 0;
+
+        scSidebar.style.display = 'flex'; // Auto-show
+
+        const item = document.createElement('div');
+        item.className = 'sc-layer-item';
+        item.id = `sc-item-${layerId}`;
+
+        let metricsHtml = '';
+        if (customMetrics && customMetrics.length > 0) {
+            metricsHtml = `
+                <div class="sc-metrics-label">DETECTED METRICS</div>
+                <div class="sc-metric-container">
+                    ${customMetrics.map(m => `
+                        <div class="sc-metric-button ${log.currentParam === m ? 'active' : ''}" onclick="window.showMetricOptions(event, '${layerId}', '${m}', 'smartcare')">${m}</div>
+                    `).join('')}
+                </div>
+            `;
         }
 
-        debugLog.style.display = 'block';
-        debugLog.textContent = 'Checking available models...';
+        item.innerHTML = `
+            <div class="sc-layer-header-row">
+                <div class="sc-tech-tag">${techLabel}</div>
+                <div class="sc-point-count">${pointCount} pts</div>
+                <div class="sc-layer-controls">
+                    <button class="sc-btn sc-btn-toggle" onclick="toggleSmartCareLayer('${layerId}')" title="Toggle Visibility">👁️</button>
+                    <button class="sc-btn sc-btn-remove" onclick="removeSmartCareLayer('${layerId}')" title="Remove Layer">❌</button>
+                </div>
+            </div>
+            <div class="sc-layer-name-row" title="${name}">${name}</div>
+            ${metricsHtml}
+        `;
 
-        try {
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
-            const data = await response.json();
+        scLayerList.appendChild(item);
+    }
 
-            if (data.error) {
-                debugLog.style.color = '#ef4444';
-                debugLog.textContent = 'Error: ' + data.error.message;
-            } else if (data.models) {
-                debugLog.style.color = '#4ade80';
-                const names = data.models.map(m => m.name.replace('models/', '')).filter(n => n.includes('gemini'));
-                debugLog.textContent = 'Available Gemini Models:\n' + names.join('\n');
-            } else {
-                debugLog.textContent = 'No models found (Unknown response format).';
+    window.switchSmartCareMetric = (layerId, metric) => {
+        const log = window.loadedLogs.find(l => l.id === layerId);
+        if (log && window.mapRenderer) {
+            console.log(`[SmartCare] Switching metric for ${layerId} to ${metric}`);
+            log.currentParam = metric; // Track active metric for this layer
+            window.mapRenderer.updateLayerMetric(layerId, log.points, metric);
+
+            // Update UI active state
+            const container = document.querySelector(`#sc-item-${layerId} .sc-metric-container`);
+            if (container) {
+                container.querySelectorAll('.sc-metric-button').forEach(btn => {
+                    btn.classList.toggle('active', btn.textContent === metric);
+                });
             }
-        } catch (e) {
-            debugLog.style.color = '#ef4444';
-            debugLog.textContent = 'Network Error: ' + e.message;
         }
     };
 
-    // AI Provider Logic
-    window.toggleAIProvider = function () {
-        const providerRadio = document.querySelector('input[name="aiProvider"]:checked');
-        const provider = providerRadio ? providerRadio.value : 'gemini';
+    window.showMetricOptions = (event, layerId, metric, type = 'regular') => {
+        event.stopPropagation();
 
-        const geminiContainer = document.getElementById('geminiKeyContainer');
-        const openaiContainer = document.getElementById('openaiKeyContainer');
-        const modelSelect = document.getElementById('geminiModelSelect');
-        const debugLog = document.getElementById('aiModelDebugLog');
+        // Remove existing menu if any
+        const existingMenu = document.querySelector('.sc-metric-menu');
+        if (existingMenu) existingMenu.remove();
 
-        // Reset debug log
-        if (debugLog) debugLog.style.display = 'none';
+        const log = window.loadedLogs.find(l => l.id === layerId);
+        if (!log) return;
 
-        if (provider === 'gemini') {
-            if (geminiContainer) geminiContainer.style.display = 'flex';
-            if (openaiContainer) openaiContainer.style.display = 'none';
-            // Populate Gemini Models
-            if (modelSelect) {
-                modelSelect.innerHTML = `
-                    <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash Exp (New)</option>
-                    <option value="gemini-flash-latest">Gemini Flash Latest</option>
-                    <option value="gemini-pro-latest">Gemini Pro Latest</option>
-                    <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash (Latest)</option>
-                    <option value="gemini-1.5-flash-001" selected>Gemini 1.5 Flash (v001)</option>
-                    <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro (Latest)</option>
-                    <option value="gemini-pro">Gemini 1.0 Pro</option>
-                `;
+        const menu = document.createElement('div');
+        menu.className = 'sc-metric-menu';
+
+        // Position menu near the clicked button
+        const rect = event.currentTarget.getBoundingClientRect();
+        menu.style.top = `${rect.bottom + window.scrollY + 5}px`;
+        menu.style.left = `${rect.left + window.scrollX}px`;
+
+        menu.innerHTML = `
+            <div class="sc-menu-item" id="menu-map-${layerId}">
+                <span>🗺️</span> Map
+            </div>
+            <div class="sc-menu-item" id="menu-grid-${layerId}">
+                <span>📊</span> Grid
+            </div>
+            <div class="sc-menu-item" id="menu-chart-${layerId}">
+                <span>📈</span> Chart
+            </div>
+        `;
+
+        document.body.appendChild(menu);
+
+        // Map Click Handler
+        menu.querySelector(`#menu-map-${layerId}`).onclick = () => {
+            if (type === 'smartcare') {
+                window.switchSmartCareMetric(layerId, metric);
+            } else {
+                if (window.mapRenderer) {
+                    window.mapRenderer.updateLayerMetric(layerId, log.points, metric);
+                    // Sync theme select
+                    const themeSelect = document.getElementById('themeSelect');
+                    if (themeSelect) {
+                        if (metric === 'cellId' || metric === 'cid') themeSelect.value = 'cellId';
+                        else if (metric.toLowerCase().includes('qual')) themeSelect.value = 'quality';
+                        else themeSelect.value = 'level';
+                        if (typeof window.updateLegend === 'function') window.updateLegend();
+                    }
+                }
+            }
+            menu.remove();
+        };
+
+        // Grid Click Handler
+        menu.querySelector(`#menu-grid-${layerId}`).onclick = () => {
+            window.openGridModal(log, metric);
+            menu.remove();
+        };
+
+        // Chart Click Handler
+        menu.querySelector(`#menu-chart-${layerId}`).onclick = () => {
+            window.openChartModal(log, metric);
+            menu.remove();
+        };
+
+        // Auto-position adjustment if it goes off screen
+        const menuRect = menu.getBoundingClientRect();
+        if (menuRect.right > window.innerWidth) {
+            menu.style.left = `${window.innerWidth - menuRect.width - 10}px`;
+        }
+        if (menuRect.bottom > window.innerHeight) {
+            menu.style.top = `${rect.top + window.scrollY - menuRect.height - 5}px`;
+        }
+    };
+
+    // Close menu when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.sc-metric-menu')) {
+            const menu = document.querySelector('.sc-metric-menu');
+            if (menu) menu.remove();
+        }
+    });
+
+    window.toggleSmartCareLayer = (layerId) => {
+        const log = window.loadedLogs.find(l => l.id === layerId);
+        if (log) {
+            log.visible = !log.visible;
+            // Trigger redraw
+            if (window.mapRenderer) {
+                // If it's the active one, clear it? Or just re-render all?
+                // Our current renderer handles specific layers if update is called
+                // But simplified:
+                if (log.visible) {
+                    window.mapRenderer.renderLog(log, window.mapRenderer.currentMetric || 'level', true);
+                } else {
+                    window.mapRenderer.clearLayer(layerId);
+                }
+            }
+
+            // Update UI Icon
+            const btn = document.querySelector(`#sc-item-${layerId} .sc-btn-toggle`);
+            if (btn) {
+                btn.textContent = log.visible ? '👁️' : '🚫';
+                btn.classList.toggle('hidden-layer', !log.visible);
+            }
+        }
+    };
+
+    window.removeSmartCareLayer = (layerId) => {
+        if (!confirm('Remove this SmartCare layer?')) return;
+
+        // Remove from data
+        const idx = window.loadedLogs.findIndex(l => l.id === layerId);
+        if (idx !== -1) {
+            window.loadedLogs.splice(idx, 1);
+        }
+
+        // Remove from map
+        if (window.mapRenderer) {
+            window.mapRenderer.clearLayer(layerId);
+        }
+
+        // Remove from Sidebar
+        const item = document.getElementById(`sc-item-${layerId}`);
+        if (item) item.remove();
+
+        // Hide sidebar if empty
+        if (scLayerList.children.length === 0) {
+            scSidebar.style.display = 'none';
+        }
+    }
+
+    shpInput.onchange = async (e) => {
+        const files = Array.from(e.target.files);
+        console.log(`[Import] Selected ${files.length} files:`, files.map(f => f.name));
+
+        if (files.length === 0) return;
+
+        // Filter for Excel files (Case Insensitive)
+        const excelFiles = files.filter(f => {
+            const name = f.name.toLowerCase();
+            return name.endsWith('.xlsx') || name.endsWith('.xls');
+        });
+
+        console.log(`[Import] Detected ${excelFiles.length} Excel files.`);
+
+        if (excelFiles.length > 0) {
+            // Check if multiple Excel files selected
+            if (excelFiles.length > 1) {
+                console.log("[Import] Multiple Excel files detected. Auto-merging...");
+                await handleMergedExcelImport(excelFiles);
+            } else {
+                // Single File
+                await handleExcelImport(excelFiles[0]);
             }
         } else {
-            if (geminiContainer) geminiContainer.style.display = 'none';
-            if (openaiContainer) openaiContainer.style.display = 'flex';
-            // Populate OpenAI Models
-            if (modelSelect) {
-                modelSelect.innerHTML = `
-                    <option value="gpt-4o" selected>GPT-4o (Fast & Smart)</option>
-                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                    <option value="gpt-4">GPT-4</option>
-                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Fast)</option>
-                `;
+            // Proceed with Shapefile (assuming legacy behavior for non-Excel)
+            await handleShpImport(files);
+        }
+
+        shpInput.value = ''; // Reset
+    };
+
+    // Refactored Helper: Parse a single Excel file and return points/metrics
+    async function parseExcelFile(file) {
+        try {
+            const data = await file.arrayBuffer();
+            const workbook = XLSX.read(data);
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const json = XLSX.utils.sheet_to_json(sheet);
+
+            console.log(`[Excel] Parsed ${file.name}: ${json.length} rows`);
+
+            // Safe fallback for Projection
+            if (!window.proj4.defs['EPSG:32629']) {
+                window.proj4.defs('EPSG:32629', '+proj=utm +zone=29 +datum=WGS84 +units=m +no_defs');
             }
+
+            // Grid Dimensions (Default)
+            let detectedRx = 20.8;
+            let detectedRy = 24.95;
+
+            const points = json.map((row, idx) => {
+                // Heuristic Column Mapping
+                const latKey = Object.keys(row).find(k => /lat/i.test(k));
+                const lngKey = Object.keys(row).find(k => /long|lng/i.test(k));
+
+                if (!latKey || !lngKey) return null;
+
+                const lat = parseFloat(row[latKey]);
+                const lng = parseFloat(row[lngKey]);
+
+                if (isNaN(lat) || isNaN(lng)) return null;
+
+                // --- 50m Grid Generation ---
+                let [x, y] = window.proj4("EPSG:4326", "EPSG:32629", [lng, lat]);
+                let tx = x;
+                let ty = y;
+
+                const rx = detectedRx;
+                const ry = detectedRy;
+                const corners = [
+                    [tx - rx, ty - ry],
+                    [tx + rx, ty - ry],
+                    [tx + rx, ty + ry],
+                    [tx - rx, ty + ry],
+                    [tx - rx, ty - ry] // Close ring
+                ];
+
+                const cornersWGS = corners.map(c => window.proj4("EPSG:32629", "EPSG:4326", c));
+
+                const geometry = {
+                    type: "Polygon",
+                    coordinates: [cornersWGS]
+                };
+
+                // Attribute Mapping
+                const rsrpKey = Object.keys(row).find(k => /rsrp|level|signal/i.test(k));
+                const cellKey = Object.keys(row).find(k => /cell_name|name|site/i.test(k));
+                const timeKey = Object.keys(row).find(k => /time/i.test(k));
+                const pciKey = Object.keys(row).find(k => /pci|sc/i.test(k));
+
+                const nodebCellIdKey = Object.keys(row).find(k => /nodeb id-cell id/i.test(k) || /enodeb id-cell id/i.test(k));
+                const standardCellIdKey = Object.keys(row).find(k => /^cell[_\s]?id$/i.test(k) || /^ci$/i.test(k) || /^eci$/i.test(k));
+
+                let foundCellId = nodebCellIdKey ? row[nodebCellIdKey] : (standardCellIdKey ? row[standardCellIdKey] : undefined);
+                const rncKey = Object.keys(row).find(k => /^rnc$/i.test(k));
+                const cidKey = Object.keys(row).find(k => /^cid$/i.test(k));
+                const rnc = rncKey ? row[rncKey] : undefined;
+                const cid = cidKey ? row[cidKey] : undefined;
+
+                let calculatedEci = null;
+                if (foundCellId) {
+                    const parts = String(foundCellId).split('-');
+                    if (parts.length === 2) {
+                        const enb = parseInt(parts[0]);
+                        const id = parseInt(parts[1]);
+                        if (!isNaN(enb) && !isNaN(id)) calculatedEci = (enb * 256) + id;
+                    } else if (!isNaN(parseInt(foundCellId))) {
+                        calculatedEci = parseInt(foundCellId);
+                    }
+                } else if (rnc && cid) {
+                    foundCellId = `${rnc}/${cid}`;
+                }
+
+                return {
+                    id: idx, // Will need re-indexing when merging
+                    lat,
+                    lng,
+                    rsrp: rsrpKey ? parseFloat(row[rsrpKey]) : undefined,
+                    level: rsrpKey ? parseFloat(row[rsrpKey]) : undefined,
+                    cellName: cellKey ? row[cellKey] : undefined,
+                    sc: pciKey ? row[pciKey] : undefined,
+                    time: timeKey ? row[timeKey] : '00:00:00',
+                    cellId: foundCellId,
+                    rnc: rnc,
+                    cid: cid,
+                    calculatedEci: calculatedEci,
+                    geometry: geometry,
+                    properties: row
+                };
+            }).filter(p => p !== null);
+
+            // Detect Metrics
+            const firstRow = json[0];
+            const customMetrics = Object.keys(firstRow).filter(key => {
+                const val = firstRow[key];
+                return typeof val === 'number' || (!isNaN(parseFloat(val)) && isFinite(val));
+            });
+
+            return { points, customMetrics };
+        } catch (e) {
+            console.error(`Error parsing ${file.name}`, e);
+            throw e;
         }
-    };
+    }
 
-    // Load Saved Keys on Init
-    setTimeout(() => {
-        const savedGeminiKey = localStorage.getItem('gemini_api_key');
-        const savedOpenAIKey = localStorage.getItem('openai_api_key');
-        const geminiInput = document.getElementById('geminiApiKey');
-        const openaiInput = document.getElementById('openaiApiKey');
+    async function handleExcelImport(file) {
+        fileStatus.textContent = `Parsing Excel: ${file.name}...`;
+        try {
+            const { points, customMetrics } = await parseExcelFile(file);
 
-        if (savedGeminiKey && geminiInput) geminiInput.value = savedGeminiKey;
-        if (savedOpenAIKey && openaiInput) openaiInput.value = savedOpenAIKey;
-    }, 1000);
+            const fileName = file.name.split('.')[0];
+            const logId = `excel_${Date.now()}`;
 
-    // Update Save Key function (this was existing, we override or ensure it handles both if bound)
-    // Actually, saveApiKey logic needs to be robust, but simple existence check is good.
-    window.saveApiKey = function () {
-        const geminiInput = document.getElementById('geminiApiKey');
-        const openaiInput = document.getElementById('openaiApiKey');
+            const newLog = {
+                id: logId,
+                name: fileName,
+                points: points,
+                color: '#3b82f6',
+                visible: true,
+                type: 'excel',
+                customMetrics: customMetrics,
+                currentParam: 'level' // Default
+            };
 
-        if (geminiInput && geminiInput.value.trim()) {
-            localStorage.setItem('gemini_api_key', geminiInput.value.trim());
+            loadedLogs.push(newLog);
+            updateLogsList();
+            addSmartCareLayer(newLog);
+            fileStatus.textContent = `Loaded Excel: ${fileName}`;
+
+            // Auto-Zoom
+            const latLngs = points.map(p => [p.lat, p.lng]);
+            const bounds = L.latLngBounds(latLngs);
+            window.map.fitBounds(bounds);
+
+            if (window.mapRenderer) {
+                window.mapRenderer.updateLayerMetric(logId, points, 'level');
+            }
+        } catch (e) {
+            console.error(e);
+            alert(`Failed to import ${file.name}`);
+            fileStatus.textContent = 'Import Failed';
         }
-        if (openaiInput && openaiInput.value.trim()) {
-            localStorage.setItem('openai_api_key', openaiInput.value.trim());
+    }
+
+    async function handleMergedExcelImport(files) {
+        fileStatus.textContent = `Merging ${files.length} Excel files...`;
+        let pooledPoints = [];
+        let allMetrics = new Set();
+        let nameList = [];
+
+        try {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                fileStatus.textContent = `Parsing ${i + 1}/${files.length}: ${file.name}...`;
+                const result = await parseExcelFile(file);
+
+                // Re-index IDs to avoid collisions
+                const offset = pooledPoints.length;
+                const pointsWithOffset = result.points.map(p => ({ ...p, id: p.id + offset }));
+
+                pooledPoints = pooledPoints.concat(pointsWithOffset);
+                result.customMetrics.forEach(m => allMetrics.add(m));
+                nameList.push(file.name.split('.')[0]);
+            }
+
+            if (pooledPoints.length === 0) {
+                alert("No valid data found in selected files.");
+                fileStatus.textContent = 'Merge Failed (No Data)';
+                return;
+            }
+
+            const fileName = nameList.length > 3 ? `${nameList[0]}_plus_${nameList.length - 1}_merged` : nameList.join('_');
+            const logId = `smartcare_merged_${Date.now()}`;
+
+            const newLog = {
+                id: logId,
+                name: fileName + " (Merged)",
+                points: pooledPoints,
+                color: '#3b82f6',
+                visible: true,
+                type: 'excel',
+                customMetrics: Array.from(allMetrics),
+                currentParam: 'level'
+            };
+
+            loadedLogs.push(newLog);
+            updateLogsList();
+            addSmartCareLayer(newLog);
+            fileStatus.textContent = `Merged ${files.length} files successfully.`;
+
+            // Auto-Zoom
+            const latLngs = pooledPoints.map(p => [p.lat, p.lng]);
+            const bounds = L.latLngBounds(latLngs);
+            window.map.fitBounds(bounds);
+
+            if (window.mapRenderer) {
+                window.mapRenderer.updateLayerMetric(logId, pooledPoints, 'level');
+            }
+
+        } catch (e) {
+            console.error("Merge Error:", e);
+            alert("Error during merge: " + e.message);
+            fileStatus.textContent = 'Merge Failed';
         }
-        alert('API Keys saved successfully!');
-    };
+    }
+
+    async function handleTRPImport(file) {
+        fileStatus.textContent = 'Unzipping TRP...';
+        try {
+            if (!window.JSZip) {
+                alert("JSZip library not loaded. Please refresh or check internet connection.");
+                return;
+            }
+            const zip = await JSZip.loadAsync(file);
+            console.log("[TRP] Zip loaded. Files:", Object.keys(zip.files).length);
+
+            const channelLogs = [];
+            zip.forEach((relativePath, zipEntry) => {
+                // Look for channel.log files (usually in channels/chX/)
+                if (relativePath.endsWith('channel.log')) channelLogs.push(zipEntry);
+            });
+
+            console.log(`[TRP] Found ${channelLogs.length} channel logs.`);
+
+            let allPoints = [];
+            let allSignaling = [];
+
+            for (const logFile of channelLogs) {
+                try {
+                    // Peek at first bytes to check for binary
+                    const head = await logFile.async('uint8array');
+                    let isBinary = false;
+                    // Check first 100 bytes for nulls which usually indicates binary/datalog
+                    for (let i = 0; i < Math.min(head.length, 100); i++) {
+                        if (head[i] === 0) { isBinary = true; break; }
+                    }
+
+                    if (!isBinary) {
+                        const text = await logFile.async('string');
+                        // Use existing NMF parser
+                        const parserResult = NMFParser.parse(text);
+                        if (parserResult.points.length > 0 || parserResult.signaling.length > 0) {
+                            console.log(`[TRP] Parsed ${parserResult.points.length} points from ${logFile.name}`);
+                            allPoints = allPoints.concat(parserResult.points);
+                            allSignaling = allSignaling.concat(parserResult.signaling);
+                        }
+                    } else {
+                        console.warn(`[TRP] Skipping binary log: ${logFile.name}`);
+                        // Future: Implement binary parser or service.xml correlation if needed
+                    }
+                } catch (err) {
+                    console.warn(`[TRP] Failed to parse ${logFile.name}:`, err);
+                }
+            }
+
+            if (allPoints.length === 0 && allSignaling.length === 0) {
+                console.warn("[TRP] No text logs found. Attempting XML Fallback (GPX + Events)...");
+
+                // Fallback Strategy: Parse wptrack.xml (GPS) and services.xml (Events)
+                const fallbackData = await parseTRPFallback(zip);
+                if (fallbackData.points.length > 0 || fallbackData.signaling.length > 0) {
+                    allPoints = fallbackData.points;
+                    allSignaling = fallbackData.signaling;
+                    fileStatus.textContent = 'Loaded TRP (Route & Events Only)';
+                    // Alert user about missing radio data
+                    alert("⚠️ Radio Data Missing\n\nThe radio measurements (RSRP/RSCP) in this TRP file are binary/encrypted and cannot be read.\n\nHowever, we have successfully extracted:\n- GPS Track (Gray route)\n- Call Events (Services)\n\nVisualizing map data now.");
+                } else {
+                    alert("No readable data found in TRP file (Binary Logs + No Accessible GPS/Events).");
+                    fileStatus.textContent = 'TRP Import Failed';
+                    return;
+                }
+            }
+
+            // Create Log Object
+            const logId = `trp_${Date.now()}`;
+            const newLog = {
+                id: logId,
+                name: file.name,
+                points: allPoints,
+                signaling: allSignaling,
+                color: '#8b5cf6', // Violet
+                visible: true,
+                type: 'nmf', // Treat as NMF-like standard log
+                currentParam: 'level'
+            };
+
+            loadedLogs.push(newLog);
+            updateLogsList();
+
+            // Auto-Zoom and Render
+            if (allPoints.length > 0) {
+                const latLngs = allPoints.map(p => [p.lat, p.lng]);
+                const bounds = L.latLngBounds(latLngs);
+                window.map.fitBounds(bounds);
+                if (window.mapRenderer) {
+                    window.mapRenderer.renderLog(newLog, 'level');
+                }
+            }
+
+            fileStatus.textContent = `Loaded TRP: ${file.name}`;
+
+
+        } catch (e) {
+            console.error("[TRP] Error:", e);
+            fileStatus.textContent = 'TRP Error';
+            alert("Error processing TRP file: " + e.message);
+        }
+    }
+
+
+    async function parseTRPFallback(zip) {
+        const results = { points: [], signaling: [] };
+        let trackPoints = [];
+
+        // 1. Parse GPS Track (wptrack.xml)
+        try {
+            const trackFile = Object.keys(zip.files).find(f => f.endsWith('wptrack.xml'));
+            if (trackFile) {
+                const text = await zip.files[trackFile].async('string');
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(text, "text/xml");
+                const trkpts = doc.getElementsByTagName("trkpt");
+
+                for (let i = 0; i < trkpts.length; i++) {
+                    const pt = trkpts[i];
+                    const lat = parseFloat(pt.getAttribute("lat"));
+                    const lon = parseFloat(pt.getAttribute("lon"));
+                    const timeTag = pt.getElementsByTagName("time")[0];
+                    const time = timeTag ? timeTag.textContent : null;
+
+                    if (!isNaN(lat) && !isNaN(lon)) {
+                        // Track Point
+                        trackPoints.push({
+                            lat: lat,
+                            lng: lon,
+                            time: time,
+                            timestamp: time ? new Date(time).getTime() : 0,
+                            type: 'MEASUREMENT',
+                            level: -140, // Gray/Low
+                            cellId: 'N/A',
+                            details: 'GPS Track Point',
+                            properties: { source: 'wptrack' }
+                        });
+                    }
+                }
+                console.log(`[TRP Fallback] Parsed ${trackPoints.length} GPS points.`);
+            }
+        } catch (e) {
+            console.warn("[TRP Fallback] Error parsing wptrack.xml", e);
+        }
+
+        // 2. Parse Services/Events (services.xml)
+        try {
+            const servicesFile = Object.keys(zip.files).find(f => f.endsWith('services.xml'));
+            if (servicesFile) {
+                const text = await zip.files[servicesFile].async('string');
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(text, "text/xml");
+                const serviceInfos = doc.getElementsByTagName("ServiceInformation");
+
+                for (let i = 0; i < serviceInfos.length; i++) {
+                    const info = serviceInfos[i];
+
+                    // Extract Name
+                    let name = "Unknown Service";
+                    const nameTag = info.getElementsByTagName("Name")[0];
+                    if (nameTag) {
+                        const content = nameTag.getElementsByTagName("Content")[0]; // Sometimes nested
+                        name = content ? content.textContent : nameTag.textContent;
+                        // Clean up "Voice Quality" -> VoiceQuality
+                        if (typeof name === 'string') name = name.trim();
+                    }
+
+                    // Extract Action (Start/Stop)
+                    let action = "";
+                    const actionTag = info.getElementsByTagName("ServiceAction")[0];
+                    if (actionTag) {
+                        const val = actionTag.getElementsByTagName("Value")[0];
+                        action = val ? val.textContent : "";
+                    }
+
+                    // Extract Time
+                    let time = null;
+                    const props = info.getElementsByTagName("Properties")[0];
+                    if (props) {
+                        const timeTag = props.getElementsByTagName("UtcTime")[0]; // Correct tag structure?
+                        // Structure is <UtcTime><Time>...</Time></UtcTime> inside Properties usually
+                        if (timeTag) {
+                            const t = timeTag.getElementsByTagName("Time")[0];
+                            if (t) time = t.textContent;
+                        }
+                    }
+
+                    if (time) {
+                        // Map to nearest GPS point
+                        const eventTime = new Date(time).getTime();
+                        let closestPt = null;
+                        let minDiff = 10000; // 10 seconds max diff?
+
+                        // Find closest track point
+                        // Optimization: Track points are sorted by time usually.
+                        // Simple linear search for now or find relative index
+                        if (trackPoints.length > 0) {
+                            // Find closest
+                            for (let k = 0; k < trackPoints.length; k++) {
+                                const diff = Math.abs(trackPoints[k].timestamp - eventTime);
+                                if (diff < minDiff) {
+                                    minDiff = diff;
+                                    closestPt = trackPoints[k];
+                                }
+                            }
+                        }
+
+                        results.signaling.push({
+                            lat: closestPt ? closestPt.lat : (trackPoints[0] ? trackPoints[0].lat : 0),
+                            lng: closestPt ? closestPt.lng : (trackPoints[0] ? trackPoints[0].lng : 0),
+                            time: time,
+                            type: 'SIGNALING',
+                            event: `${name} ${action}`, // e.g. "Voice Quality Stop"
+                            message: `Service: ${name}`,
+                            details: `Action: ${action}`,
+                            direction: '-'
+                        });
+                    }
+                }
+                console.log(`[TRP Fallback] Parsed ${results.signaling.length} Service Events.`);
+            }
+        } catch (e) {
+            console.warn("[TRP Fallback] Error parsing services.xml", e);
+        }
+
+        results.points = trackPoints;
+        return results;
+    }
+
+    async function handleShpImport(files) {
+        fileStatus.textContent = 'Parsing SHP...';
+        try {
+            let geojson;
+            const zipFile = files.find(f => f.name.endsWith('.zip'));
+
+            if (zipFile) {
+                // Parse ZIP containing SHP/DBF
+                const buffer = await zipFile.arrayBuffer();
+                geojson = await shp(buffer);
+            } else {
+                // Parse individual SHP/DBF files
+                const shpFile = files.find(f => f.name.endsWith('.shp'));
+                const dbfFile = files.find(f => f.name.endsWith('.dbf'));
+                const prjFile = files.find(f => f.name.endsWith('.prj'));
+
+                if (!shpFile) {
+                    alert('Please select at least a .shp file (and ideally a .dbf file)');
+                    return;
+                }
+
+                const shpBuffer = await shpFile.arrayBuffer();
+                const dbfBuffer = dbfFile ? await dbfFile.arrayBuffer() : null;
+
+                // Read PRJ if available
+                if (prjFile) {
+                    const prjText = await prjFile.text();
+                    console.log("[SHP] Found .prj file:", prjText);
+                    if (window.proj4 && prjText.trim()) {
+                        try {
+                            window.proj4.defs("USER_PRJ", prjText);
+                            console.log("[SHP] Registered 'USER_PRJ' from file.");
+                        } catch (e) {
+                            console.error("[SHP] Failed to register .prj:", e);
+                        }
+                    }
+                }
+
+                console.log("[SHP] Parsing individual files...");
+                const geometries = shp.parseShp(shpBuffer);
+                const properties = dbfBuffer ? shp.parseDbf(dbfBuffer) : [];
+                geojson = shp.combine([geometries, properties]);
+            }
+
+            console.log("[SHP] Parsed GeoJSON:", geojson);
+
+            if (!geojson) throw new Error("Failed to parse Shapefile");
+
+            // Shapefiles can contain multiple layers if combined or passed as ZIP
+            const features = Array.isArray(geojson) ? geojson.flatMap(g => g.features) : geojson.features;
+
+            console.log("[SHP] Extracted Features Count:", features ? features.length : 0);
+
+            if (!features || features.length === 0) {
+                alert('No features found in Shapefile.');
+                return;
+            }
+
+            const fileName = files[0].name.split('.')[0];
+            const logId = `shp_${Date.now()}`;
+
+            // Convert GeoJSON Features to App Points
+            const points = features.map((f, idx) => {
+                const props = f.properties || {};
+                const coords = f.geometry.coordinates;
+
+                // Handle Point objects (Shapefiles can be points, lines, or polygons)
+                // For SmartCare, they are usually points or centroids
+                let lat, lng;
+                let rawGeometry = f.geometry; // Store raw geometry for rendering polygons
+
+                if (f.geometry.type === 'Point') {
+                    [lng, lat] = coords;
+                } else if (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') {
+                    // Use simple centroid for metadata but keep geometry for rendering
+                    const bounds = L.geoJSON(f).getBounds();
+                    const center = bounds.getCenter();
+                    lat = center.lat;
+                    lng = center.lng;
+                } else {
+                    return null; // Skip unsupported types (e.g. PolyLine for now)
+                }
+
+                // Field Mapping Logic
+                const findField = (regex) => {
+                    const key = Object.keys(props).find(k => regex.test(k));
+                    return key ? props[key] : undefined;
+                };
+
+                const rsrp = findField(/rsrp|level|signal/i);
+                const cellName = findField(/cell_name|name|site/i);
+                const rsrq = findField(/rsrq|quality/i);
+                const pci = findField(/pci|sc/i);
+
+                return {
+                    id: idx,
+                    lat,
+                    lng,
+                    rsrp: rsrp !== undefined ? parseFloat(rsrp) : undefined,
+                    level: rsrp !== undefined ? parseFloat(rsrp) : undefined,
+                    rsrq: rsrq !== undefined ? parseFloat(rsrq) : undefined,
+                    sc: pci,
+                    cellName: cellName,
+                    time: props.time || props.timestamp || '00:00:00',
+                    geometry: rawGeometry,
+                    properties: props // Keep EVERYTHING
+                };
+            }).filter(p => p !== null);
+
+            if (points.length === 0) {
+                alert('No valid points found in Shapefile.');
+                return;
+            }
+
+            // Detect all possible metrics from first feature properties
+            const firstProps = features[0].properties || {};
+            const customMetrics = Object.keys(firstProps).filter(key => {
+                const val = firstProps[key];
+                return typeof val === 'number' || (!isNaN(parseFloat(val)) && isFinite(val));
+            });
+            console.log("[SHP] Detected metrics:", customMetrics);
+
+            const newLog = {
+                id: logId,
+                name: fileName,
+                points: points,
+                type: 'shp',
+                tech: points[0].rsrp !== undefined ? '4G' : 'Unknown',
+                customMetrics: customMetrics,
+                currentParam: 'level',
+                visible: true,
+                color: '#38bdf8'
+            };
+
+            loadedLogs.push(newLog);
+            updateLogsList();
+            addSmartCareLayer(newLog); // Pass full log object
+            fileStatus.textContent = `Loaded SHP: ${fileName}`;
+
+            // Auto-render level on map
+            map.updateLayerMetric(logId, points, 'level');
+
+            // AUTO-ZOOM to Data
+            if (points.length > 0) {
+                const lats = points.map(p => p.lat);
+                const lngs = points.map(p => p.lng);
+                const minLat = Math.min(...lats);
+                const maxLat = Math.max(...lats);
+                const minLng = Math.min(...lngs);
+                const maxLng = Math.max(...lngs);
+
+                console.log("[SHP] Bounds:", { minLat, maxLat, minLng, maxLng });
+
+                // AUTOMATIC REPROJECTION (UTM Zone 29N -> WGS84)
+                // If coordinates look like meters (e.g. > 180 or < -180), reproject.
+                // Typical UTM Y is > 0, X can be large.
+                if (Math.abs(minLat) > 90 || Math.abs(minLng) > 180) {
+                    console.log("[SHP] Detected Projected Coordinates (likely UTM). Reprojecting from EPSG:32629...");
+
+                    if (window.proj4) {
+                        points.forEach(p => {
+                            // Proj4 takes [x, y] -> [lng, lat]
+                            const sourceProj = window.proj4.defs("USER_PRJ") ? "USER_PRJ" : "EPSG:32629";
+                            const reprojected = window.proj4(sourceProj, "EPSG:4326", [p.lng, p.lat]);
+                            p.lng = reprojected[0];
+                            p.lat = reprojected[1];
+                        });
+
+                        // Recalculate Bounds
+                        const newLats = points.map(p => p.lat);
+                        const newLngs = points.map(p => p.lng);
+                        const newMinLat = Math.min(...newLats);
+                        const newMaxLat = Math.max(...newLats);
+                        const newMinLng = Math.min(...newLngs);
+                        const newMaxLng = Math.max(...newLngs);
+
+                        console.log("[SHP] Reprojected Bounds:", { newMinLat, newMaxLat, newMinLng, newMaxLng });
+                        window.map.fitBounds([[newMinLat, newMinLng], [newMaxLat, newMaxLng]]);
+                    } else {
+                        alert("Coordinates appear to be projected (UTM), but proj4js library is missing. Cannot reproject.");
+                    }
+                } else {
+                    if (Math.abs(maxLat - minLat) < 0.0001 && Math.abs(maxLng - minLng) < 0.0001) {
+                        window.map.setView([minLat, minLng], 15);
+                    } else {
+                        window.map.fitBounds([[minLat, minLng], [maxLat, maxLng]]);
+                    }
+                }
+            }
+
+        } catch (err) {
+            console.error("SHP Import Error:", err);
+            alert("Failed to import SHP: " + err.message);
+            fileStatus.textContent = 'Import failed';
+        }
+    }
 
     async function callOpenAIAPI(key, model, prompt) {
         const url = 'https://api.openai.com/v1/chat/completions';
@@ -638,7 +1557,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 val = p[lowerSub];
             } else {
                 if (param === 'band' && p.parsed) val = p.parsed.serving.band;
-                if (val === undefined && p.parsed && p.parsed.serving[param] !== undefined) val = p.parsed.serving[param];
+                if (val === undefined && p.parsed && p.parsed.serving[param] !== undefined) val = p.parsed.serving.param;
             }
 
             // Always add point to prevent index mismatch (Chart Index must equal Log Index)
@@ -921,7 +1840,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (param === 'rscp_not_combined') valServing = p.level !== undefined ? p.level : (p.rscp !== undefined ? p.rscp : -999);
                 else {
                     if (param === 'band' && p.parsed) valServing = p.parsed.serving.band;
-                    if (valServing === undefined && p.parsed && p.parsed.serving[param] !== undefined) valServing = p.parsed.serving[param];
+                    if (valServing === undefined && p.parsed && p.parsed.serving[param] !== undefined) valServing = p.parsed.serving.param;
                 }
 
                 // Helper to format float bar: [floor, val]
@@ -1460,9 +2379,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // window.addEventListener('layer-metric-ready', (e) => { ... });
 
         // Handle Theme Change
-        document.getElementById('theme-select').addEventListener('change', (e) => {
-            updateLegend();
-        });
+        const themeSelect = document.getElementById('themeSelect');
+        if (themeSelect) {
+            themeSelect.addEventListener('change', (e) => {
+                if (typeof window.updateLegend === 'function') window.updateLegend();
+            });
+        }
         // Bind events
         document.getElementById('pickerServing').addEventListener('input', updateChartStyle);
 
@@ -1492,53 +2414,94 @@ document.addEventListener('DOMContentLoaded', () => {
         const query = searchInput.value.trim();
         if (!query) return;
 
-        // Supported Formats:
-        // 33.58, -7.60 (Standard)
-        // 34,03360748	-6,7520895 (European/Tab)
-        // 33.58 -7.60 (Space)
-
-        // Robust Extraction: Find number-like patterns (integer or float with . or ,)
-        // Regex: Optional Sign + Digits + Optional (Dot/Comma + Digits)
+        // 1. Coordinate Search (Prioritized)
         const numberPattern = /[-+]?\d+([.,]\d+)?/g;
         const matches = query.match(numberPattern);
 
-        if (matches && matches.length >= 2) {
-            // Normalize: Replace ',' with '.' for JS parsing
+        // Check for specific Lat/Lng pattern (2 numbers, no text mixed in usually)
+        // If query looks like "Site A" or "123456", we shouldn't treat it as coords just because it has numbers.
+        const isCoordinateFormat = matches && matches.length >= 2 && matches.length <= 3 && !/[a-zA-Z]/.test(query);
+
+        if (isCoordinateFormat) {
             const lat = parseFloat(matches[0].replace(',', '.'));
             const lng = parseFloat(matches[1].replace(',', '.'));
 
-            if (!isNaN(lat) && !isNaN(lng)) {
-                // Validate Range
-                if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-                    alert(`Invalid Coordinates: Out of range (${lat}, ${lng}).`); // Added debug info
-                    return;
-                }
-
-                // Action
-                // 1. Zoom Map
+            if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                // ... Coordinate Found ...
                 window.map.flyTo([lat, lng], 18, { animate: true, duration: 1.5 });
-
-                // 2. Place Marker
                 if (window.searchMarker) window.map.removeLayer(window.searchMarker);
-
-                window.searchMarker = L.marker([lat, lng])
-                    .addTo(window.map)
-                    .bindPopup(`<b>Search Location</b><br>Lat: ${lat}<br>Lng: ${lng}`)
-                    .openPopup();
-
-                // 3. Update Status
+                window.searchMarker = L.marker([lat, lng]).addTo(window.map)
+                    .bindPopup(`<b>Search Location</b><br>Lat: ${lat}<br>Lng: ${lng}`).openPopup();
                 document.getElementById('fileStatus').textContent = `Zoomed to ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-
-            } else {
-                alert("Invalid Coordinates format. Could not parse numbers.");
+                return;
             }
-        } else {
-            alert("Could not find two coordinates in input. Please use 'Lat Lng' format.");
         }
+
+        // 2. Site / Cell Search
+        if (window.mapRenderer && window.mapRenderer.siteData) {
+            const qLower = query.toLowerCase();
+            const results = [];
+
+            // Helper to score matches
+            const scoreMatch = (s) => {
+                let score = 0;
+                const name = (s.cellName || s.name || s.siteName || '').toLowerCase();
+                const id = String(s.cellId || '').toLowerCase();
+                const cid = String(s.cid || '').toLowerCase();
+                const pci = String(s.sc || s.pci || '').toLowerCase();
+
+                // Exact Matches
+                if (name === qLower) score += 100;
+                if (id === qLower) score += 100;
+                if (cid === qLower) score += 90;
+
+                // Partial Matches
+                if (name.includes(qLower)) score += 50;
+                if (id.includes(qLower)) score += 40;
+
+                // PCI (Only if query is short number)
+                if (pci === qLower && qLower.length < 4) score += 20;
+
+                return score;
+            };
+
+            for (const s of window.mapRenderer.siteData) {
+                const score = scoreMatch(s);
+                if (score > 0) results.push({ s, score });
+            }
+
+            results.sort((a, b) => b.score - a.score);
+
+            if (results.length > 0) {
+                const best = results[0].s;
+                // Determine Zoom Level - if many matches, maybe fit bounds? For now, zoom to best.
+                const zoom = (best.lat && best.lng) ? 17 : window.map.getZoom();
+                if (best.lat && best.lng) {
+                    window.mapRenderer.setView(best.lat, best.lng);
+                    // Highlight
+                    if (best.cellId) window.mapRenderer.highlightCell(best.cellId);
+
+                    document.getElementById('fileStatus').textContent = `Found: ${best.cellName || best.name} (${best.cellId})`;
+                } else {
+                    alert(`Site found but has no coordinates: ${best.cellName || best.name}`);
+                }
+                return;
+            }
+        }
+
+        // 3. Fallback
+        alert("No location or site found for: " + query);
     };
 
     if (searchBtn) {
         searchBtn.onclick = window.handleSearch;
+    }
+
+    const rulerBtn = document.getElementById('rulerBtn');
+    if (rulerBtn) {
+        rulerBtn.onclick = () => {
+            if (window.mapRenderer) window.mapRenderer.toggleRulerMode();
+        };
     }
 
     if (searchInput) {
@@ -1558,260 +2521,308 @@ document.addEventListener('DOMContentLoaded', () => {
     const themeSelect = document.getElementById('themeSelect');
     const thresholdsContainer = document.getElementById('thresholdsContainer');
 
+    // Smooth Edges Toggle
+    // Smooth Edges Button Logic (Toggle)
+    const btnSmoothEdges = document.getElementById('btnSmoothEdges');
+    window.isSmoothingEnabled = false; // Default OFF
+
+    if (btnSmoothEdges) {
+        btnSmoothEdges.onclick = () => {
+            window.isSmoothingEnabled = !window.isSmoothingEnabled;
+
+            if (window.mapRenderer) {
+                window.mapRenderer.toggleSmoothing(window.isSmoothingEnabled);
+            }
+
+            // Visual Feedback
+            if (window.isSmoothingEnabled) {
+                btnSmoothEdges.innerHTML = '💧 Smooth: ON';
+                btnSmoothEdges.classList.add('btn-green');
+            } else {
+                btnSmoothEdges.innerHTML = '💧 Smooth';
+                btnSmoothEdges.classList.remove('btn-green');
+            }
+        };
+    }
+
+    // Zones (Boundaries) Modal Logic
+    const btnZones = document.getElementById('btnZones');
+    const boundariesModal = document.getElementById('boundariesModal');
+    const closeBoundariesModal = document.getElementById('closeBoundariesModal');
+
+    if (btnZones && boundariesModal) {
+        btnZones.onclick = () => {
+            boundariesModal.style.display = 'flex'; // Use flex to center the modal content
+        };
+        closeBoundariesModal.onclick = () => {
+            boundariesModal.style.display = 'none';
+        };
+        // Close on click outside
+        window.addEventListener('click', (event) => {
+            if (event.target === boundariesModal) {
+                boundariesModal.style.display = 'none';
+            }
+        });
+    }
+
+    // Boundary Checkboxes
+    ['chkRegions', 'chkProvinces', 'chkCommunes'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('change', (e) => {
+                const type = id.replace('chk', '').toLowerCase(); // regions, provinces, communes
+                if (window.mapRenderer) {
+                    window.mapRenderer.toggleBoundary(type, e.target.checked);
+                }
+            });
+        }
+    });
+
+    // DR Selection Logic
+    const drSelect = document.getElementById('drSelect');
+    if (drSelect) {
+        drSelect.addEventListener('change', (e) => {
+            const val = e.target.value;
+            if (window.mapRenderer) {
+                window.mapRenderer.filterDR(val);
+            }
+        });
+    }
+
     // Legend Elements
     let legendControl = null;
 
+    // Helper: Update Theme Color from Legend
+    window.handleLegendColorChange = (themeKey, idx, newColor) => {
+        if (!window.themeConfig || !window.themeConfig.thresholds[themeKey]) return;
+        window.themeConfig.thresholds[themeKey][idx].color = newColor;
+
+        // Trigger Update
+        refreshThemeLayers(themeKey);
+    };
+
+    // Helper: Update Theme Threshold from Legend
+    window.handleLegendThresholdChange = (themeKey, idx, type, newValue) => {
+        if (!window.themeConfig || !window.themeConfig.thresholds[themeKey]) return;
+        const t = window.themeConfig.thresholds[themeKey][idx];
+        const val = parseFloat(newValue);
+
+        if (isNaN(val)) return; // Validate
+
+        if (type === 'min') t.min = val;
+        if (type === 'max') t.max = val;
+
+        // Auto-update Label
+        if (t.min !== undefined && t.max !== undefined) t.label = `${t.min} to ${t.max}`;
+        else if (t.min !== undefined) t.label = `> ${t.min}`;
+        else if (t.max !== undefined) t.label = `< ${t.max}`;
+
+        // Trigger Update
+        refreshThemeLayers(themeKey);
+    };
+
+    // Helper: Refresh specific layers
+    function refreshThemeLayers(themeKey) {
+        // Re-render relevant layers
+        window.loadedLogs.forEach(log => {
+            // Check if log uses this theme
+            const currentMetric = log.currentParam || 'level';
+            const key = window.getThresholdKey ? window.getThresholdKey(currentMetric) : currentMetric;
+
+            if (key === themeKey) {
+                if (window.mapRenderer) {
+                    window.mapRenderer.updateLayerMetric(log.id, log.points, currentMetric);
+                }
+            }
+        });
+
+        // Update Legend UI to reflect new stats/labels
+        window.updateLegend();
+    }
+
     window.updateLegend = function () {
         if (!window.themeConfig || !window.map) return;
+        const renderer = window.mapRenderer;
 
-        // Remove existing legend (Legacy Leaflet Control cleanup)
-        if (legendControl) {
+        // Helper to check if legacy control exists and remove it
+        if (typeof legendControl !== 'undefined' && legendControl) {
             if (typeof legendControl.remove === 'function') legendControl.remove();
             legendControl = null;
         }
 
-        const theme = themeSelect ? themeSelect.value : 'level';
+        // Check if draggable legend already exists to preserve position
+        let container = document.getElementById('draggable-legend');
+        let scrollContent;
 
-        // Remove existing draggable legend if any
-        let existingLegend = document.getElementById('draggable-legend');
-        if (existingLegend) {
-            existingLegend.remove();
-        }
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'draggable-legend';
 
-        const stats = window.mapRenderer.activeMetricStats || new Map();
-        const total = window.mapRenderer.totalActiveSamples || 1;
-
-        const container = document.createElement('div');
-        container.id = 'draggable-legend';
-        container.setAttribute('style', `
-            position: absolute;
-            top: 80px; 
-            right: 20px;
-            width: 320px;
-            min-width: 250px;
-            max-width: 600px;
-            max-height: 480px;
-            background-color: rgba(30, 30, 30, 0.95);
-            border: 2px solid #555;
-            border-radius: 6px;
-            color: #fff;
-            z-index: 10001; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
-            display: flex;
-            flex-direction: column;
-            resize: both;
-            overflow: auto;
-        `);
-
-        // Header
-        const header = document.createElement('div');
-        header.setAttribute('style', `
-            padding: 8px 10px;
-            background-color: #252525;
-            font-weight: bold;
-            font-size: 13px;
-            border-bottom: 1px solid #444;
-            cursor: grab;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-radius: 6px 6px 0 0;
-            flex-shrink: 0;
-        `);
-
-        // Content Body
-        const body = document.createElement('div');
-        body.setAttribute('style', `
-            padding: 10px;
-            overflow-y: auto;
-            overflow-x: hidden;
-            flex: 1;
-        `);
-
-        // DISCRETE LEGEND (Cell ID / CID)
-        if (theme === 'cellId' || theme === 'cid') {
-            let ids = window.mapRenderer ? window.mapRenderer.activeMetricIds : [];
-            if (!ids) ids = [];
-
-            const sortedIds = (ids || []).slice().sort((a, b) => {
-                const countA = stats.get(a) || 0;
-                const countB = stats.get(b) || 0;
-                return countB - countA;
-            });
-
-            const title = `Serving Cells (${ids.length})`;
-            const summary = `Total: ${total}`;
-
-            header.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-                    <div>
-                        <span>${title}</span>
-                        <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">${summary}</span>
-                    </div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <button id="kmlExportBtn" title="Export dots to KML" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
-                        <button id="siteKmlExportBtn" title="Export sites (sectors) to KML" style="background:#10b981; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">📡 Sites KML</button>
-                        <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
-                    </div>
-                </div>
-            `;
-
-            const formatId = (id) => {
-                if (!id || id === 'N/A') return id;
-                const strId = String(id);
-                if (strId.includes('/')) return id;
-                const num = Number(strId.replace(/[^\d]/g, ''));
-                if (!isNaN(num) && num > 65535) return `${num >> 16}/${num & 0xFFFF}`;
-                return id;
-            };
-
-            const getSiteName = (id) => {
-                if (window.mapRenderer && window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                    const site = window.mapRenderer.siteIndex.byId.get(id);
-                    if (site) return site.cellName || site.name || site.siteName || '';
-                }
-                return '';
-            };
-
-            if (sortedIds.length > 0) {
-                let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
-                sortedIds.forEach(id => {
-                    const color = window.mapRenderer.getDiscreteColor(id);
-                    const name = getSiteName(id);
-                    const count = stats.get(id) || 0;
-                    const pct = ((count / total) * 100).toFixed(1);
-
-                    const label = name ? `<span>${name}</span> <span style="color:#888; font-size:9px;">(${formatId(id)})</span>` : `${formatId(id)}`;
-                    html += `
-                        <div style="display:flex; align-items:center; border-bottom:1px solid #333; padding-bottom:2px;">
-                            <input type="color" value="${color}" 
-                                   style="width:16px; height:16px; padding:0; border:1px solid #555; background:none; cursor:pointer; flex-shrink:0;"
-                                   onchange="window.mapRenderer.setCustomColor('${id}', this.value); document.dispatchEvent(new CustomEvent('metric-color-changed', { detail: { id: '${id}', color: this.value } }));" />
-                            <span style="font-size:11px; white-space:nowrap; font-family:sans-serif; overflow:hidden; text-overflow:ellipsis; flex-grow:1; margin-left:8px;" title="${name || id}">${label}</span>
-                            <span style="margin-left:auto; font-size:10px; color:#aaa; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
-                        </div>
-                    `;
-                });
-                html += `</div>`;
-                body.innerHTML = html;
-            } else {
-                body.innerHTML = `<i style="font-size:11px; color:#f87171;">0 Cell IDs found.</i>`;
+            // Map Bounds for Initial Placement
+            let topPos = 80;
+            let rightPos = 20;
+            const mapEl = document.getElementById('map');
+            if (mapEl) {
+                const rect = mapEl.getBoundingClientRect();
+                topPos = rect.top + 10;
+                rightPos = (window.innerWidth - rect.right) + 10;
             }
-        } else {
-            // THEMATIC LEGEND (Coverage/Quality)
-            const thresholds = window.themeConfig.thresholds[theme];
-            if (!thresholds) return;
 
-            header.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-                    <div>
-                        <span>${theme.toUpperCase()} Analysis</span>
-                        <span style="font-size:10px; color:#888; margin-left:10px; font-weight:normal;">Sum: ${total}</span>
-                    </div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <button id="kmlExportBtn" title="Export to KML" style="background:#3b82f6; color:white; border:none; padding:2px 8px; border-radius:4px; font-size:10px; cursor:pointer;">💾 KML</button>
-                        <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
-                    </div>
+            container.setAttribute('style', `
+                position: fixed;
+                top: ${topPos}px; 
+                right: ${rightPos}px;
+                width: 320px;
+                min-width: 250px;
+                max-width: 600px;
+                max-height: 80vh;
+                background-color: rgba(30, 30, 30, 0.95);
+                border: 2px solid #555;
+                border-radius: 6px;
+                color: #fff;
+                z-index: 10001; 
+                box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+                display: flex;
+                flex-direction: column;
+                resize: both;
+                overflow: hidden;
+            `);
+
+            // Disable Map Interactions passing through Legend
+            if (typeof L !== 'undefined' && L.DomEvent) {
+                L.DomEvent.disableClickPropagation(container);
+                L.DomEvent.disableScrollPropagation(container);
+            }
+
+            // Global Header (Drag Handle)
+            const mainHeader = document.createElement('div');
+            mainHeader.setAttribute('style', `
+                padding: 8px 10px;
+                background-color: #252525;
+                font-weight: bold;
+                font-size: 13px;
+                border-bottom: 1px solid #444;
+                cursor: grab;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-radius: 6px 6px 0 0;
+                flex-shrink: 0;
+            `);
+            mainHeader.innerHTML = `
+                <span>Legend</span>
+                <div style="display:flex; gap:8px; align-items:center;">
+                     <span onclick="this.closest('#draggable-legend').remove(); window.legendControl=null;" style="cursor:pointer; color:#aaa; font-size:18px; line-height:1;">&times;</span>
                 </div>
             `;
+            container.appendChild(mainHeader);
 
-            let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
-            thresholds.forEach(t => {
-                const count = stats.get(t.label) || 0;
-                const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+            // Scrollable Content Area
+            scrollContent = document.createElement('div');
+            scrollContent.id = 'draggable-legend-content';
+            scrollContent.setAttribute('style', 'overflow-y: auto; flex: 1; padding: 5px;');
+            container.appendChild(scrollContent);
 
-                html += `
-                    <div style="display:flex; align-items:center; border-bottom:1px solid #333; padding-bottom:2px;">
-                        <span style="background:${t.color}; width:16px; height:16px; min-width:16px; display:inline-block; margin-right:8px; border-radius:3px; border:1px solid #555;"></span>
-                        <span style="font-size:11px; font-family:sans-serif;">${t.label}</span>
-                        <span style="margin-left:auto; font-size:10px; color:#aaa; font-family:monospace; padding-left:10px; flex-shrink:0;">${count} <span style="color:#666;">(${pct}%)</span></span>
-                    </div>
-                `;
-            });
-            html += `</div>`;
-            body.innerHTML = html;
+            document.body.appendChild(container);
+
+            if (typeof makeElementDraggable === 'function') {
+                makeElementDraggable(mainHeader, container);
+            }
+
+            // Bind KML Export once
+            const kmlBtn = container.querySelector('#btnLegacyExport');
+            if (kmlBtn) {
+                kmlBtn.onclick = (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const modal = document.getElementById('exportKmlModal');
+                    if (modal) modal.style.display = 'block';
+                };
+            }
+
+        } else {
+            scrollContent = container.querySelector('#draggable-legend-content');
+            if (scrollContent) scrollContent.innerHTML = '';
         }
 
-        container.appendChild(header);
-        container.appendChild(body);
-        document.body.appendChild(container);
+        if (!scrollContent) return;
 
-        // KML Export Logic
-        const kmlBtn = header.querySelector('#kmlExportBtn');
-        if (kmlBtn) {
-            kmlBtn.onclick = (e) => {
-                e.stopPropagation();
-                const renderer = window.mapRenderer;
-                if (!renderer || !renderer.activeLogId || !renderer.activeMetric) {
-                    alert("No active data to export.");
-                    return;
-                }
-                const log = loadedLogs.find(l => l.id === renderer.activeLogId);
-                if (!log) {
-                    alert("Log data not found.");
-                    return;
-                }
-                const kml = renderer.exportToKML(renderer.activeLogId, log.points, renderer.activeMetric);
-                if (!kml) {
-                    alert("Failed to generate KML.");
-                    return;
-                }
-                const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${log.name}_${renderer.activeMetric}.kml`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            };
-        }
+        // Populate Content
+        let hasContent = false;
+        const visibleLogs = window.loadedLogs ? window.loadedLogs.filter(l => l.visible !== false) : [];
 
-        // Sites KML Export Logic
-        const siteKmlBtn = header.querySelector('#siteKmlExportBtn');
-        if (siteKmlBtn) {
-            siteKmlBtn.onclick = (e) => {
-                e.stopPropagation();
-                const renderer = window.mapRenderer;
-                if (!renderer || !renderer.siteIndex || !renderer.siteIndex.all) {
-                    alert("No site database loaded.");
-                    return;
-                }
+        if (visibleLogs.length === 0) {
+            scrollContent.innerHTML = `<div style="padding:10px; color:#888; text-align:center;">No visible layers.</div>`;
+        } else {
+            visibleLogs.forEach(log => {
+                const statsObj = renderer.layerStats ? renderer.layerStats[log.id] : null;
+                if (!statsObj) return;
 
-                // Get Active Points to Filter Sites (Requested Feature: "Export only serving sites")
-                let activePoints = null;
-                if (renderer.activeLogId && window.loadedLogs) {
-                    const activeLog = window.loadedLogs.find(l => l.id === renderer.activeLogId);
-                    if (activeLog && activeLog.points) {
-                        activePoints = activeLog.points;
+                hasContent = true;
+                const metric = statsObj.metric || 'level';
+                const stats = statsObj.activeMetricStats || new Map();
+                const total = statsObj.totalActiveSamples || 0;
+
+                const section = document.createElement('div');
+                section.setAttribute('style', 'margin-bottom: 10px; border: 1px solid #444; border-radius: 4px; overflow: hidden;');
+
+                const sectHeader = document.createElement('div');
+                sectHeader.innerHTML = `<span style="font-weight:bold; color:#eee;">${log.name}</span> <span style="font-size:10px; color:#aaa;">(${metric})</span>`;
+                sectHeader.setAttribute('style', 'background:#333; padding: 5px 8px; font-size:12px; border-bottom:1px solid #444;');
+                section.appendChild(sectHeader);
+
+                const sectBody = document.createElement('div');
+                sectBody.setAttribute('style', 'padding:5px; background:rgba(0,0,0,0.2);');
+
+                if (metric === 'cellId' || metric === 'cid') {
+                    const ids = statsObj.activeMetricIds || [];
+                    const sortedIds = ids.slice().sort((a, b) => (stats.get(b) || 0) - (stats.get(a) || 0));
+                    if (sortedIds.length > 0) {
+                        let html = `<div style="display:flex; flex-direction:column; gap:4px;">`;
+                        sortedIds.slice(0, 50).forEach(id => {
+                            const color = renderer.getDiscreteColor(id);
+                            let name = id;
+                            if (window.mapRenderer && window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
+                                const site = window.mapRenderer.siteIndex.byId.get(id);
+                                if (site) name = site.cellName || site.name || id;
+                            }
+                            const count = stats.get(id) || 0;
+                            html += `<div class="legend-row">
+                                <div class="legend-swatch" style="background:${color};"></div>
+                                <span class="legend-label">${name}</span>
+                                <span class="legend-count">${count}</span>
+                            </div>`;
+                        });
+                        if (sortedIds.length > 50) html += `<div style="font-size:10px; color:#888; text-align:center; padding: 4px;">+ ${sortedIds.length - 50} more...</div>`;
+                        html += `</div>`;
+                        sectBody.innerHTML = html;
                     }
                 }
-
-                const kml = renderer.exportSitesToKML(activePoints);
-                if (!kml) {
-                    alert("Failed to generate Sites KML.");
-                    return;
+                else {
+                    const key = window.getThresholdKey ? window.getThresholdKey(metric) : metric;
+                    const thresholds = (window.themeConfig && window.themeConfig.thresholds[key]) ? window.themeConfig.thresholds[key] : null;
+                    if (thresholds) {
+                        let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
+                        thresholds.forEach((t, idx) => {
+                            const count = stats.get(t.label) || 0;
+                            const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0';
+                            const minVal = t.min !== undefined ? `<input type="number" value="${t.min}" class="legend-input" onchange="window.handleLegendThresholdChange('${key}', ${idx}, 'min', this.value)">` : '-∞';
+                            const maxVal = t.max !== undefined ? `<input type="number" value="${t.max}" class="legend-input" onchange="window.handleLegendThresholdChange('${key}', ${idx}, 'max', this.value)">` : '+∞';
+                            html += `<div class="legend-row">
+                                <input type="color" value="${t.color}" class="legend-color-input" onchange="window.handleLegendColorChange('${key}', ${idx}, this.value)">
+                                <div class="legend-label" style="display:flex; align-items:center; gap:4px;">
+                                    ${minVal} <span style="font-size:9px; color:#666;">to</span> ${maxVal}
+                                </div>
+                                <span class="legend-count">${count} (${pct}%)</span>
+                            </div>`;
+                        });
+                        html += `</div>`;
+                        sectBody.innerHTML = html;
+                    }
                 }
-                const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `Sites_Database_${new Date().getTime()}.kml`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            };
+                section.appendChild(sectBody);
+                scrollContent.appendChild(section);
+            });
         }
-
-
-
-        if (typeof makeElementDraggable === 'function') {
-            makeElementDraggable(header, container);
-        }
-
-        legendControl = { remove: () => container.remove(), addTo: () => { } };
     };
     // Hook updateLegend into UI actions
     // Initial Load (delayed to ensure map exists)
@@ -2229,6 +3240,9 @@ document.addEventListener('DOMContentLoaded', () => {
         headerEl.onmousedown = dragMouseDown;
 
         function dragMouseDown(e) {
+            // Prevent dragging if clicking on interactive elements
+            if (e.target.closest('button, input, select, textarea, .sc-metric-button, .close')) return;
+
             e = e || window.event;
             e.preventDefault();
             // Get mouse cursor position at startup
@@ -2250,24 +3264,44 @@ document.addEventListener('DOMContentLoaded', () => {
             document.onmousemove = elementDrag;
 
             headerEl.style.cursor = 'grabbing';
+            isDragging = true;
         }
 
         function elementDrag(e) {
+            if (!isDragging) return;
             e = e || window.event;
             e.preventDefault();
+
             // Calculate cursor movement
             const dx = e.clientX - startX;
             const dy = e.clientY - startY;
 
+            let newLeft = initialLeft + dx;
+            let newTop = initialTop + dy;
+
+            // Bounds Checking
+            const rect = containerEl.getBoundingClientRect();
+            const winW = window.innerWidth;
+            const winH = window.innerHeight;
+
+            // Prevent dragging off left/right
+            if (newLeft < 0) newLeft = 0;
+            if (newLeft + rect.width > winW) newLeft = winW - rect.width;
+
+            // Prevent dragging off top/bottom
+            if (newTop < 0) newTop = 0;
+            if (newTop + rect.height > winH) newTop = winH - rect.height;
+
             // Set new position
-            containerEl.style.left = (initialLeft + dx) + "px";
-            containerEl.style.top = (initialTop + dy) + "px";
+            containerEl.style.left = newLeft + "px";
+            containerEl.style.top = newTop + "px";
 
             // Remove any margin that might interfere
             containerEl.style.margin = "0";
         }
 
         function closeDragElement() {
+            isDragging = false;
             document.onmouseup = null;
             document.onmousemove = null;
             headerEl.style.cursor = 'grab';
@@ -2275,6 +3309,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         headerEl.style.cursor = 'grab';
     }
+
+    // Expose to window for global access
+    window.makeElementDraggable = makeElementDraggable;
 
     // Attach Listeners to Grid Modal
     const gridModal = document.getElementById('gridModal');
@@ -2584,361 +3621,538 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Global Helper: Lookup Cell Name from SiteData ---
     window.resolveSmartSite = (p) => {
         const NO_MATCH = { name: null, id: null };
-        const pci = p.sc || p.pci; // Normalized SC
-        const cellId = p.cellId;
-        const lac = p.lac;
-        const freq = p.freq;
-        const lat = p.lat;
-        const lng = p.lng;
-        const rnc = p.rnc;
-
         try {
-            // 0. Helper & Dist
-            if (!window.mapRenderer || !window.mapRenderer.siteData) return NO_MATCH;
-            const siteData = window.mapRenderer.siteData;
+            if (!window.mapRenderer) return NO_MATCH;
 
-            const getName = (s) => s.cellName || s.name || s.siteName;
-            const getDistSq = (s) => {
-                if (lat === undefined || lng === undefined || !s.lat || !s.lng) return 999999999999;
-                return Math.pow(s.lat - lat, 2) + Math.pow(s.lng - lng, 2);
-            };
+            // Use the central logic in MapRenderer
+            const s = window.mapRenderer.getServingCell(p);
 
-            const norm = (val) => String(val).replace(/\s/g, '');
-
-            // 1. Serving Cell Logic: STRICT CellID Match (with SC Disambiguation)
-            let match = null;
-            if (cellId !== undefined && cellId !== null && cellId !== 'N/A') {
-                let candidates = [];
-
-                // A. Exact Match (All candidates via Index)
-                if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                    const indexed = window.mapRenderer.siteIndex.byId.get(String(cellId));
-                    if (indexed) candidates = [indexed];
-                } else {
-                    // Fallback if index missing
-                    // Fallback if index missing
-                    // REMOVED LINEAR SCAN: candidates = siteData.filter(s => s.cellId == cellId);
-                    // If Index is missing, we simply fail fast.
-                }
-
-                // B. Fallback: Short CID + LAC Match
-                if (candidates.length === 0 && lac) {
-                    const shortCid = cellId & 0xFFFF;
-                    if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                        const match = window.mapRenderer.siteIndex.byId.get(String(shortCid));
-                        if (match && match.lac == lac) candidates = [match];
-                    }
-                    if (candidates.length === 0) {
-                        // REMOVED LINEAR SCAN: candidates = siteData.filter(s => s.cellId == shortCid && s.lac == lac);
-                    }
-                }
-
-                // C. Fallback: RNC/CID Format Match (Robust)
-                if (candidates.length === 0) {
-                    // Try decomposition for 28-bit IDs (3G) if RNC is missing but cellId is large
-                    let lookupRnc = rnc;
-                    let lookupCid = cellId & 0xFFFF;
-
-                    if ((lookupRnc === undefined || lookupRnc === null || lookupRnc === 'N/A') && cellId > 65535) {
-                        lookupRnc = cellId >> 16;
-                    }
-
-                    if (lookupRnc !== undefined && lookupRnc !== null && lookupRnc !== 'N/A') {
-                        const rncCidStr = `${lookupRnc}/${lookupCid}`;
-                        if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                            const match = window.mapRenderer.siteIndex.byId.get(rncCidStr);
-                            if (match) candidates = [match];
-                        }
-                    }
-
-                    // If Point has "RNC/CID" string directly in cellId
-                    if (candidates.length === 0 && String(cellId).includes('/')) {
-                        if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.byId) {
-                            const match = window.mapRenderer.siteIndex.byId.get(String(cellId));
-                            if (match) candidates = [match];
-                        }
-                    }
-                }
-
-                // DISAMBIGUATE: If multiple candidates, use SC (pci) to pick the right one
-                if (candidates.length > 0) {
-                    if (pci !== undefined && pci !== null) {
-                        // Try loose match on SC or PCI
-                        match = candidates.find(s => s.sc == pci || s.pci == pci);
-                    }
-                    // Fallback: Use first candidate if no SC match or no SC provided
-                    if (!match) match = candidates[0];
-                }
+            if (s) {
+                return {
+                    name: s.cellName || s.name || s.siteName,
+                    id: s.cellId || s.calculatedEci || s.id,
+                    lat: s.lat,
+                    lng: s.lng,
+                    azimuth: s.azimuth
+                };
             }
 
-            // STALE CELLID CHECK (or MISSING ID RECOVERY):
-            // Logic: If (Match found but SC mismatch) OR (No Match found), try SC+Location Search
-            const isStale = match && pci !== undefined && pci !== null && (match.sc != pci && match.pci != pci);
-            const isMissing = !match;
-
-            if (isStale || isMissing) {
-                // Try to find a site primarily by SC + Location (and Freq)
-                if (pci !== undefined && pci !== null) {
-                    let scCandidates = [];
-                    if (window.mapRenderer.siteIndex && window.mapRenderer.siteIndex.bySc) {
-                        const indexed = window.mapRenderer.siteIndex.bySc.get(String(pci));
-                        if (indexed) scCandidates = [...indexed]; // Copy to avoid mutation
-                    } else {
-                        // REMOVED LINEAR SCAN: scCandidates = siteData.filter(s => s.pci == pci || s.sc == pci);
-                    }
-                    if (freq) {
-                        const fTol = 2; // Tolerance
-                        scCandidates = scCandidates.filter(s => !s.dl_earfcn || Math.abs(s.dl_earfcn - freq) < fTol || !s.uarfcn || Math.abs(s.uarfcn - freq) < fTol);
-                    }
-                    if (scCandidates.length > 0) {
-                        // Pick closest
-                        let best = scCandidates[0];
-                        let bestDistSq = getDistSq(best);
-                        for (let i = 1; i < scCandidates.length; i++) {
-                            const dSq = getDistSq(scCandidates[i]);
-                            if (dSq < bestDistSq) {
-                                best = scCandidates[i];
-                                bestDistSq = dSq;
-                            }
-                        }
-                        // If we found a valid SC candidate close enough (< 20km approx 0.2 deg? No, using lat/lng diff directly is flawed if not conv to meters?
-                        // Wait, previous code used lat/lng diff directly inside Math.sqrt.
-                        // 1 deg lat ~= 111km. 20km ~= 0.18 deg. 
-                        // 0.18^2 = 0.0324.
-                        // User's previous code check `bestDist < 20000` assuming `getDist` returns meters?
-                        // BUT `getDist` above was `Math.sqrt((lat-lat)^2 + ...)`. That returns DEGREES.
-                        // So `bestDist < 20000` was ALWAYS TRUE (Degree diff is like 0.001).
-                        // So the check was useless. I will keep it logic-equivalent (always true) or fix it?
-                        // I will assume degrees. 20km is roughly 0.2 degrees.
-                        // 0.2^2 = 0.04.
-
-                        if (best && bestDistSq < 0.04) { // Approx 22km limit
-                            // Override match with this "Smart" match
-                            match = best;
-                            // console.log(`[SmartMatch] Overrode Stale/Missing ID ${cellId} with Site ${match.cellId} (Dist: ${Math.round(bestDist)}m)`);
-                        }
-                    }
-                }
-            }
-
-            if (match) {
-                return { name: getName(match), id: match.cellId, lat: match.lat, lng: match.lng, site: match };
-            }
             return NO_MATCH;
+        } catch (e) {
+            console.warn("resolveSmartSite error:", e);
+            return NO_MATCH;
+        }
+    };
+
+
+
+    // Helper: Generate HTML and Connections for a SINGLE point
+    function generatePointInfoHTML(p, logColor) {
+        let connectionTargets = [];
+        const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
+        const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
+
+        // 1. Serving Cell Connection
+        let servingRes = window.resolveSmartSite(p);
+        if (servingRes.lat && servingRes.lng) {
+            connectionTargets.push({
+                lat: servingRes.lat, lng: servingRes.lng, color: logColor || '#3b82f6', weight: 8, cellId: servingRes.id
+            });
+        }
+
+        const resolveNeighbor = (pci, cellId, freq) => {
+            return window.resolveSmartSite({
+                sc: pci, cellId: cellId, lac: sLac, freq: freq || sFreq, lat: p.lat, lng: p.lng
+            });
+        }
+
+        // 2. Active Set Connections
+        if (p.a2_sc !== undefined && p.a2_sc !== null) {
+            const a2Res = resolveNeighbor(p.a2_sc, null, sFreq);
+            if (a2Res.lat && a2Res.lng) connectionTargets.push({ lat: a2Res.lat, lng: a2Res.lng, color: '#ef4444', weight: 8, cellId: a2Res.id });
+        }
+        if (p.a3_sc !== undefined && p.a3_sc !== null) {
+            const a3Res = resolveNeighbor(p.a3_sc, null, sFreq);
+            if (a3Res.lat && a3Res.lng) connectionTargets.push({ lat: a3Res.lat, lng: a3Res.lng, color: '#ef4444', weight: 8, cellId: a3Res.id });
+        }
+
+        // Generate RAW Data HTML
+        let rawHtml = '';
+
+        // Ensure properties exist, fallback to p (filtered) if not
+        const sourceObj = p.properties ? p.properties : p;
+        const ignoredKeys = ['lat', 'lng', 'parsed', 'layer', '_neighborsHelper', 'details', 'active_set', 'properties'];
+
+        Object.entries(sourceObj).forEach(([k, v]) => {
+            if (!p.properties) {
+                if (ignoredKeys.includes(k)) return;
+                if (typeof v === 'object' && v !== null) return;
+                if (typeof v === 'function') return;
+            } else {
+                // For Excel/CSV, hide internal tracking keys if any exist in properties
+                if (k.toLowerCase() === 'lat' || k.toLowerCase() === 'latitude') return;
+                if (k.toLowerCase() === 'lng' || k.toLowerCase() === 'longitude' || k.toLowerCase() === 'lon') return;
+            }
+
+            // Skip null/undefined/empty
+            if (v === null || v === undefined || v === '') return;
+
+            // Format Value
+            let displayVal = v;
+            if (typeof v === 'number') {
+                if (Number.isInteger(v)) displayVal = v;
+                else displayVal = Number(v).toFixed(3).replace(/\.?0+$/, '');
+            }
+
+            rawHtml += `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #444; font-size:11px; padding:3px 0;">
+                <span style="color:#aaa; font-weight:500; margin-right: 10px;">${k}</span>
+                <span style="color:#fff; font-weight:bold; word-break: break-all; text-align: right;">${displayVal}</span>
+            </div>`;
+        });
+
+        let html = `
+            <div style="padding: 10px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom: 2px solid #555; padding-bottom:5px;">
+                    <span style="font-size:12px; color:#ccc;">${p.time || sourceObj.Time || 'No Time'}</span>
+                    <span style="font-size:12px; color:#ccc;">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</span>
+                </div>
+
+                <!-- Event Info (Highlight) -->
+                ${p.event ? `
+                    <div style="background:#451a1a; color:#f87171; padding:5px; border-radius:4px; margin-bottom:10px; font-weight:bold; text-align:center;">
+                        ${p.event}
+                    </div>
+                ` : ''}
+                
+                <div class="raw-data-container" style="max-height: 400px; overflow-y: auto;">
+                    ${rawHtml}
+                </div>
+                
+                <div style="margin-top: 15px; text-align: center;">
+                    <button onclick="window.analyzePoint(this)" 
+                            style="background: #3b82f6; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold;">
+                        Analyze Point
+                    </button>
+                    <!-- Hidden data stash for the analyzer -->
+                    <script type="application/json" id="point-data-stash">${JSON.stringify(sourceObj)}</script>
+                </div>
+            </div>
+        `;
+
+        return { html, connectionTargets };
+    }
+
+    // --- ANALYSIS ENGINE ---
+
+    window.analyzePoint = (btn) => {
+        try {
+            // Retrieve data from stash or passed argument
+            const container = btn.parentNode;
+            const script = container.querySelector('#point-data-stash');
+            if (!script) {
+                console.error("No point data found for analysis.");
+                return;
+            }
+            const data = JSON.parse(script.textContent);
+
+            // -------------------------------------------------------------
+            // ANALYSIS LOGIC
+            // -------------------------------------------------------------
+
+            // Helper: Run Analysis for a SINGLE data object
+            const runAnalysisForData = (d) => {
+                // Scoped Key Finder
+                const getVal = (targetName) => {
+                    const normTarget = targetName.toLowerCase().replace(/[\s\-_]/g, '');
+                    for (let k in d) {
+                        const normKey = k.toLowerCase().replace(/[\s\-_]/g, '');
+                        if (normKey === normTarget) return parseFloat(d[k]);
+                        if (normKey.includes(normTarget)) return parseFloat(d[k]);
+                    }
+                    return null;
+                };
+
+                // Get Strings for Context
+                const time = d['Time'] || d['time'] || d['timestamp'] || 'N/A';
+                const tech = d['Tech'] || d['Technology'] || d['rat'] || 'LTE'; // Default LTE as per template if unknown
+                const cellId = d['Cell ID'] || d['cellid'] || d['ci'] || d['Serving SC/PCI'] || 'Unknown';
+                const lat = d['Latitude'] || d['lat'] || 'Unknown';
+                const lng = d['Longitude'] || d['lng'] || 'Unknown';
+
+                const rsrp = getVal('rsrp') ?? getVal('level');
+                const rsrq = getVal('rsrq');
+                const cqi = getVal('cqi') ?? getVal('averagedlwidebandcqi') ?? getVal('dlwidebandcqi');
+                const dlLowThptRatio = getVal('dllowthroughputratio') ?? getVal('lowthpt') ?? 0;
+                const dlSpecEff = getVal('dlspectrumefficiency') ?? getVal('dlspectrumeff') ?? getVal('se');
+                const dlRbQty = getVal('averagedlrbquantity') ?? getVal('dlrbquantity') ?? getVal('rbutil');
+
+                const dbUtil = getVal('prbutil') ?? getVal('rbutil');
+                const dlIbler = getVal('dlibler') ?? getVal('bler');
+                const rank2Pct = getVal('rank2percentage') ?? getVal('rank2');
+                const ca1ccPct = getVal('dl1ccpercentage') ?? getVal('ca1cc');
+
+                // --- EVALUATION ---
+                let coverageStatus = 'Unknown';
+                let coverageInterp = 'insufficient signal strength';
+                if (rsrp !== null) {
+                    if (rsrp >= -90) { coverageStatus = 'Good'; coverageInterp = 'strong signal strength'; }
+                    else if (rsrp > -100) { coverageStatus = 'Fair'; coverageInterp = 'adequate signal strength'; }
+                    else { coverageStatus = 'Poor'; coverageInterp = 'weak signal strength at cell edge'; }
+                }
+
+                let interferenceLevel = 'Unknown';
+                if (rsrq !== null) {
+                    if (rsrq >= -8) interferenceLevel = 'Low';
+                    else if (rsrq > -11) interferenceLevel = 'Moderate';
+                    else interferenceLevel = 'High';
+                }
+
+                let channelQuality = 'Unknown';
+                if (cqi !== null) {
+                    if (cqi < 6) channelQuality = 'Poor';
+                    else if (cqi < 9) channelQuality = 'Keep';
+                    else channelQuality = 'Good';
+                }
+
+                let dlUserExp = 'Unknown';
+                if (dlLowThptRatio !== null) {
+                    if (dlLowThptRatio >= 25) dlUserExp = 'Degraded';
+                    else dlUserExp = 'Acceptable'; // Assuming metric is %
+                    if (dlLowThptRatio < 1 && dlLowThptRatio > 0 && dlLowThptRatio >= 0.25) dlUserExp = 'Degraded';
+                }
+
+                let dlSpecPerf = 'Unknown';
+                if (dlSpecEff !== null) {
+                    if (dlSpecEff < 2000) dlSpecPerf = 'Low';
+                    else if (dlSpecEff < 3500) dlSpecPerf = 'Moderate';
+                    else dlSpecPerf = 'High';
+                }
+
+                let cellLoad = 'Unknown';
+                let congestionInterp = 'not related';
+                if (dbUtil !== null) {
+                    if (dbUtil >= 80) { cellLoad = 'Congested'; congestionInterp = 'related'; }
+                    else if (dbUtil < 70) cellLoad = 'Not Congested';
+                    else cellLoad = 'Moderate';
+                } else if (dlRbQty !== null) {
+                    if (dlRbQty <= 100 && dlRbQty >= 0) {
+                        if (dlRbQty >= 80) { cellLoad = 'Congested'; congestionInterp = 'related'; }
+                        else if (dlRbQty < 70) cellLoad = 'Not Congested';
+                    }
+                }
+
+                let mimoUtil = 'Unknown';
+                if (rank2Pct !== null) {
+                    if (rank2Pct >= 30) mimoUtil = 'Good';
+                    else if (rank2Pct < 20) mimoUtil = 'Poor';
+                    else mimoUtil = 'Moderate';
+                }
+
+                let caUtil = 'Unknown';
+                let caInterp = 'limited';
+                if (ca1ccPct !== null) {
+                    if (ca1ccPct >= 60) { caUtil = 'Underutilized'; caInterp = 'limited'; }
+                    else if (ca1ccPct < 50) { caUtil = 'Well Utilized'; caInterp = 'effective'; }
+                    else { caUtil = 'Moderate'; caInterp = 'moderate'; }
+                }
+
+                // Root Cause Logic
+                let rootCauses = [];
+                if (coverageStatus !== 'Poor' && coverageStatus !== 'Unknown' && interferenceLevel === 'High') rootCauses.push('Interference-Limited');
+                else if (coverageStatus === 'Poor') rootCauses.push('Coverage-Limited');
+
+                if (cellLoad === 'Congested') rootCauses.push('Capacity / Congestion-Limited');
+                if (caUtil === 'Underutilized' && channelQuality === 'Good') rootCauses.push('Carrier Aggregation Limited');
+
+                if (rootCauses.length === 0 && (coverageStatus !== 'Unknown' || interferenceLevel !== 'Unknown')) rootCauses.push('No Specific Root Cause Identified');
+
+                // Recommendations Logic
+                let actionsHigh = [];
+                let actionsMed = [];
+
+                if (rootCauses.includes('Interference-Limited')) {
+                    actionsHigh.push('Review Physical Optimization (Tilt/Azimuth)');
+                    actionsHigh.push('Check for External Interference Sources');
+                }
+                if (rootCauses.includes('Coverage-Limited')) {
+                    actionsHigh.push('Optimize Antenna Downtilt (Uptilt if feasible)');
+                    actionsMed.push('Verify Power Settings');
+                }
+                if (rootCauses.includes('Capacity / Congestion-Limited')) {
+                    actionsHigh.push('Evaluate Load Balancing Features');
+                    actionsMed.push('Plan for Capacity Expansion (Carrier Add/Split)');
+                }
+                if (rootCauses.includes('Carrier Aggregation Limited')) {
+                    actionsMed.push('Verify CA Configuration Parameters');
+                    actionsMed.push('Check Secondary Carrier Availability');
+                }
+
+                // Fallbacks if empty
+                if (actionsHigh.length === 0) actionsHigh.push('Monitor KPI Trend for degradation');
+                if (actionsMed.length === 0) actionsMed.push('Perform drive test for further detail');
+
+                return {
+                    metrics: {
+                        coverageStatus, coverageInterp,
+                        interferenceLevel,
+                        channelQuality,
+                        dlUserExp, dlLowThptRatio, dlSpecEff,
+                        dlSpecPerf,
+                        cellLoad, congestionInterp,
+                        mimoUtil, caUtil, caInterp
+                    },
+                    context: { time, tech, cellId, lat, lng },
+                    rootCauses,
+                    recommendations: { high: actionsHigh, med: actionsMed }
+                };
+            }; // End runAnalysisForData
+
+            // -------------------------------------------------------------
+            // REPORT GENERATION
+            // -------------------------------------------------------------
+
+            const dataList = Array.isArray(data) ? data : [{ name: '', data: data }];
+
+            let combinedHtml = '';
+
+            dataList.forEach((item, idx) => {
+                const { metrics, context, rootCauses, recommendations } = runAnalysisForData(item.data);
+
+                // Styles for specific keywords
+                const colorize = (txt) => {
+                    const t = txt.toLowerCase();
+                    if (t === 'good' || t === 'low' || t === 'stable' || t === 'acceptable' || t === 'not congested' || t === 'well utilized' || t === 'effective') return `<span class="status-good">${txt}</span>`;
+                    if (t === 'fair' || t === 'moderate' || t === 'keep') return `<span class="status-fair">${txt}</span>`;
+                    return `<span class="status-poor">${txt}</span>`;
+                };
+
+                combinedHtml += `
+                    <div class="report-section" style="${idx > 0 ? 'margin-top: 40px; border-top: 4px solid #333; padding-top: 30px;' : ''}">
+                         ${item.name ? `<h2 style="margin: 0 0 20px 0; color: #60a5fa; border-bottom: 1px solid #444; padding-bottom: 10px; font-size: 18px;">${item.name} Analysis</h2>` : ''}
+
+                        <div class="report-block">
+                            <h3 class="report-header">1. Cell Context</h3>
+                            <ul class="report-list">
+                                <li><strong>Technology:</strong> ${context.tech}</li>
+                                <li><strong>Cell Identifier:</strong> ${context.cellId}</li>
+                                <li><strong>Location:</strong> ${context.lat}, ${context.lng}</li>
+                                <li><strong>Data Confidence:</strong> High (based on MR Count)</li>
+                            </ul>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">2. Coverage & Radio Conditions</h3>
+                            <p>Coverage in the analyzed grid is classified as <strong>${colorize(metrics.coverageStatus)}</strong>.</p>
+                            <p>Dominant RSRP indicates <strong>${metrics.coverageInterp}</strong>. 
+                               Signal quality assessment shows <strong>${colorize(metrics.interferenceLevel)}</strong> interference conditions, 
+                               based on Dominant RSRQ and CQI behavior.</p>
+                            <p>Overall radio conditions are assessed as <strong>${colorize(metrics.channelQuality)}</strong>.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">3. Throughput & User Experience</h3>
+                            <p>Downlink user experience is classified as <strong>${colorize(metrics.dlUserExp)}</strong>.</p>
+                            <p>This is supported by:</p>
+                            <ul class="report-list">
+                                <li>Average DL Throughput behavior</li>
+                                <li>DL Low-Throughput Ratio (${metrics.dlLowThptRatio !== 0 ? metrics.dlLowThptRatio : 'N/A'})</li>
+                                <li>Spectrum Efficiency classification</li>
+                            </ul>
+                            <p>Uplink performance is <strong>acceptable / secondary</strong>, based on UL KPIs.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">4. Spectrum Efficiency & Resource Utilization</h3>
+                            <p>Downlink spectrum efficiency is classified as <strong>${colorize(metrics.dlSpecPerf)}</strong>.</p>
+                            <p>Average DL RB usage indicates the cell is <strong>${colorize(metrics.cellLoad)}</strong>, 
+                               confirming that performance limitations are <strong>${metrics.congestionInterp}</strong> to congestion.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">5. MIMO & Carrier Aggregation Performance</h3>
+                            <p>MIMO utilization is assessed as <strong>${colorize(metrics.mimoUtil)}</strong>, based on rank distribution statistics.</p>
+                            <p>Carrier Aggregation utilization is <strong>${colorize(metrics.caUtil)}</strong>, indicating <strong>${metrics.caInterp}</strong> use of multi-carrier capabilities.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">6. Traffic Profile & Service Impact</h3>
+                            <p>Traffic composition is dominated by:</p>
+                            <ul class="report-list">
+                                <li>QCI 9 (Internet / Default)</li>
+                            </ul>
+                            <p>This traffic profile is sensitive to:</p>
+                            <ul class="report-list">
+                                <li>Throughput stability</li>
+                                <li>Spectrum efficiency</li>
+                                <li>Interference conditions</li>
+                            </ul>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">7. Root Cause Analysis</h3>
+                            <p>Based on rule evaluation, the primary performance limitation(s) are:</p>
+                            <ul class="report-list" style="color: #ef4444; font-weight: bold;">
+                                ${rootCauses.map(rc => `<li>${rc}</li>`).join('')}
+                            </ul>
+                            <p>These limitations explain the observed throughput behavior despite the current load level.</p>
+                        </div>
+
+                        <div class="report-block">
+                            <h3 class="report-header">8. Optimization Recommendations</h3>
+                            
+                            <h4 style="color:#fbbf24; margin:10px 0 5px 0;">High Priority Actions:</h4>
+                            <ul class="report-list">
+                                ${recommendations.high.map(a => `<li>${a}</li>`).join('')}
+                            </ul>
+
+                            <h4 style="color:#94a3b8; margin:10px 0 5px 0;">Medium Priority Actions:</h4>
+                            <ul class="report-list">
+                                ${recommendations.med.map(a => `<li>${a}</li>`).join('')}
+                            </ul>
+                            
+                            <p style="margin-top:10px; font-style:italic; font-size:11px; color:#888;">Each recommended action is directly linked to the identified root cause(s) and observed KPI behavior.</p>
+                        </div>
+                        
+                        <div class="report-summary">
+                            <h3 class="report-header" style="color:#fff;">EXECUTIVE SUMMARY</h3>
+                            <p>The analyzed LTE cell is primarily <strong>${rootCauses[0]}</strong>, resulting in <strong>${metrics.dlUserExp} User Experience</strong>. Targeted RF and feature optimization is required to improve spectrum efficiency.</p>
+                        </div>
+
+                    </div>
+                `;
+            });
+
+            // CSS For Report
+            const style = `
+                <style>
+                    .report-block { margin-bottom: 20px; }
+                    .report-header { color: #aaa; border-bottom: 1px solid #444; padding-bottom: 4px; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+                    .report-list { padding-left: 20px; color: #ddd; font-size: 13px; line-height: 1.6; }
+                    .report-section p { font-size: 13px; color: #eee; line-height: 1.6; margin-bottom: 8px; }
+                    .status-good { color: #4ade80; font-weight: bold; }
+                    .status-fair { color: #facc15; font-weight: bold; }
+                    .status-poor { color: #f87171; font-weight: bold; }
+                    .report-summary { background: #1f2937; padding: 15px; border-left: 4px solid #3b82f6; margin-top: 30px; }
+                </style>
+            `;
+
+            const modalHtml = `
+                <div class="analysis-modal-overlay" onclick="const m=document.querySelector('.analysis-modal-overlay'); if(event.target===m) m.remove()">
+                    <div class="analysis-modal" style="width: 800px; max-width: 90vw;">
+                        <div class="analysis-header">
+                            <h3>Cell Performance Analysis Report</h3>
+                            <button class="analysis-close-btn" onclick="document.querySelector('.analysis-modal-overlay').remove()">×</button>
+                        </div>
+                        <div class="analysis-content" style="padding: 30px;">
+                            ${style}
+                            ${combinedHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Append to body
+            const div = document.createElement('div');
+            div.innerHTML = modalHtml;
+            document.body.appendChild(div.firstElementChild);
 
         } catch (e) {
-            console.error("Error in resolveSmartSite:", e);
-            return NO_MATCH;
+            console.error("Analysis Error:", e);
+            alert("Error running analysis: " + e.message);
         }
     };
 
-    // Global function to update the Floating Info Panel
+    // Global function to update the Floating Info Panel (Single Point)
     window.updateFloatingInfoPanel = (p) => {
         try {
-            console.log("[InfoPanel] Updating for point:", p);
             const panel = document.getElementById('floatingInfoPanel');
             const content = document.getElementById('infoPanelContent');
-            if (!panel || !content) {
-                console.warn("[InfoPanel] Missing panel info elements");
-                return;
-            }
+            if (!panel || !content) return;
 
-            // Debug Log
-            console.log("DEBUG: updateFloatingInfoPanel called for point:", p);
+            if (panel.style.display !== 'block') panel.style.display = 'block';
 
-            // Show panel if hidden
-            if (panel.style.display === 'none') {
-                panel.style.display = 'block';
+            const { html, connectionTargets } = generatePointInfoHTML(p);
+            content.innerHTML = html;
+
+            // Update Connections
+            if (window.mapRenderer && !window.isSpiderMode) {
+                // Find start point
+                let startPt = { lat: p.lat, lng: p.lng };
+                // (Polygon centroid logic would go here if needed again, or rely on pass)
+                window.mapRenderer.drawConnections(startPt, connectionTargets);
             }
-        } catch (err) {
-            console.error("Error in resolveCellName:", err);
+        } catch (e) {
+            console.error("Error updating Info Panel:", e);
         }
-        return NO_MATCH;
     };
 
-    // Global function to update the Floating Info Panel
-    window.updateFloatingInfoPanel = (p) => {
+    // NEW: Multi-Layer Info Panel
+    window.updateFloatingInfoPanelMulti = (hits) => {
         try {
-            console.log("[InfoPanel] Updating for point:", p);
             const panel = document.getElementById('floatingInfoPanel');
             const content = document.getElementById('infoPanelContent');
-            if (!panel || !content) {
-                return;
-            }
+            if (!panel || !content) return;
 
-            // Show panel if hidden (Fix: checking inline style 'none' is insufficient if hidden by CSS class)
-            if (panel.style.display !== 'block') {
-                panel.style.display = 'block';
-            }
+            if (panel.style.display !== 'block') panel.style.display = 'block';
+            content.innerHTML = ''; // Clear
 
-            // --- DATA PREPARATION ---
-            let connectionTargets = [];
-            const sLac = p.lac || (p.parsed && p.parsed.serving ? p.parsed.serving.lac : null);
-            const sFreq = p.freq || (p.parsed && p.parsed.serving ? p.parsed.serving.freq : null);
+            let allConnectionTargets = [];
+            let aggregatedData = [];
 
-            // 1. Serving Cell
-            // Construct a "point-like" object for serving resolution if needed, but 'p' is usually sufficient
-            // But for consistency with new resolveSmartSite(p), we use p directly.
-            let servingRes = window.resolveSmartSite(p);
+            hits.forEach((hit, idx) => {
+                const { log, point } = hit;
 
-            // Fallback for NMF raw ID logic (point might lack some context but have cellId)
-            if (!servingRes.name && p.cellId) {
-                // Try again? resolveSmartSite handles p.cellId. 
-            }
-
-            if (servingRes.lat && servingRes.lng) {
-                connectionTargets.push({
-                    lat: servingRes.lat,
-                    lng: servingRes.lng,
-                    color: '#3b82f6',
-                    weight: 8,
-                    cellId: servingRes.id
+                // Collect Data for Unified Analysis
+                // Ensure we pass a name/label for the report
+                aggregatedData.push({
+                    name: `Layer: ${log.name}`,
+                    data: point.properties ? point.properties : point
                 });
+
+                // Header for this Log Layer
+                const header = document.createElement('div');
+                header.style.cssText = `background:${log.color || '#444'}; color:#fff; padding:5px; font-weight:bold; font-size:12px; margin-top:${idx > 0 ? '10px' : '0'}; border-radius:4px 4px 0 0;`;
+                header.textContent = `Layer: ${log.name}`;
+                content.appendChild(header);
+
+                // Body (Suppress individual button)
+                const { html, connectionTargets } = generatePointInfoHTML(point, log.color, false);
+                const body = document.createElement('div');
+                body.innerHTML = html;
+                content.appendChild(body);
+
+                // Aggregate connections
+                allConnectionTargets = allConnectionTargets.concat(connectionTargets);
+            });
+
+            // Update Connections (Draw ALL lines from ALL layers)
+            if (window.mapRenderer && !window.isSpiderMode && hits.length > 0) {
+                // Use primary click location as start (assuming all hits are roughly same location)
+                const primary = hits[0].point;
+                window.mapRenderer.drawConnections({ lat: primary.lat, lng: primary.lng }, allConnectionTargets);
             }
 
-            const safeVal = (v) => (v !== undefined && v !== '-' && !isNaN(v) ? Number(v).toFixed(1) : '-');
+            // UNIFIED ANALYZE BUTTON
+            const btnContainer = document.createElement('div');
+            btnContainer.style.cssText = "margin-top: 15px; text-align: center; border-top: 1px solid #555; padding-top: 10px;";
+            btnContainer.innerHTML = `
+                <button onclick="window.analyzePoint(this)" 
+                        style="background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; width: 100%;">
+                    Analyze All Layers
+                </button>
+                <script type="application/json" id="point-data-stash">${JSON.stringify(aggregatedData)}</script>
+            `;
+            content.appendChild(btnContainer);
 
-            const formatId = (id) => {
-                if (!id || id === 'N/A') return id;
-                const strId = String(id);
-                if (strId.includes('/')) return id;
-                const num = Number(strId.replace(/[^\d]/g, ''));
-                if (!isNaN(num) && num > 65535) {
-                    return `${num >> 16}/${num & 0xFFFF}`;
-                }
-                return id;
-            };
-
-            const servingData = {
-                type: 'Serving',
-                name: servingRes.name || 'Unknown',
-                cellId: servingRes.id || p.cellId,
-                displayId: formatId(servingRes.id || p.cellId),
-                sc: p.sc,
-                rscp: p.rscp !== undefined ? p.rscp : (p.level !== undefined ? p.level : (p.parsed && p.parsed.serving ? p.parsed.serving.level : '-')),
-                ecno: p.ecno !== undefined ? p.ecno : (p.parsed && p.parsed.serving ? p.parsed.serving.ecno : '-'),
-                freq: sFreq || '-'
-            };
-
-            const resolveNeighbor = (pci, cellId, freq) => {
-                // Construct synthetic point for neighbor lookup
-                return window.resolveSmartSite({
-                    sc: pci,
-                    cellId: cellId,
-                    lac: sLac,
-                    freq: freq || sFreq,
-                    lat: p.lat,
-                    lng: p.lng
-                });
-            }
-
-            // 2. Active Set
-            let activeRows = [];
-            if (p.a2_sc !== undefined && p.a2_sc !== null) {
-                const a2Res = resolveNeighbor(p.a2_sc, null, sFreq);
-                const nA2 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a2_sc) : null;
-                if (a2Res.lat && a2Res.lng) connectionTargets.push({ lat: a2Res.lat, lng: a2Res.lng, color: '#ef4444', weight: 8, cellId: a2Res.id });
-                activeRows.push({
-                    type: '2nd Active Set', name: a2Res.name || 'Unknown', cellId: a2Res.id, displayId: formatId(a2Res.id || p.a2_cellid), sc: p.a2_sc,
-                    rscp: p.a2_rscp || (nA2 ? nA2.rscp : '-'), ecno: nA2 ? nA2.ecno : '-', freq: sFreq || '-'
-                });
-            }
-            if (p.a3_sc !== undefined && p.a3_sc !== null) {
-                const a3Res = resolveNeighbor(p.a3_sc, null, sFreq);
-                const nA3 = p.parsed && p.parsed.neighbors ? p.parsed.neighbors.find(n => n.pci === p.a3_sc) : null;
-                if (a3Res.lat && a3Res.lng) connectionTargets.push({ lat: a3Res.lat, lng: a3Res.lng, color: '#ef4444', weight: 8, cellId: a3Res.id });
-                activeRows.push({
-                    type: '3rd Active Set', name: a3Res.name || 'Unknown', cellId: a3Res.id, displayId: formatId(a3Res.id || p.a3_cellid), sc: p.a3_sc,
-                    rscp: p.a3_rscp || (nA3 ? nA3.rscp : '-'), ecno: nA3 ? nA3.ecno : '-', freq: sFreq || '-'
-                });
-            }
-
-            // 3. Neighbors & Detected
-            let neighborRows = [];
-            let detectedRows = [];
-
-            if (p.parsed && p.parsed.neighbors) {
-                const activeSCs = [p.sc, p.a2_sc, p.a3_sc].filter(x => x !== undefined && x !== null);
-
-                p.parsed.neighbors.forEach((n, idx) => {
-                    if (n.type === 'detected') {
-                        const nRes = resolveNeighbor(n.pci, n.cellId, n.freq);
-                        detectedRows.push({
-                            type: `D${n.idx || (idx + 1)}`,
-                            name: nRes.name || 'Unknown',
-                            cellId: nRes.id,
-                            displayId: formatId(nRes.id || n.cellId),
-                            sc: n.pci,
-                            rscp: n.rscp,
-                            ecno: n.ecno,
-                            freq: n.freq
-                        });
-                    } else if (!activeSCs.includes(n.pci)) {
-                        const nRes = resolveNeighbor(n.pci, n.cellId, n.freq);
-                        if (nRes.lat && nRes.lng) connectionTargets.push({ lat: nRes.lat, lng: nRes.lng, color: '#22c55e', weight: 3, cellId: nRes.id });
-                        neighborRows.push({
-                            type: `N${idx + 1}`, name: nRes.name || 'Unknown', cellId: nRes.id, displayId: formatId(nRes.id || n.cellId), sc: n.pci,
-                            rscp: n.rscp, ecno: n.ecno, freq: n.freq
-                        });
-                    }
-                });
-            }
-
-            if (window.mapRenderer && window.mapRenderer.drawConnections) {
-                window.mapRenderer.drawConnections({ lat: p.lat, lng: p.lng }, connectionTargets);
-            }
-
-            const renderRow = (d, isBold = false) => {
-                const hasId = d.cellId !== undefined && d.cellId !== null;
-                const displayId = d.displayId || d.cellId;
-                const nameContent = hasId ? `<span>${d.name}</span> <span style="color:#888; font-size:10px;">(${displayId})</span>` : d.name;
-                return `
-                            <tr style="border-bottom: 1px solid #444; ${isBold ? 'font-weight:700; color:#fff;' : ''}">
-                                <td style="padding:4px 4px;">${d.type}</td>
-                                <td style="padding:4px 4px; cursor:pointer;" onclick="if(window.mapRenderer && '${d.cellId}') window.mapRenderer.highlightCell('${d.cellId}')">${nameContent}</td>
-                                <td style="padding:4px 4px; text-align:right;">${d.sc}</td>
-                                <td style="padding:4px 4px; text-align:right;">${safeVal(d.rscp)}</td>
-                                <td style="padding:4px 4px; text-align:right;">${safeVal(d.ecno)}</td>
-                                <td style="padding:4px 4px; text-align:right;">${d.freq}</td>
-                            </tr>`;
-            };
-
-            let tableRows = renderRow(servingData, true);
-            activeRows.forEach(r => tableRows += renderRow(r));
-            neighborRows.forEach(r => tableRows += renderRow(r));
-            if (detectedRows.length > 0) {
-                detectedRows.forEach(r => tableRows += renderRow(r));
-            }
-
-            content.innerHTML = `
-                        <div style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 2px;">${servingRes.name || 'Unknown Site'}</div>
-                        <div style="font-size: 11px; color: #888; margin-bottom: 10px; display:flex; gap:10px;">
-                            <span>Lat: ${Number(p.lat).toFixed(6)}</span>
-                            <span>Lng: ${Number(p.lng).toFixed(6)}</span>
-                            <span style="margin-left:auto; color:#666;">${p.time}</span>
-                        </div>
-                        <table style="width:100%; border-collapse: collapse; font-size:11px; color:#ddd;">
-                            <tr style="border-bottom: 1px solid #555; text-align:left;">
-                                <th style="padding:4px 4px; color:#888; font-weight:600;">Type</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600;">Cell Name</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">SC</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">RSCP</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">EcNo</th>
-                                <th style="padding:4px 4px; color:#888; font-weight:600; text-align:right;">Freq</th>
-                            </tr>
-                            ${tableRows}
-                        </table>
-                    `;
-
-        } catch (err) {
-            console.error("Critical Error in updateFloatingInfoPanel:", err);
+        } catch (e) {
+            console.error("Error updating Multi-Info Panel:", e);
         }
     };
 
     window.syncMarker = null; // Global marker for current sync point
 
 
-    window.globalSync = (logId, index, source) => {
+    window.globalSync = (logId, index, source, skipPanel = false) => {
         const log = loadedLogs.find(l => l.id === logId);
         if (!log || !log.points[index]) return;
 
@@ -2969,7 +4183,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // View Navigation (Zoom/Pan) - User Request: Zoom in on click
         // UPDATED: Keep current zoom, just pan.
-        if (source !== 'chart_scrub') {
+        // AB: User requested to NOT move map when clicking ON the map.
+        if (source !== 'chart_scrub' && source !== 'map') {
             // const targetZoom = Math.max(window.map.getZoom(), 17); // Previous logic
             // window.map.flyTo([point.lat, point.lng], targetZoom, { animate: true, duration: 0.5 });
 
@@ -2993,7 +4208,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 3. Update Floating Panel
-        if (window.updateFloatingInfoPanel) {
+        if (window.updateFloatingInfoPanel && !skipPanel) {
             window.updateFloatingInfoPanel(point);
         }
 
@@ -3012,7 +4227,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 5. Update Signaling
         if (source !== 'signaling') {
-            // Find closest signaling row by time logic (reuised from highlightPoint)
+            // Find closest signaling row by time logic (reuused from highlightPoint)
             const targetTime = point.time;
             const parseTime = (t) => {
                 const [h, m, s] = t.split(':');
@@ -3055,20 +4270,70 @@ document.addEventListener('DOMContentLoaded', () => {
     // Global Sync Listener (Legacy Adapatation)
     window.addEventListener('map-point-clicked', (e) => {
         const { logId, point, source } = e.detail;
+
+        // --- MULTI-LAYER SEARCH ---
+        const SEARCH_RADIUS = 0.0002; // ~20m tolerance
+        const allHits = [];
+
+        // Always add the clicked point (Primary)
+        // Find the log object for the primary point
+        const primaryLog = loadedLogs.find(l => l.id === logId);
+        if (primaryLog) {
+            const primaryHit = { log: primaryLog, point: point };
+            // Search other logs
+            loadedLogs.forEach(targetLog => {
+                if (!targetLog.visible || targetLog.id === logId) return;
+
+                const hit = targetLog.points.find(p =>
+                    Math.abs(p.lat - point.lat) < SEARCH_RADIUS &&
+                    Math.abs(p.lng - point.lng) < SEARCH_RADIUS
+                );
+
+                if (hit) {
+                    allHits.push({ log: targetLog, point: hit });
+                }
+            });
+            // Add Primary FIRST
+            allHits.unshift(primaryHit);
+        }
+
+        // Update Panel with Multi-Hits
+        if (window.updateFloatingInfoPanelMulti) {
+            window.updateFloatingInfoPanelMulti(allHits);
+        }
+
         const log = loadedLogs.find(l => l.id === logId);
         if (log) {
-            let index = log.points.findIndex(p => p.time === point.time);
-            if (index === -1) {
-                index = log.points.findIndex(p => Math.abs(p.lat - point.lat) < 1e-6 && Math.abs(p.lng - point.lng) < 1e-6);
+            // Prioritize ID match (for SHP/uniquely indexed points)
+            let index = -1;
+            if (point.id !== undefined) {
+                index = log.points.findIndex(p => p.id === point.id);
             }
+            // Fallback to Time
+            if (index === -1 && point.time) {
+                index = log.points.findIndex(p => p.time === point.time);
+            }
+            // Fallback to Coord (Tolerance 1e-5 for roughly 1m)
+            if (index === -1) {
+                index = log.points.findIndex(p => Math.abs(p.lat - point.lat) < 0.00001 && Math.abs(p.lng - point.lng) < 0.00001);
+            }
+
             if (index !== -1) {
-                window.globalSync(logId, index, source || 'map');
+                // Call Sync but SKIP panel update (since we just did the rich multi-update)
+                window.globalSync(logId, index, source || 'map', true);
+            } else {
+                // FALLBACK: If sync fails (no index found), we already updated the panel above!
+                // So we do nothing here.
+                console.warn("[App] Sync Index not found. Details panel updated via Multi-Hit logic.");
             }
         }
     });
 
     // SPIDER OPTION: Sector Click Listener
     window.addEventListener('site-sector-clicked', (e) => {
+        // GATED: Only run if Spider Mode is ON
+        if (!window.isSpiderMode) return;
+
         const sector = e.detail;
         if (!sector || !window.mapRenderer) return;
 
@@ -3114,8 +4379,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         isMatch = true;
                     }
                     // Support "RNC/CID" format in sector.cellId
-                    else if (sector.cellId.includes('/')) {
-                        const parts = sector.cellId.split('/');
+                    else if (String(sector.cellId).includes('/')) {
+                        const parts = String(sector.cellId).split('/');
                         const cid = parts[parts.length - 1];
                         const rnc = parts.length > 1 ? parts[parts.length - 2] : null;
 
@@ -3166,6 +4431,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!file) return;
 
         fileStatus.textContent = `Loading ${file.name}...`;
+
+
+        // TRP Zip Import
+        if (file.name.toLowerCase().endsWith('.trp')) {
+            handleTRPImport(file);
+            return;
+        }
 
         // NMFS Binary Check
         if (file.name.toLowerCase().endsWith('.nmfs')) {
@@ -3256,7 +4528,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const signalingData = !Array.isArray(result) ? result.signaling : [];
             const customMetrics = !Array.isArray(result) ? result.customMetrics : []; // New for Excel
 
-            console.log(`Parsed ${parsedData.length} measurement points and ${signalingData ? signalingData.length : 0} signaling messages. Tech: ${technology}`);
+            console.log(`Parsed ${parsedData.length} measurement points and ${signalingData ? signalingData.length : 0} signaling messages.Tech: ${technology}`);
 
             if (parsedData.length > 0 || (signalingData && signalingData.length > 0)) {
                 const id = Date.now().toString();
@@ -3290,7 +4562,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     map.addEventsLayer(id, signalingData);
                 }
 
-                fileStatus.textContent = `Loaded: ${name} (${parsedData.length} pts)`;
+                fileStatus.textContent = `Loaded: ${name}(${parsedData.length} pts)`;
 
 
             } else {
@@ -3358,6 +4630,22 @@ document.addEventListener('DOMContentLoaded', () => {
                         const freq = getVal(['downlink uarfcn', 'dl uarfcn', 'uarfcn', 'freq', 'frequency', 'dl freq']);
                         const band = getVal(['band', 'band name', 'freq band']);
 
+                        // Specific Request: eNodeB ID-Cell ID
+                        const enodebCellIdRaw = getVal(['enodeb id-cell id', 'enodebid-cellid', 'enodebidcellid']);
+
+                        let calculatedEci = null;
+                        if (enodebCellIdRaw) {
+                            const parts = String(enodebCellIdRaw).split('-');
+                            if (parts.length === 2) {
+                                const enb = parseInt(parts[0]);
+                                const cid = parseInt(parts[1]);
+                                if (!isNaN(enb) && !isNaN(cid)) {
+                                    // Standard LTE ECI Calculation: eNodeB * 256 + CellID
+                                    calculatedEci = (enb * 256) + cid;
+                                }
+                            }
+                        }
+
                         let tech = getVal(['tech', 'technology', 'system', 'rat']);
                         const cellName = getVal(['cell name', 'cellname']) || '';
 
@@ -3381,6 +4669,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
 
                         return {
+                            ...row, // Preserve ALL original columns
                             lat, lng, azimuth: isNaN(azimuth) ? 0 : azimuth,
                             name, siteName: name, // Ensure siteName is present
                             cellName,
@@ -3390,31 +4679,124 @@ document.addEventListener('DOMContentLoaded', () => {
                             freq,
                             band,
                             tech,
-                            color
+                            color,
+                            rawEnodebCellId: enodebCellIdRaw,
+                            calculatedEci: calculatedEci
                         };
-                    }).filter(s => !isNaN(s.lat) && !isNaN(s.lng));
+                    })
+                    // Filter out invalid
+                    const validSectors = sectors.filter(s => s && s.lat && s.lng);
 
-                    console.log('Parsed Sectors:', sectors.length);
+                    if (validSectors.length > 0) {
+                        const id = Date.now().toString();
+                        const name = file.name.replace(/\.[^/.]+$/, "");
 
-                    if (sectors.length > 0) {
-                        map.addSiteLayer(sectors);
-                        // Also set initial bounds? 
-                        const bounds = L.latLngBounds(sectors.map(s => [s.lat, s.lng]));
-                        map.map.fitBounds(bounds.pad(0.1));
+                        console.log(`[Sites] Importing ${validSectors.length} sites as layer: ${name}`);
 
-                        fileStatus.textContent = `Imported ${sectors.length} sectors.`;
+                        // Add Layer
+                        try {
+                            if (window.mapRenderer) {
+                                console.log('[Sites] Calling mapRenderer.addSiteLayer...');
+                                window.mapRenderer.addSiteLayer(id, name, validSectors, true);
+                                console.log('[Sites] addSiteLayer successful. Adding sidebar item...');
+                                addSiteLayerToSidebar(id, name, validSectors.length);
+                                console.log('[Sites] Sidebar item added.');
+                            } else {
+                                throw new Error("MapRenderer not initialized");
+                            }
+                            fileStatus.textContent = `Sites Imported: ${validSectors.length}(${name})`;
+                        } catch (innerErr) {
+                            console.error('[Sites] CRITICAL ERROR adding layer:', innerErr);
+                            alert(`Error adding site layer: ${innerErr.message}`);
+                            fileStatus.textContent = 'Error adding layer: ' + innerErr.message;
+                        }
                     } else {
-                        fileStatus.textContent = 'No valid site coordinates found.';
+                        fileStatus.textContent = 'No valid site data found (check Lat/Lng)';
                     }
-
+                    e.target.value = ''; // Reset input
                 } catch (err) {
-                    console.error('Excel Import Error:', err);
-                    fileStatus.textContent = 'Error parsing Excel file.';
+                    console.error('Site Import Error:', err);
+                    fileStatus.textContent = 'Error parsing sites: ' + err.message;
                 }
             };
             reader.readAsArrayBuffer(file);
-            e.target.value = '';
         });
+    }
+
+    // --- Site Layer Management UI ---
+    window.siteLayersList = []; // Track UI state locally if needed, but renderer is source of truth
+
+    function addSiteLayerToSidebar(id, name, count) {
+        const container = document.getElementById('sites-layer-list');
+        if (!container) {
+            console.error('[Sites] CRITICAL: Sidebar container #sites-layer-list NOT FOUND in DOM.');
+            return;
+        }
+
+        // AUTO-SHOW SIDEBAR
+        const sidebar = document.getElementById('smartcare-sidebar');
+        if (sidebar) {
+            sidebar.style.display = 'flex';
+        }
+
+        const item = document.createElement('div');
+        item.className = 'layer-item';
+        item.id = `site - layer - ${id}`;
+
+        item.innerHTML = `
+< div class= "layer-info" >
+<span class="layer-name" title="${name}" style="font-size:13px;">${name}</span>
+        </div >
+    <div class="layer-controls">
+        <button class="layer-btn settings-btn" data-id="${id}" title="Layer Settings">⚙️</button>
+        <button class="layer-btn visibility-btn" data-id="${id}" title="Toggle Visibility">👁️</button>
+        <button class="layer-btn remove-btn" data-id="${id}" title="Remove Layer">✕</button>
+    </div>
+    `;
+
+        // Event Listeners
+        const settingsBtn = item.querySelector('.settings-btn');
+        settingsBtn.onclick = (e) => {
+            e.stopPropagation();
+            // Open Settings Panel in "Layer Mode"
+            const panel = document.getElementById('siteSettingsPanel');
+            if (panel) {
+                panel.style.display = 'block';
+                window.editingLayerId = id; // Set Context
+
+                // Update Title to show we are editing a layer
+                const title = panel.querySelector('h3');
+                if (title) title.textContent = `Settings: ${name}`;
+            }
+        };
+        const visBtn = item.querySelector('.visibility-btn');
+        visBtn.onclick = () => {
+            const isVisible = visBtn.style.opacity !== '0.5';
+            const newState = !isVisible;
+
+            // UI Toggle
+            visBtn.style.opacity = newState ? '1' : '0.5';
+            if (!newState) visBtn.textContent = '━';
+            else visBtn.textContent = '👁️';
+
+            // Logic Toggle
+            if (window.mapRenderer) {
+                window.mapRenderer.toggleSiteLayer(id, newState);
+            }
+        };
+
+        const removeBtn = item.querySelector('.remove-btn');
+        removeBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (confirm(`Remove site layer "${name}" ? `)) {
+                if (window.mapRenderer) {
+                    window.mapRenderer.removeSiteLayer(id);
+                }
+                item.remove();
+            }
+        };
+
+        container.appendChild(item);
     }
 
     // Site Settings UI Logic
@@ -3425,6 +4807,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (settingsBtn && settingsPanel) {
         settingsBtn.onclick = () => {
+            // Open in "Global Mode"
+            window.editingLayerId = null;
+            const title = settingsPanel.querySelector('h3');
+            if (title) title.textContent = 'Site Settings (Global)';
+
             settingsPanel.style.display = settingsPanel.style.display === 'none' ? 'block' : 'none';
         };
         closeSettings.onclick = () => settingsPanel.style.display = 'none';
@@ -3437,23 +4824,45 @@ document.addEventListener('DOMContentLoaded', () => {
             const useOverride = document.getElementById('checkSiteColorOverride').checked;
             const showSiteNames = document.getElementById('checkShowSiteNames').checked;
             const showCellNames = document.getElementById('checkShowCellNames').checked;
+
             const colorBy = siteColorBy ? siteColorBy.value : 'tech';
+
+            // Context-Aware Update
+            if (window.editingLayerId) {
+                // Layer Specific
+                if (map) {
+                    map.updateLayerSettings(window.editingLayerId, {
+                        range: range,
+                        beamwidth: beam,
+                        opacity: opacity,
+                        color: color,
+                        useOverride: useOverride,
+                        showSiteNames: showSiteNames,
+                        showCellNames: showCellNames
+                    });
+                }
+            } else {
+                // Global
+                if (map) {
+                    map.updateSiteSettings({
+                        range: range,
+                        beamwidth: beam,
+                        opacity: opacity,
+                        color: color,
+                        useOverride: useOverride,
+                        showSiteNames: showSiteNames,
+                        showCellNames: showCellNames,
+                        colorBy: colorBy
+                    });
+                }
+            }
 
             document.getElementById('valRange').textContent = range;
             document.getElementById('valBeam').textContent = beam;
             document.getElementById('valOpacity').textContent = opacity;
 
             if (map) {
-                map.updateSiteSettings({
-                    range: range,
-                    beamwidth: beam,
-                    opacity: opacity,
-                    color: color,
-                    useOverride: useOverride,
-                    showSiteNames: showSiteNames,
-                    showCellNames: showCellNames,
-                    colorBy: colorBy
-                });
+                // Logic moved above
             }
         };
 
@@ -3552,13 +4961,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (sigPoints.length > limit) {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td colspan="5" style="background:#552200; color:#fff; text-align:center;">Showing first ${limit} of ${sigPoints.length} messages.</td>`;
+                tr.innerHTML = `< td colspan = "5" style = "background:#552200; color:#fff; text-align:center;" > Showing first ${limit} of ${sigPoints.length} messages.</td > `;
                 tbody.appendChild(tr);
             }
 
             displayPoints.forEach((p, index) => {
                 const tr = document.createElement('tr');
-                tr.id = `sig-row-${p.time.replace(/[:.]/g, '')}-${index}`; // Unique ID for scrolling
+                tr.id = `sig - row - ${p.time.replace(/[:.]/g, '')} - ${index}`; // Unique ID for scrolling
                 tr.className = 'signaling-row'; // Add class for selection
                 tr.style.cursor = 'pointer';
 
@@ -3592,7 +5001,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
 
                 const mapBtn = (p.lat && p.lng)
-                    ? `<button onclick="window.map.setView([${p.lat}, ${p.lng}], 16); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#3b82f6;">Map</button>`
+                    ? `< button onclick = "window.map.setView([${p.lat}, ${p.lng}], 16); event.stopPropagation();" class= "btn" style = "padding:2px 6px; font-size:10px; background-color:#3b82f6;" > Map</button > `
                     : '<span style="color:#666; font-size:10px;">No GPS</span>';
 
                 // Store point data for the info button handler (simulated via dataset or just passing object index if we could, but stringifying is easier for this hack)
@@ -3603,15 +5012,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (p.category === 'L3') typeClass = 'badge-l3';
 
                 tr.innerHTML = `
-                        <td>${p.time}</td>
-                        <td><span class="${typeClass}">${p.category}</span></td>
-                        <td>${p.direction}</td>
-                        <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${p.message}">${p.message}</td>
-                        <td>
-                            ${mapBtn} 
-                            <button onclick="const p = this.parentElement.parentElement.pointData; showSignalingPayload(p); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#475569;">Info</button>
-                        </td>
-                    `;
+< td > ${p.time}</td >
+                    <td><span class="${typeClass}">${p.category}</span></td>
+                    <td>${p.direction}</td>
+                    <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${p.message}">${p.message}</td>
+                    <td>
+                        ${mapBtn} 
+                        <button onclick="const p = this.parentElement.parentElement.pointData; showSignalingPayload(p); event.stopPropagation();" class="btn" style="padding:2px 6px; font-size:10px; background-color:#475569;">Info</button>
+                    </td>
+                `;
                 tbody.appendChild(tr);
             });
         }
@@ -3774,6 +5183,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof makeElementDraggable === 'function') {
             makeElementDraggable(header, modal);
         }
+>>>>>>> 3aa4ba2ba7b9e6fb3f236dfd571fa92b44cbe9b2
     }
     window.showSignalingPayload = showSignalingPayload;
 
@@ -3865,7 +5275,7 @@ document.addEventListener('DOMContentLoaded', () => {
             [dockedChart, dockedSignaling, dockedGrid].forEach(el => {
                 // Ensure flex basis is reasonable
                 el.style.flex = '1 1 auto';
-                el.style.width = `${width}%`;
+                el.style.width = `${width} % `;
                 el.style.borderRight = '1px solid #444';
                 el.style.height = '100%'; // Full height of bottomPanel
             });
@@ -4084,6 +5494,9 @@ document.addEventListener('DOMContentLoaded', () => {
         container.innerHTML = '';
 
         loadedLogs.forEach(log => {
+            // Exclude SmartCare layers (Excel/SHP) which are in the right sidebar
+            if (log.type === 'excel' || log.type === 'shp') return;
+
             const item = document.createElement('div');
             // REMOVED overflow:hidden to prevent clipping issues. FORCED display:block to override any cached flex rules.
             item.style.cssText = 'background:#252525; margin-bottom:5px; border-radius:4px; border:1px solid #333; min-height: 50px; display: block !important;';
@@ -4093,13 +5506,13 @@ document.addEventListener('DOMContentLoaded', () => {
             header.className = 'log-header';
             header.style.cssText = 'padding:8px 10px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; background:#2d2d2d; border-bottom:1px solid #333;';
             header.innerHTML = `
-                <span style="font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;">${log.name}</span>
-                <div style="display:flex; gap:5px;">
-                     <!-- Export Button -->
-                     <button onclick="window.exportOptimFile('${log.id}'); event.stopPropagation();" title="Export Optim CSV" style="background:#059669; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">⬇</button>
-                     <button onclick="event.stopPropagation(); window.removeLog('${log.id}')" style="background:#ef4444; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>
-                </div>
-            `;
+<span style="font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;">${log.name}</span>
+<div style="display:flex; gap:5px;">
+    <!-- Export Button -->
+    <button onclick="window.exportOptimFile('${log.id}'); event.stopPropagation();" title="Export Optim CSV" style="background:#059669; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">⬇</button>
+    <button onclick="event.stopPropagation(); window.removeLog('${log.id}')" style="background:#ef4444; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>
+</div>
+        `;
 
             // Toggle Logic
             header.onclick = () => {
@@ -4119,9 +5532,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const stats = document.createElement('div');
             stats.style.cssText = 'font-size:10px; color:#888; margin-bottom:8px;';
             stats.innerHTML = `
-                <span style="background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;">${log.tech}</span>
-                <span style="margin-left:5px;">${count} pts</span>
-            `;
+    <span style="background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;">${log.tech}</span>
+<span style="margin-left:5px;">${count} pts</span>
+        `;
 
             // Actions
             const actions = document.createElement('div');
@@ -4148,25 +5561,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
 
                 // Left Click Handler - Opens Context Menu
-                // Using onclick to be definitive.
                 btn.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    console.log('Click detected on:', label);
-
-                    window.currentContextLogId = log.id;
-                    window.currentContextParam = param;
-
-                    const menu = document.getElementById('metricContextMenu');
-                    if (menu) {
-                        menu.style.display = 'block';
-                        menu.style.position = 'fixed'; // FIXED positioning to be safe
-                        menu.style.left = `${e.clientX}px`; // Use clientX for fixed
-                        menu.style.top = `${e.clientY}px`;  // Use clientY for fixed
-                    }
-                    return false; // Stop propagation legacy style
+                    window.showMetricOptions(e, log.id, param, 'regular');
                 };
-                // REMOVED contextmenu handler and previous direct-open logic
                 return btn;
             };
 
@@ -4185,9 +5582,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 actions.appendChild(addHeader('Detected Metrics'));
 
                 log.customMetrics.forEach(metric => {
-                    // Create clean label: e.g. "RSRP (dBm)" -> "RSRP" or just keep originals
-                    // For dynamic, original is best to avoid confusion.
-                    actions.appendChild(addAction(metric, metric));
+                    let label = metric;
+                    if (metric === 'throughput_dl') label = 'DL Throughput (Kbps)';
+                    if (metric === 'throughput_ul') label = 'UL Throughput (Kbps)';
+                    actions.appendChild(addAction(label, metric));
                 });
 
                 // Also add "Time" and "GPS" if they exist in basic points but maybe not in customMetrics list?
@@ -4366,58 +5764,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.currentContextLogId = null;
     window.currentContextParam = null;
 
-    window.handleContextAction = (action) => {
-        const menu = document.getElementById('metricContextMenu');
-        if (menu) menu.style.display = 'none';
-
-        if (!window.currentContextLogId || !window.currentContextParam) return;
-
-        const log = loadedLogs.find(l => l.id === window.currentContextLogId);
-        if (!log) return;
-        const param = window.currentContextParam;
-
-        if (action === 'map') {
-            if (window.mapRenderer) {
-                // Perform visualization
-                window.mapRenderer.updateLayerMetric(log.id, log.points, param);
-
-                // Auto-Switch Theme/Legend
-                const themeSelect = document.getElementById('themeSelect');
-                if (themeSelect) {
-                    // Check if 'cellId' option exists, if not add it (though it likely doesn't match a config key)
-                    // We handle 'cellId' specially in updateLegend now.
-                    if (param === 'cellId') {
-                        // Temporarily add option if missing or just hijack the value
-                        let opt = Array.from(themeSelect.options).find(o => o.value === 'cellId');
-                        if (!opt) {
-                            opt = document.createElement('option');
-                            opt.value = 'cellId';
-                            opt.text = 'Cell ID';
-                            themeSelect.add(opt);
-                        }
-                        themeSelect.value = 'cellId';
-                    } else if (param.toLowerCase().includes('qual')) {
-                        themeSelect.value = 'quality';
-                    } else {
-                        themeSelect.value = 'level';
-                    }
-                    // Trigger Change Listener to update Legend
-                    // Or call directly:
-                    if (typeof window.updateLegend === 'function') window.updateLegend();
-                }
-            }
-        } else if (action === 'chart') {
-            window.openChartModal(log, param);
-        } else if (action === 'grid') {
-            window.openGridModal(log, param);
-        }
-    };
-
-    // Close context menu on global click
-    document.addEventListener('click', () => {
-        const menu = document.getElementById('metricContextMenu');
-        if (menu) menu.style.display = 'none';
-    });
 
     // DRAG AND DROP MAP HANDLERS
     window.allowDrop = (ev) => {
@@ -4572,12 +5918,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const popupContent = `
-                <div style="font-size:13px; min-width:150px;">
-                    <b>${name}</b><br>
-                    <div style="color:#888; font-size:11px; margin-top:4px;">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
-                    <button onclick="window.removeUserPoint('${markerId}')" style="margin-top:8px; background:#ef4444; color:white; border:none; padding:2px 5px; border-radius:3px; cursor:pointer; font-size:10px;">Remove</button>
-                </div>
-             `;
+< div style = "font-size:13px; min-width:150px;" >
+                <b>${name}</b><br>
+                <div style="color:#888; font-size:11px; margin-top:4px;">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
+                <button onclick="window.removeUserPoint('${markerId}')" style="margin-top:8px; background:#ef4444; color:white; border:none; padding:2px 5px; border-radius:3px; cursor:pointer; font-size:10px;">Remove</button>
+            </div>
+         `;
 
             marker.bindPopup(popupContent).openPopup();
 
@@ -4597,5 +5943,319 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 });
+
+// --- SITE EDITOR LOGIC ---
+
+window.refreshSites = function () {
+    if (window.mapRenderer && window.mapRenderer.siteData) {
+        // Pass false to prevent auto-zooming/fitting bounds
+        window.mapRenderer.addSiteLayer(window.mapRenderer.siteData, false);
+    }
+};
+
+function ensureSiteEditorDraggable() {
+    const modal = document.getElementById('siteEditorModal');
+    if (!modal) return;
+    const content = modal.querySelector('.modal-content');
+    const header = modal.querySelector('.modal-header');
+
+    // Center it initially (if not already moved)
+    if (!content.dataset.centered) {
+        const w = 400; // rough width
+        const h = 500; // rough height
+        content.style.position = 'absolute';
+        // Simple center based on viewport
+        content.style.left = Math.max(0, (window.innerWidth - w) / 2) + 'px';
+        content.style.top = Math.max(0, (window.innerHeight - h) / 2) + 'px';
+        content.style.margin = '0'; // Remove auto margin if present
+        content.dataset.centered = "true";
+    }
+
+    // Init Drag if not done
+    if (typeof makeElementDraggable === 'function' && !content.dataset.draggable) {
+        makeElementDraggable(header, content);
+        content.dataset.draggable = "true";
+        header.style.cursor = "move"; // Explicitly show move cursor on header
+    }
+}
+
+window.openAddSectorModal = function () {
+    document.getElementById('siteEditorTitle').textContent = "Add New Site";
+    document.getElementById('editOriginalId').value = "";
+    document.getElementById('editOriginalIndex').value = ""; // Clear Index
+
+    // Clear inputs
+    document.getElementById('editSiteName').value = "";
+    document.getElementById('editCellName').value = "";
+    document.getElementById('editCellId').value = "";
+    document.getElementById('editLat').value = "";
+    document.getElementById('editLng').value = "";
+    document.getElementById('editAzimuth').value = "0";
+    document.getElementById('editPci').value = "";
+    document.getElementById('editTech').value = "4G";
+
+    // Hide Delete Button for New Entry
+    document.getElementById('btnDeleteSector').style.display = 'none';
+
+    // Hide Sibling Button
+    const btnSibling = document.getElementById('btnAddSiblingSector');
+    if (btnSibling) btnSibling.style.display = 'none';
+
+    const modal = document.getElementById('siteEditorModal');
+    modal.style.display = 'block';
+
+    ensureSiteEditorDraggable();
+
+    // Auto-center
+    const content = modal.querySelector('.modal-content');
+    requestAnimationFrame(() => {
+        const rect = content.getBoundingClientRect();
+        if (rect.width > 0) {
+            content.style.left = Math.max(0, (window.innerWidth - rect.width) / 2) + 'px';
+            content.style.top = Math.max(0, (window.innerHeight - rect.height) / 2) + 'px';
+        }
+    });
+};
+
+// Index-based editing (Robust for duplicates)
+// Layer-compatible editing
+window.editSector = function (layerId, index) {
+    if (!window.mapRenderer || !window.mapRenderer.siteLayers) return;
+    const layer = window.mapRenderer.siteLayers.get(String(layerId));
+    if (!layer || !layer.sectors || !layer.sectors[index]) {
+        console.error("Sector not found:", layerId, index);
+        return;
+    }
+    const s = layer.sectors[index];
+
+    document.getElementById('siteEditorTitle').textContent = "Edit Sector";
+    document.getElementById('editOriginalId').value = s.cellId || ""; // keep original for reference if needed
+
+    // Store context for saving
+    document.getElementById('editLayerId').value = layerId;
+    document.getElementById('editOriginalIndex').value = index;
+
+    // Populate
+    document.getElementById('editSiteName').value = s.siteName || s.name || "";
+    document.getElementById('editCellName').value = s.cellName || "";
+    document.getElementById('editCellId').value = s.cellId || "";
+    document.getElementById('editLat').value = s.lat;
+    document.getElementById('editLng').value = s.lng;
+    document.getElementById('editAzimuth').value = s.azimuth || 0;
+    document.getElementById('editPci').value = s.sc || s.pci || "";
+    document.getElementById('editTech').value = s.tech || "4G";
+    document.getElementById('editBeamwidth').value = s.beamwidth || 65;
+
+    // UI Helpers
+    document.getElementById('btnDeleteSector').style.display = 'inline-block';
+    const btnSibling = document.getElementById('btnAddSiblingSector');
+    if (btnSibling) btnSibling.style.display = 'inline-block';
+
+    const modal = document.getElementById('siteEditorModal');
+    modal.style.display = 'block';
+
+    if (typeof ensureSiteEditorDraggable === 'function') ensureSiteEditorDraggable();
+
+    // Auto-center
+    const content = modal.querySelector('.modal-content');
+    requestAnimationFrame(() => {
+        const rect = content.getBoundingClientRect();
+        if (rect.width > 0) {
+            content.style.left = Math.max(0, (window.innerWidth - rect.width) / 2) + 'px';
+            content.style.top = Math.max(0, (window.innerHeight - rect.height) / 2) + 'px';
+        }
+    });
+};
+
+window.addSectorToCurrentSite = function () {
+    // Read current context before clearing
+    const currentName = document.getElementById('editSiteName').value;
+    const currentLat = document.getElementById('editLat').value;
+    const currentLng = document.getElementById('editLng').value;
+    const currentTech = document.getElementById('editTech').value;
+
+    // Switch to Add Mode
+    document.getElementById('siteEditorTitle').textContent = "Add Sector to Site";
+    document.getElementById('editOriginalId').value = ""; // Clear
+    document.getElementById('editOriginalIndex').value = ""; // Clear Index
+
+    // Clear Attributes specific to sector
+    document.getElementById('editCellName').value = ""; // Clear Cell Name
+    document.getElementById('editCellId').value = "";
+    document.getElementById('editAzimuth').value = "0";
+    document.getElementById('editPci').value = "";
+
+    // Keep Site-level Attributes
+    document.getElementById('editSiteName').value = currentName;
+    document.getElementById('editLat').value = currentLat;
+    document.getElementById('editLng').value = currentLng;
+    document.getElementById('editTech').value = currentTech;
+
+    // Hide Delete & Sibling Buttons
+    document.getElementById('btnDeleteSector').style.display = 'none';
+    const btnSibling = document.getElementById('btnAddSiblingSector');
+    if (btnSibling) btnSibling.style.display = 'none';
+};
+
+
+
+window.saveSector = function () {
+    if (!window.mapRenderer) return;
+
+    const layerId = document.getElementById('editLayerId').value;
+    const originalIndex = document.getElementById('editOriginalIndex').value;
+
+    // Validate Layer
+    let layer = null;
+    let sectors = null;
+
+    if (layerId && window.mapRenderer.siteLayers.has(layerId)) {
+        layer = window.mapRenderer.siteLayers.get(layerId);
+        sectors = layer.sectors;
+    } else {
+        // Fallback for VERY legacy or newly created "default" sites without layer?
+        // Unlikely in new architecture. Alert error.
+        alert("Layer Context Lost. Cannot save sector.");
+        return;
+    }
+
+    // Determine target index
+    let idx = -1;
+    if (originalIndex !== "" && originalIndex !== null) {
+        idx = parseInt(originalIndex, 10);
+    }
+
+    const isNew = (idx === -1);
+
+    const newAzimuth = parseInt(document.getElementById('editAzimuth').value, 10);
+    const newSiteName = document.getElementById('editSiteName').value;
+
+    const newObj = {
+        siteName: newSiteName,
+        name: newSiteName,
+        cellName: (document.getElementById('editCellName').value || newSiteName),
+        cellId: (document.getElementById('editCellId').value || newSiteName + "_1"),
+        lat: parseFloat(document.getElementById('editLat').value),
+        lng: parseFloat(document.getElementById('editLng').value),
+        azimuth: isNaN(newAzimuth) ? 0 : newAzimuth,
+        // Tech & PCI
+        tech: document.getElementById('editTech').value,
+        sc: document.getElementById('editPci').value,
+        pci: document.getElementById('editPci').value, // Sync both
+        // Beamwidth
+        beamwidth: parseInt(document.getElementById('editBeamwidth').value, 10) || 65
+    };
+
+    // Compute RNC/CID if possible
+    try {
+        if (String(newObj.cellId).includes('/')) {
+            const parts = newObj.cellId.split('/');
+            newObj.rnc = parts[0];
+            newObj.cid = parts[1];
+        } else {
+            // If numeric > 65535, try split
+            const num = parseInt(newObj.cellId, 10);
+            if (!isNaN(num) && num > 65535) {
+                newObj.rnc = num >> 16;
+                newObj.cid = num & 0xFFFF;
+            }
+        }
+    } catch (e) { }
+
+    // Add Derived Props
+    newObj.rawEnodebCellId = newObj.cellId;
+
+    if (isNew) {
+        sectors.push(newObj);
+        console.log(`[SiteEditor] created sector in layer ${layerId}`);
+    } else {
+        // Update valid index
+        if (sectors[idx]) {
+            const oldS = sectors[idx];
+            const oldAzimuth = oldS.azimuth;
+            const oldSiteName = oldS.siteName || oldS.name;
+
+            // 1. Update the target sector
+            // Merge to preserve other props like frequency if not edited
+            sectors[idx] = { ...sectors[idx], ...newObj };
+            console.log(`[SiteEditor] updated sector ${idx} in layer ${layerId}`);
+
+            // 2. Synchronize Azimuth if changed
+            if (oldAzimuth !== newAzimuth && !isNaN(oldAzimuth) && !isNaN(newAzimuth)) {
+                // Find others with same site name and SAME OLD AZIMUTH
+                sectors.forEach((s, subIdx) => {
+                    const sName = s.siteName || s.name;
+                    // Loose check for Site Name match
+                    if (String(sName) === String(oldSiteName) && subIdx !== idx) {
+                        if (s.azimuth === oldAzimuth) {
+                            s.azimuth = newAzimuth; // Sync
+                            console.log(`[SiteEditor] Synced azimuth for sector ${subIdx}`);
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    // Refresh Map
+    window.mapRenderer.rebuildSiteIndex();
+    window.mapRenderer.renderSites(false);
+
+    document.getElementById('siteEditorModal').style.display = 'none';
+};
+
+
+window.deleteSectorCurrent = function () {
+    const originalIndex = document.getElementById('editOriginalIndex').value;
+    const originalId = document.getElementById('editOriginalId').value;
+
+    if (!confirm("Are you sure you want to delete this sector?")) return;
+
+    if (window.mapRenderer && window.mapRenderer.siteData) {
+        let idx = -1;
+        if (originalIndex !== "") {
+            idx = parseInt(originalIndex, 10);
+        } else if (originalId) {
+            idx = window.mapRenderer.siteData.findIndex(x => String(x.cellId) === String(originalId));
+        }
+
+        if (idx !== -1) {
+            window.mapRenderer.siteData.splice(idx, 1);
+            window.refreshSites();
+            document.getElementById('siteEditorModal').style.display = 'none';
+            // Sync to Backend
+            window.syncToBackend(window.mapRenderer.siteData);
+        }
+    }
+};
+
+window.syncToBackend = function (siteData) {
+    if (!siteData) return;
+
+    // Show saving feedback
+    const status = document.getElementById('fileStatus');
+    if (status) status.textContent = "Saving to Excel...";
+
+    fetch('/save_sites', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(siteData)
+    })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Save success:', data);
+            if (status) status.textContent = "Changes saved to sites_updated.xlsx";
+            setTimeout(() => { if (status) status.textContent = ""; }, 3000);
+        })
+        .catch((error) => {
+            console.error('Save error:', error);
+            if (status) status.textContent = "Error saving to Excel (Check console)";
+        });
+};
+
+// Initialize Map Action Controls Draggability
+// Map Action Controls are now fixed in the header, no draggability needed.
 
 
