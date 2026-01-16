@@ -5381,7 +5381,7 @@ document.addEventListener('DOMContentLoaded', () => {
             header.className = 'log-header';
             header.style.cssText = 'padding:8px 10px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; background:#2d2d2d; border-bottom:1px solid #333;';
             header.innerHTML = `
-< span style = "font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;" > ${log.name}</span >
+<span style="font-weight:bold; color:#ddd; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;">${log.name}</span>
 <div style="display:flex; gap:5px;">
     <!-- Export Button -->
     <button onclick="window.exportOptimFile('${log.id}'); event.stopPropagation();" title="Export Optim CSV" style="background:#059669; color:white; border:none; width:20px; height:20px; border-radius:3px; cursor:pointer; display:flex; align-items:center; justify-content:center;">⬇</button>
@@ -5407,7 +5407,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const stats = document.createElement('div');
             stats.style.cssText = 'font-size:10px; color:#888; margin-bottom:8px;';
             stats.innerHTML = `
-    < span style = "background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;" > ${log.tech}</span >
+    <span style="background:#3b82f6; color:white; padding:2px 4px; border-radius:2px;">${log.tech}</span>
 <span style="margin-left:5px;">${count} pts</span>
         `;
 
