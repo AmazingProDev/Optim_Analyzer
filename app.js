@@ -5183,7 +5183,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof makeElementDraggable === 'function') {
             makeElementDraggable(header, modal);
         }
->>>>>>> 3aa4ba2ba7b9e6fb3f236dfd571fa92b44cbe9b2
+
     }
     window.showSignalingPayload = showSignalingPayload;
 
