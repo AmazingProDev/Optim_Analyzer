@@ -18,6 +18,7 @@ const NMFParser = {
             }
         };
         let currentPSC = null;
+        let currentNeighbors = []; // Track Neighbors Globally
 
         const uniqueHeaders = new Set();
 
@@ -305,6 +306,11 @@ const NMFParser = {
                     neighbors.sort((a, b) => b.rscp - a.rscp);
                 }
 
+                // Update Global Neighbors Snapshot
+                if (neighbors.length > 0) {
+                    currentNeighbors = neighbors;
+                }
+
                 if (neighbors.length > 0) {
                     n1_sc = neighbors[0].pci;
                     n1_rscp = neighbors[0].rscp;
@@ -495,6 +501,15 @@ const NMFParser = {
                     eventType = 'Call Fail';
                 }
 
+                // Attach Radio Snapshot
+                const snapshot = {
+                    cellId: currentCellID,
+                    lac: currentLAC,
+                    psc: currentPSC,
+                    rnc: currentRNC,
+                    neighbors: currentNeighbors ? currentNeighbors.slice(0, 8) : [] // Capture top 8
+                };
+
                 allPoints.push({
                     lat: currentGPS ? currentGPS.lat : null,
                     lng: currentGPS ? currentGPS.lng : null,
@@ -505,7 +520,8 @@ const NMFParser = {
                     message: message,
                     payload: payload,
                     details: line,
-                    event: eventType // New property
+                    event: eventType,
+                    radioSnapshot: snapshot // Persist Snapshot
                 });
             }
         }

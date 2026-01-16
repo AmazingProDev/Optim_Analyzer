@@ -98,7 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // USE UNIFIED EXPORT: Includes Points (Colored by Metric) + Relevant Sites (Colored matching Points if Discrete)
             // This satisfies the user requirement: "export also serving sectors with thematic colors"
-            const kmlContent = mapRenderer.exportUnifiedKML(log.id, log.points, metric);
+            const kmlContent = mapRenderer.exportUnifiedKML(log.points, metric);
 
             if (!kmlContent) {
                 alert('Failed to generate KML.');
@@ -2240,6 +2240,12 @@ document.addEventListener('DOMContentLoaded', () => {
             initialLeft = rect.left;
             initialTop = rect.top;
 
+            // Lock position coordinates to allow smooth dragging even if right/bottom were used
+            containerEl.style.left = initialLeft + "px";
+            containerEl.style.top = initialTop + "px";
+            containerEl.style.right = "auto";
+            containerEl.style.bottom = "auto";
+
             document.onmouseup = closeDragElement;
             document.onmousemove = elementDrag;
 
@@ -3611,16 +3617,163 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Payload Viewer
+    // Payload Viewer - ENHANCED MODAL
     function showSignalingPayload(point) {
-        const payload = point.payload || 'No Hex Payload Extracted';
-        // Simple alert for now, or we can make a nicer modal if requested
-        // Let's us a simple custom modal or re-use existing one structure? 
-        // Alert is ugly. Let's create a quick "payloadModal" dynamically or just use alert for speed first, then upgrade?
-        // User wants "show its RRC data".
-        // Let's try to format it nicely.
+        // Remove existing detail modal if any
+        const existing = document.getElementById('sigDetailModal');
+        if (existing) existing.remove();
 
-        alert(`Message: ${point.message}\nTime: ${point.time}\n\nRRC Payload (Hex):\n${payload}\n\nFull Raw Line:\n${point.details}`);
+        // Data Prep
+        const payload = point.payload || 'No Hex Payload Extracted';
+        const isHex = /^[0-9A-Fa-f]+$/.test(payload.replace(/\s/g, ''));
+
+        // Format Hex (Space every 2 chars)
+        let formattedPayload = payload;
+        if (isHex && !payload.includes(' ')) {
+            formattedPayload = payload.replace(/(.{2})/g, '$1 ').trim();
+        }
+
+        // Create Modal Elements
+        const modal = document.createElement('div');
+        modal.id = 'sigDetailModal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 500px;
+            background: #1e1e1e;
+            border: 1px solid #444;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            z-index: 3000;
+            display: flex;
+            flex-direction: column;
+            border-radius: 6px;
+            font-family: 'Inter', sans-serif;
+            color: #eee;
+        `;
+
+        const header = document.createElement('div');
+        header.style.cssText = `
+            padding: 10px 15px;
+            background: #252525;
+            border-bottom: 1px solid #444;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: move;
+            border-radius: 6px 6px 0 0;
+        `;
+        header.innerHTML = `<span>${point.message} <small style="color:#888; font-weight:normal;">(${point.category})</small></span>`;
+
+        const closeBtn = document.createElement('span');
+        closeBtn.innerHTML = '&times;';
+        closeBtn.style.cssText = 'cursor: pointer; font-size: 20px; color: #aaa;';
+        closeBtn.onclick = () => modal.remove();
+        header.appendChild(closeBtn);
+
+        const body = document.createElement('div');
+        body.style.cssText = 'padding: 15px; overflow-y: auto; max-height: 60vh;';
+
+        // Meta Info
+        body.innerHTML = `
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; font-size: 12px; color: #ccc;">
+                <div><strong>Time:</strong> ${point.time}</div>
+                <div><strong>Direction:</strong> ${point.direction}</div>
+            </div>
+            
+            <div style="margin-bottom: 5px; font-size: 12px; font-weight: bold; color: #aaa;">PAYLOAD (HEX)</div>
+            <div style="position: relative; margin-bottom: 15px;">
+                <textarea readonly style="width: 100%; height: 100px; background: #111; border: 1px solid #333; color: #a855f7; font-family: monospace; font-size: 11px; padding: 8px; resize: vertical; box-sizing: border-box;">${formattedPayload}</textarea>
+                <button id="copyHexBtn" style="position: absolute; top: 5px; right: 5px; background: #333; border: 1px solid #444; color: white; cursor: pointer; padding: 2px 8px; font-size: 10px; border-radius: 3px;">Copy</button>
+            </div>
+
+            <div style="margin-bottom: 5px; font-size: 12px; font-weight: bold; color: #aaa;">RAW LINE</div>
+            <div style="background: #222; padding: 8px; border-radius: 4px; border: 1px solid #333; font-family: monospace; font-size: 10px; color: #888; word-break: break-all;">
+                ${point.details}
+            </div>
+        `;
+
+        // Radio State Section
+        let radioHtml = '';
+        if (point.radioSnapshot) {
+            const rs = point.radioSnapshot;
+            const hasNeighbors = rs.neighbors && rs.neighbors.length > 0;
+
+            let neighborsHtml = '<div style="color:#888; font-style:italic;">No neighbor data recorded.</div>';
+
+            if (hasNeighbors) {
+                neighborsHtml = `
+                    <table style="width:100%; border-collapse:collapse; font-size:11px; margin-top:5px;">
+                        <thead>
+                            <tr style="border-bottom:1px solid #444; color:#aaa; text-align:left;">
+                                <th style="padding:4px;">PCI/PSC</th>
+                                <th style="padding:4px;">Freq</th>
+                                <th style="padding:4px;">RSCP</th>
+                                <th style="padding:4px;">Ec/No</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rs.neighbors.map(n => `
+                                <tr style="border-bottom:1px solid #333;">
+                                    <td style="padding:4px; color:#a29bfe;">${n.pci}</td>
+                                    <td style="padding:4px;">${n.freq}</td>
+                                    <td style="padding:4px; color:${n.rscp > -95 ? '#4ade80' : '#f87171'}">${n.rscp}</td>
+                                    <td style="padding:4px;">${n.ecno || '-'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            }
+
+            radioHtml = `
+                <div style="margin-top: 15px; margin-bottom: 5px; font-size: 12px; font-weight: bold; color: #aaa; border-top:1px solid #333; padding-top:10px;">
+                    RADIO ENVIRONMENT
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; font-size: 11px;">
+                    <div style="background:#222; padding:8px; border-radius:4px;">
+                        <div style="color:#888; margin-bottom:4px;">SERVING CELL</div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>ID: <strong style="color:#eee;">${rs.cellId}</strong></span>
+                            <span>LAC: <strong style="color:#eee;">${rs.lac}</strong></span>
+                        </div>
+                        <div style="margin-top:4px;">
+                            <span>PSC/PCI: <strong style="color:#3b82f6;">${rs.psc || 'N/A'}</strong></span>
+                            <span style="float:right;">RNC: ${rs.rnc || '-'}</span>
+                        </div>
+                    </div>
+                    <div style="background:#222; padding:8px; border-radius:4px;">
+                        <div style="color:#888; margin-bottom:4px;">NEIGHBORS (${rs.neighbors ? rs.neighbors.length : 0})</div>
+                        ${neighborsHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        modal.appendChild(header);
+        body.innerHTML += radioHtml; // Append Radio section
+        modal.appendChild(body);
+        document.body.appendChild(modal);
+
+        // Wire up Copy Button
+        const copyBtn = body.querySelector('#copyHexBtn');
+        copyBtn.onclick = () => {
+            navigator.clipboard.writeText(formattedPayload).then(() => {
+                copyBtn.textContent = 'Copied!';
+                copyBtn.style.color = '#4ade80';
+                setTimeout(() => {
+                    copyBtn.textContent = 'Copy';
+                    copyBtn.style.color = 'white';
+                }, 1500);
+            });
+        };
+
+        // Make Draggable
+        if (typeof makeElementDraggable === 'function') {
+            makeElementDraggable(header, modal);
+        }
     }
     window.showSignalingPayload = showSignalingPayload;
 
@@ -3887,7 +4040,36 @@ document.addEventListener('DOMContentLoaded', () => {
             updateDockedLayout();
         } else {
             // Show modal
-            document.getElementById('signalingModal').style.display = 'block';
+            const modal = document.getElementById('signalingModal');
+            modal.style.display = 'block';
+
+            // Center the Modal Logic
+            const content = modal.querySelector('.modal-content');
+            if (content) {
+                // Reset standard style to ensure calculations work if previously modified
+                content.style.position = 'absolute';
+                content.style.margin = '0';
+
+                // Calculate Center
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+                const modalWidth = content.offsetWidth || 600; // Fallback or current
+                const modalHeight = content.offsetHeight || 400;
+
+                const left = (viewportWidth - modalWidth) / 2;
+                const top = (viewportHeight - modalHeight) / 2;
+
+                content.style.left = `${left}px`;
+                content.style.top = `${top}px`;
+
+                // Enable Draggable
+                const header = content.querySelector('.modal-header');
+                if (header && typeof makeElementDraggable === 'function') {
+                    makeElementDraggable(header, content);
+                    header.style.cursor = 'move'; // Visual cue
+                }
+            }
+
             ensureSignalingDockButton();
         }
     };
